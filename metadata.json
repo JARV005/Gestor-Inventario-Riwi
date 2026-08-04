@@ -1,0 +1,6 @@
+{
+  "name": "FirstPlug - Gestión de Inventario TI",
+  "description": "Plataforma profesional de gestión de inventarios de TI, logística de onboarding/offboarding, catálogo de equipos, auditoría de licencias y almacenamiento.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
