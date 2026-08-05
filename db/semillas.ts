@@ -9,7 +9,8 @@
 import { sql } from 'drizzle-orm';
 
 import { db, pool } from './cliente.js';
-import { sedes, usuariosApp } from './esquema.js';
+import { motivosRevision, sedes, usuariosApp } from './esquema.js';
+import { MOTIVOS, type CodigoMotivo } from './motivos.js';
 
 /** Semilla del §2. `Remoto` no es un lugar, por eso no lleva ciudad. */
 const SEDES = [
@@ -41,6 +42,26 @@ const USUARIO_SISTEMA = {
 };
 
 async function main() {
+  // El catálogo de motivos se siembra desde `db/motivos.ts` y no desde una
+  // migración: añadir un código debe costar una línea y `npm run seed`, no una
+  // migración versionada. Ese fue el argumento para hacerlo tabla y no CHECK.
+  //
+  // `onConflictDoUpdate` y no `DoNothing`: si se corrige la redacción de una
+  // descripción, la corrida siguiente la propaga. El código es la identidad;
+  // el texto, no.
+  const motivos = (Object.keys(MOTIVOS) as CodigoMotivo[]).map((codigo) => ({
+    codigo,
+    descripcion: MOTIVOS[codigo].descripcion,
+  }));
+  await db
+    .insert(motivosRevision)
+    .values(motivos)
+    .onConflictDoUpdate({
+      target: motivosRevision.codigo,
+      set: { descripcion: sql`excluded.descripcion` },
+    });
+  console.log(`Motivos de revisión: ${motivos.length} códigos al día.`);
+
   const sedesInsertadas = await db
     .insert(sedes)
     .values(SEDES)

@@ -14,14 +14,23 @@
  */
 
 import 'dotenv/config';
-import { writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync } from 'node:fs';
 
 import ExcelJS from 'exceljs';
 import { sql } from 'drizzle-orm';
 
 import { cifrar } from './cifrado.js';
 import { db, pool } from './cliente.js';
-import { empleados, equipos, movimientos, sedes, usuariosApp } from './esquema.js';
+import {
+  empleados,
+  equipos,
+  equiposMotivosRevision,
+  importaciones,
+  movimientos,
+  sedes,
+  usuariosApp,
+} from './esquema.js';
 import { MOTIVOS, type CodigoMotivo } from './motivos.js';
 
 const RUTA_POR_DEFECTO = 'data/origen/inventario_muestra_johan.xlsx';
@@ -503,9 +512,10 @@ async function main() {
   ];
 
   const aImportar = candidatas.filter((c) => !c.rechazada);
+  const rechazadasN = candidatas.length - aImportar.length;
 
   // ------------------------------------------------------------- transacción
-  let resumen = { equipos: 0, empleados: 0, movimientos: 0 };
+  let resumen = { equipos: 0, empleados: 0, movimientos: 0, motivos: 0 };
   let empleadosSinEquipo: string[] = [];
 
   await db.transaction(async (tx) => {
@@ -567,6 +577,10 @@ async function main() {
       .map((e) => e.nombre);
 
     // --- equipos
+    //
+    // Los motivos se resuelven antes de contar nada: `UBICACION_FUERA_DE_SEDES`
+    // solo se conoce aquí, al fallar la búsqueda de la sede, y las cifras de
+    // `importaciones` tienen que reflejarlo.
     const valores = aImportar.map((c) => {
       const sede_id = c.sedeNombre ? (sedePorNombre.get(norm(c.sedeNombre)) ?? null) : null;
       // Una ubicación escrita pero que no corresponde a ninguna sede no se
@@ -575,20 +589,52 @@ async function main() {
         c.motivos.push('UBICACION_FUERA_DE_SEDES');
       }
       const empleado_id = c.responsable ? (empleadoPorNombre.get(norm(c.responsable)) ?? null) : null;
+      // Nombrada en la fila pero sin vínculo posible: el estado no es
+      // 'Asignado' y el invariante prohíbe empleado_id. La FK conserva la
+      // identidad sin que nadie tenga que releerla de un campo de texto.
+      const empleado_mencionado_id =
+        c.persona && !c.responsable ? (empleadoPorNombre.get(norm(c.persona)) ?? null) : null;
       return {
         ...c.datos,
         sede_id,
         empleado_id,
+        empleado_mencionado_id,
         requiere_revision: c.motivos.length > 0,
-        motivos_revision: c.motivos as string[],
       };
     });
 
+    // --- la corrida, antes que los equipos: equipos.importacion_id la
+    //     referencia. Las cifras salen de las candidatas, no de lo insertado;
+    //     la reconciliación de más abajo compara las dos cosas.
+    const [corrida] = await tx
+      .insert(importaciones)
+      .values({
+        archivo: ruta,
+        hash_sha256: createHash('sha256').update(readFileSync(ruta)).digest('hex'),
+        usuario_app_id: sistema.id,
+        filas_leidas: candidatas.length,
+        filas_insertadas: aImportar.length,
+        filas_rechazadas: candidatas.length - aImportar.length,
+        filas_marcadas: valores.filter((v) => v.requiere_revision).length,
+      })
+      .returning({ id: importaciones.id });
+
     const insertados = await tx
       .insert(equipos)
-      .values(valores)
+      .values(valores.map((v) => ({ ...v, importacion_id: corrida.id })))
       .returning({ id: equipos.id, sede_id: equipos.sede_id, empleado_id: equipos.empleado_id });
     resumen.equipos = insertados.length;
+
+    // --- motivos, a la tabla puente. El orden importa: el CONSTRAINT TRIGGER
+    //     que exige marca <=> motivos está deferido justo porque entre el
+    //     INSERT de arriba y este hay un estado incoherente inevitable.
+    const filasMotivos = aImportar.flatMap((c, i) =>
+      c.motivos.map((m) => ({ equipo_id: insertados[i].id, motivo_codigo: m as string })),
+    );
+    if (filasMotivos.length > 0) {
+      await tx.insert(equiposMotivosRevision).values(filasMotivos);
+    }
+    resumen.motivos = filasMotivos.length;
 
     // --- movimientos: un Alta por equipo, atribuido al usuario de sistema (D4)
     await tx.insert(movimientos).values(
@@ -602,6 +648,43 @@ async function main() {
       })),
     );
     resumen.movimientos = insertados.length;
+
+    // --- reconciliación, todavía dentro de la transacción
+    //
+    // La BD no observa cuántas filas tenía el Excel, así que no puede
+    // comprobar esto por su cuenta: el importador es el único que ve las dos
+    // cifras a la vez. Contrasta lo que dijo que iba a hacer contra lo que la
+    // BD acabó teniendo, y si no cuadra lanza — el throw deshace la
+    // transacción entera y no queda medio inventario dentro.
+    const [contado] = await tx
+      .select({
+        equipos: sql<number>`(SELECT count(*)::int FROM equipos WHERE importacion_id = ${corrida.id})`,
+        marcados: sql<number>`(SELECT count(*)::int FROM equipos WHERE importacion_id = ${corrida.id} AND requiere_revision)`,
+        movimientos: sql<number>`(SELECT count(*)::int FROM movimientos m JOIN equipos e ON e.id = m.equipo_id WHERE e.importacion_id = ${corrida.id})`,
+      })
+      .from(importaciones)
+      .where(sql`${importaciones.id} = ${corrida.id}`);
+
+    const descuadres: string[] = [];
+    if (candidatas.length !== aImportar.length + rechazadasN) {
+      descuadres.push(
+        `leídas ${candidatas.length} != insertadas ${aImportar.length} + rechazadas ${rechazadasN}`,
+      );
+    }
+    if (contado.equipos !== aImportar.length) {
+      descuadres.push(`equipos en BD ${contado.equipos} != previstas ${aImportar.length}`);
+    }
+    if (contado.marcados !== valores.filter((v) => v.requiere_revision).length) {
+      descuadres.push(
+        `marcados en BD ${contado.marcados} != previstos ${valores.filter((v) => v.requiere_revision).length}`,
+      );
+    }
+    if (contado.movimientos !== aImportar.length) {
+      descuadres.push(`movimientos ${contado.movimientos} != un Alta por equipo (${aImportar.length})`);
+    }
+    if (descuadres.length > 0) {
+      throw new Error(`La carga no reconcilia:\n  - ${descuadres.join('\n  - ')}`);
+    }
   });
 
   // ---------------------------------------------------------------- reporte
@@ -621,6 +704,8 @@ async function main() {
   console.log(`  sin equipo:        ${empleadosSinEquipo.length}`);
   for (const e of empleadosSinEquipo) console.log(`     ${e}`);
   console.log(`Movimientos 'Alta':  ${resumen.movimientos}`);
+  console.log(`Motivos registrados: ${resumen.motivos}`);
+  console.log(`Reconciliación:      OK (leídas = insertadas + rechazadas, y la BD lo confirma)`);
   console.log(`\nMotivos (${bloques.reduce((a, [, f]) => a + f.length, 0)} en total):`);
   for (const [m, filas] of bloques) console.log(`  ${String(filas.length).padStart(3)}  ${m}`);
   console.log(`\nReporte: ${RUTA_REPORTE}`);
