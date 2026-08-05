@@ -3,8 +3,7 @@ import {
   Device, 
   Employee, 
   Hub, 
-  LogisticsTicket, 
-  CatalogItem 
+  LogisticsTicket
 } from './types';
 import { 
   INITIAL_DEVICES, 
@@ -19,8 +18,6 @@ import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
 import { LogisticsHubsView } from './components/LogisticsHubsView';
 import { EmployeesView } from './components/EmployeesView';
-import { ProcurementCatalogView } from './components/ProcurementCatalogView';
-import { LicensesMdmView } from './components/LicensesMdmView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
 
@@ -31,6 +28,9 @@ import { NewDeviceModal } from './components/NewDeviceModal';
 export function App() {
   // Main State
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  // TODO(4a): eliminar. El selector de organizacion del Header es multi-tenant
+  // y hay una sola empresa. Hoy este estado solo alimenta el contexto de la IA;
+  // el Header muestra un nombre distinto hardcodeado. Ver docs/deuda-tipos.md.
   const [selectedOrg, setSelectedOrg] = useState<string>('Acme LatAm Tech');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -59,41 +59,6 @@ export function App() {
     setLogisticsTickets((prev) => [ticket, ...prev]);
   };
 
-  const handleCatalogOrderSuccess = (item: CatalogItem, mode: 'buy' | 'lease') => {
-    const newDev: Device = {
-      id: `dev-${Date.now().toString().slice(-4)}`,
-      assetTag: `FP-CAT-${Math.floor(1000 + Math.random() * 9000)}`,
-      name: item.name,
-      category: item.category,
-      brand: item.brand,
-      model: 'Model 2026',
-      serialNumber: `SN-${Math.floor(100000 + Math.random() * 900000)}`,
-      status: 'Available',
-      condition: 'Brand New',
-      location: 'CDMX Hub (México)',
-      department: 'Engineering',
-      assignedTo: null,
-      assignedDate: null,
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      warrantyExpiry: '2028-12-31',
-      costUSD: item.priceUSD,
-      specs: {
-        cpu: item.specs,
-        ram: 'Standard Enterprise',
-        storage: 'Enterprise SSD',
-        os: item.category === 'Laptop' ? 'macOS / Windows Pro' : 'N/A',
-      },
-      mdmEnrolled: true,
-      mdmProvider: 'Jamf Pro Enterprise',
-      encrypted: true,
-      healthScore: 100,
-      batteryHealth: 100,
-      imageUrl: item.imageUrl,
-    };
-
-    setDevices((prev) => [newDev, ...prev]);
-  };
-
   // Navigate to Handover Document view with pre-selected device
   const handleGenerateHandoverDoc = (device: Device) => {
     setSelectedDeviceForDoc(device);
@@ -119,16 +84,17 @@ export function App() {
   `;
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-surface-alt text-ink flex flex-col font-sans antialiased selection:bg-brand selection:text-white">
       
       {/* Top Header */}
       <Header
-        selectedOrg={selectedOrg}
-        setSelectedOrg={setSelectedOrg}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        onOpenCopilot={() => setIsCopilotOpen(true)}
+        onOpenAiCopilot={() => setIsCopilotOpen(true)}
         onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
+        onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
       />
 
       {/* Main Body with Left Sidebar & Content View */}
@@ -138,20 +104,22 @@ export function App() {
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          inTransitCount={logisticsTickets.filter((t) => t.status === 'In Transit').length}
-          inventoryCount={devices.length}
+          pendingLogisticsCount={logisticsTickets.filter((t) => t.status === 'In Transit').length}
+          maintenanceCount={devices.filter((d) => d.status === 'In Maintenance').length}
         />
 
         {/* Dynamic View Area */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#F8FAFC] space-y-8">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-surface-alt space-y-8">
           {activeTab === 'dashboard' && (
             <DashboardView
               devices={devices}
               employees={employees}
               hubs={hubs}
               logisticsTickets={logisticsTickets}
-              onNavigate={(tab) => setActiveTab(tab)}
-              onOpenCopilot={() => setIsCopilotOpen(true)}
+              setActiveTab={setActiveTab}
+              onOpenAiCopilot={() => setIsCopilotOpen(true)}
+              onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
+              onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
             />
           )}
 
@@ -184,18 +152,6 @@ export function App() {
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
               onOpenOffboardingModal={(emp) => setIsOnboardingModalOpen(true)}
               onAddEmployee={handleAddEmployee}
-            />
-          )}
-
-          {activeTab === 'catalog' && (
-            <ProcurementCatalogView
-              onOrderSuccess={handleCatalogOrderSuccess}
-            />
-          )}
-
-          {activeTab === 'licenses' && (
-            <LicensesMdmView
-              devices={devices}
             />
           )}
 

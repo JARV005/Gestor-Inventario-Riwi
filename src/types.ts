@@ -92,19 +92,6 @@ export interface LogisticsTicket {
   hubDestination?: string;
 }
 
-export interface SoftwareLicense {
-  id: string;
-  name: string;
-  provider: string;
-  category: 'Productivity' | 'Development' | 'Design' | 'Security / MDM' | 'Communication';
-  totalSeats: number;
-  usedSeats: number;
-  costPerSeatMonthly: number;
-  renewalDate: string;
-  complianceRate: number;
-  iconName: string;
-}
-
 export interface MaintenanceRecord {
   id: string;
   deviceId: string;
@@ -119,16 +106,3 @@ export interface MaintenanceRecord {
   technician: string;
 }
 
-export interface CatalogItem {
-  id: string;
-  name: string;
-  category: DeviceCategory;
-  brand: string;
-  specs: string;
-  priceUSD: number;
-  monthlyLeaseUSD: number;
-  leadTimeDays: number;
-  stockAvailable: number;
-  imageUrl: string;
-  tags: string[];
-}
