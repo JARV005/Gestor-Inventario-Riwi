@@ -16,7 +16,8 @@
     "db:verificar": "docker compose exec -T postgres psql < db/verificar.sql",
     "migrate": "tsx db/migrar.ts",
     "migrate:generate": "drizzle-kit generate",
-    "seed": "tsx db/semillas.ts"
+    "seed": "tsx db/semillas.ts",
+    "import": "tsx db/importar.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -25,6 +26,7 @@
     "canvas-confetti": "^1.9.4",
     "dotenv": "^17.2.3",
     "drizzle-orm": "^0.45.2",
+    "exceljs": "^4.4.0",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",
     "motion": "^12.23.24",
