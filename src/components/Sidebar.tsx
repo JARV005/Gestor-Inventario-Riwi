@@ -7,7 +7,6 @@ import {
   Wrench,
   FileText,
   Building,
-  Sparkles,
   ArrowRightLeft
 } from 'lucide-react';
 

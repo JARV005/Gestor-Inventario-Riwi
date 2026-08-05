@@ -1,16 +1,13 @@
 import React, { useState } from 'react';
 import {
-  Laptop,
   Search,
   Bell,
   Sparkles,
   Building2,
   ChevronDown,
   Plus,
-  Globe2,
   CheckCircle2,
-  PackageCheck,
-  Zap
+  PackageCheck
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -166,8 +163,12 @@ export const Header: React.FC<HeaderProps> = ({
                       <span className="text-[10px] text-ink-muted mt-1 block">Hace 25 min</span>
                     </div>
                     <div className="p-3 hover:bg-surface-alt">
-                      <p className="font-medium text-ink">Garantía por vencer</p>
-                      <p className="text-[11px] text-ink-muted">3 Laptops Dell en Hub CDMX cumplen 3 años en agosto.</p>
+                      <p className="font-medium">
+                        <span className="inline-block px-1.5 py-0.5 rounded bg-warn text-ink text-[11px] font-semibold">
+                          Garantía por vencer
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-ink-muted mt-1">3 Laptops Dell en Hub CDMX cumplen 3 años en agosto.</p>
                       <span className="text-[10px] text-ink-muted mt-1 block">Hace 2 horas</span>
                     </div>
                     <div className="p-3 hover:bg-surface-alt">

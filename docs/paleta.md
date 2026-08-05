@@ -79,10 +79,27 @@ En código nuevo no se usan colores crudos de Tailwind. Solo tokens.
 `ok`, `warn`, `danger` e `info` miden entre **1.65:1 y 3.31:1** sobre blanco.
 Ninguno alcanza el 4.5:1 de texto; tres no alcanzan ni el 3:1 no textual.
 
-Van **siempre como fondo de chip, con texto `ink`**. Nunca `text-ok`,
-`text-warn`, `text-danger`, `text-info`.
+Van **siempre como fondo de chip**. Nunca `text-ok`, `text-warn`,
+`text-danger`, `text-info`.
 
-### 2. `ink-faint` no es un color de texto
+### 2. El texto del chip se elige por la luminosidad del fondo
+
+No hay un color de texto fijo para los chips. Se elige el que contrasta contra
+ese fondo concreto:
+
+| Fondo | Texto | Chips |
+|---|---|---|
+| Claro | `ink` | `ok`, `warn`, `danger`, `info`, `ink-faint` |
+| Oscuro | blanco | `brand` |
+
+`brand` es el **único chip oscuro del set**. Con `ink` daría 2.76:1 y no
+cumpliría; con blanco da 5.77:1.
+
+Formular la regla como "texto `ink` siempre" era un atajo que funcionaba solo
+mientras todos los chips fueran claros. Al añadir `brand` deja de valer: lo que
+se mantiene constante no es el color del texto, sino el contraste.
+
+### 3. `ink-faint` no es un color de texto
 
 `ink-faint` da **2.75:1 sobre `surface`** y **2.57:1 sobre `surface-alt`**. No
 llega al 4.5:1 de texto ni al 3:1 no textual.
@@ -92,7 +109,7 @@ del chip `Reservado`**, donde con texto `ink` da 5.80:1.
 
 Por eso `slate-400` **no** se mapea a `ink-faint` sino a `ink-muted` (4.92:1).
 
-### 3. `brand-light` no es un color de texto sobre blanco
+### 4. `brand-light` no es un color de texto sobre blanco
 
 3.83:1. Vale para texto grande (≥24px, o ≥18.66px en negrita) y para elementos
 no textuales. Sobre `nav` da 4.16:1 y cumple el 3:1 no textual.
@@ -115,8 +132,8 @@ no textuales. Sobre `nav` da 4.16:1 y cumple el 3:1 no textual.
 | `brand-hover` / `brand-subtle` | 6.32:1 | 4.5 | ✅ |
 | blanco / `brand` | 5.77:1 | 4.5 | ✅ |
 | blanco / `brand-hover` | 7.36:1 | 4.5 | ✅ |
-| `ink-faint` / `surface` | 2.75:1 | 4.5 | ❌ solo decoración, regla 2 |
-| `brand-light` / `surface` | 3.83:1 | 4.5 | ❌ solo texto grande, regla 3 |
+| `ink-faint` / `surface` | 2.75:1 | 4.5 | ❌ solo decoración, regla 3 |
+| `brand-light` / `surface` | 3.83:1 | 4.5 | ❌ solo texto grande, regla 4 |
 | `line` / `surface` | 1.28:1 | 3.0 | ⚠️ divisor decorativo |
 | `ink-muted` / `brand-subtle` | 4.23:1 | 4.5 | ❌ no usar; usar `ink` |
 
@@ -134,41 +151,37 @@ no textuales. Sobre `nav` da 4.16:1 y cumple el 3:1 no textual.
 | `nav-line` / `nav` | 1.61:1 | 3.0 | ⚠️ divisor decorativo |
 | `brand` / `nav` | 2.76:1 | 3.0 | ❌ ver nota del ítem activo |
 
-### Chips de estado, texto `ink` sobre el fondo
+### Chips de estado
 
-| Estado | Fondo | Ratio | |
-|---|---|---|---|
-| Disponible | `ok` | 7.77:1 | ✅ |
-| En mantenimiento | `warn` | 9.64:1 | ✅ |
-| En tránsito | `info` | 8.15:1 | ✅ |
-| De baja | `danger` | 4.82:1 | ✅ |
-| Reservado | `ink-faint` | 5.80:1 | ✅ |
-| **Asignado** | `brand` | **2.76:1** | ❌ **ver abajo** |
+Texto elegido por luminosidad del fondo (regla 2):
+
+| Estado | Fondo | Texto | Ratio | |
+|---|---|---|---|---|
+| Disponible | `ok` | `ink` | 7.77:1 | ✅ |
+| Asignado | `brand` | **blanco** | 5.77:1 | ✅ |
+| En mantenimiento | `warn` | `ink` | 9.64:1 | ✅ |
+| En tránsito | `info` | `ink` | 8.15:1 | ✅ |
+| De baja | `danger` | `ink` | 4.82:1 | ✅ |
+| Reservado | `ink-faint` | `ink` | 5.80:1 | ✅ |
+
+Descartado: `brand` con texto `ink` da 2.76:1.
 
 ---
 
 ## Mapeo de badges de estado
 
-Para cuando se reconstruyan las vistas. Fondo de chip + texto `ink`:
+Para cuando se reconstruyan las vistas:
 
-| Estado | Fondo |
-|---|---|
-| Disponible | `ok` |
-| Asignado | `brand` ⚠️ |
-| En mantenimiento | `warn` |
-| En tránsito | `info` |
-| De baja | `danger` |
-| Reservado | `ink-faint` |
+| Estado | Fondo | Texto |
+|---|---|---|
+| Disponible | `ok` | `ink` |
+| Asignado | `brand` | `white` |
+| En mantenimiento | `warn` | `ink` |
+| En tránsito | `info` | `ink` |
+| De baja | `danger` | `ink` |
+| Reservado | `ink-faint` | `ink` |
 
-### ⚠️ Pendiente de decisión: el chip `Asignado`
-
-`brand` con texto `ink` da **2.76:1**. Es el único par del mapeo que no cumple.
-
-Alternativa medida: **`brand` con texto blanco da 5.77:1** y cumple. El coste es
-romper la regla "texto `ink` siempre" en un solo chip.
-
-No se ha ajustado ningún hex de la paleta. Queda abierto para cuando se pinte
-la primera vista que muestre estados.
+Ningún hex de la paleta se ajustó para que esto cuadrara.
 
 ---
 
@@ -195,14 +208,14 @@ hover se lee como deshabilitado.
 | `blue-50` / `blue-200` | `brand-subtle` / `line` |
 | `slate-900` | `ink` |
 | `slate-500`, `slate-600`, `slate-700` | `ink-muted` |
-| `slate-400` | `ink-muted` (**no** `ink-faint`, ver regla 2) |
+| `slate-400` | `ink-muted` (**no** `ink-faint`, ver regla 3) |
 | `slate-50`, `slate-100` | `surface-alt` |
 | `slate-200` | `line` |
 | `bg-[#F8FAFC]` | `surface-alt` |
 | `bg-[#0F172A]`, `slate-800` | `nav`, `nav-deep`, `nav-line`, `nav-hover` |
 | `emerald-*` (badges de estado) | `ok` como fondo de chip |
 | `amber-*` (badges de estado) | `warn` como fondo de chip |
-| `text-amber-700` (texto de aviso) | `ink` — `warn` no puede ser texto |
+| `text-amber-700` (texto de aviso) | chip `warn` con texto `ink` — `warn` no puede ser texto |
 
 ---
 
@@ -214,6 +227,7 @@ hover se lee como deshabilitado.
 - **`--color-danger` no aparece en el CSS compilado** todavía. Tailwind 4 solo
   emite los tokens que alguna utilidad usa, y ninguna vista pintada muestra aún
   el estado "De baja". Aparecerá solo cuando se use. No es un fallo.
-- **"Garantía por vencer"** en el `Header` pasó de `text-amber-700` a `ink`. La
-  semántica de aviso ya no se transmite por color; si hace falta recuperarla,
-  va como chip `warn`, no como texto.
+- **"Garantía por vencer"** en el `Header` era `text-amber-700`. Pasarlo a `ink`
+  a secas dejaba las tres notificaciones visualmente idénticas: el aviso dejaba
+  de avisar. Ahora es un **chip `warn` con texto `ink`** (9.64:1), que conserva
+  la señal sin usar el color como texto.
