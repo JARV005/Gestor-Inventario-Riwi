@@ -1,1 +1,36 @@
 @import "tailwindcss";
+
+/* Paleta RIWI. Tokens, contrastes medidos y reglas de uso en docs/paleta.md.
+   No usar colores crudos de Tailwind (blue-600, slate-500...) en codigo nuevo. */
+@theme {
+  /* Marca */
+  --color-brand:        #5B4FE0;
+  --color-brand-hover:  #4A3ECC;
+  --color-brand-light:  #7C71F0;
+  --color-brand-subtle: #EEECFC;
+
+  /* Superficies claras: el cuerpo de la app */
+  --color-surface:      #FFFFFF;
+  --color-surface-alt:  #F7F7FB;
+  --color-line:         #E3E2EE;
+
+  /* Tinta sobre superficie clara */
+  --color-ink:          #1D1C4A;
+  --color-ink-muted:    #6E6E8B;
+  --color-ink-faint:    #9B9AB0;
+
+  /* Estado. NUNCA como texto: miden entre 1.7:1 y 3.3:1 sobre blanco.
+     Van como fondo de chip con texto ink. Ver docs/paleta.md. */
+  --color-ok:           #57C99B;
+  --color-warn:         #E5C84B;
+  --color-danger:       #F4593F;
+  --color-info:         #DDA5F2;
+
+  /* Superficie oscura: solo el sidebar de navegacion */
+  --color-nav:          #1D1C4A;
+  --color-nav-deep:     #15143A;
+  --color-nav-ink:      #EDECF5;
+  --color-nav-muted:    rgba(237, 236, 245, 0.64);
+  --color-nav-line:     rgba(237, 236, 245, 0.17);
+  --color-nav-hover:    rgba(237, 236, 245, 0.08);
+}

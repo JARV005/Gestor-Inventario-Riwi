@@ -81,7 +81,7 @@ export function App() {
   `;
 
   return (
-    <div className="min-h-screen bg-[#F8FAFC] text-slate-900 flex flex-col font-sans antialiased selection:bg-blue-600 selection:text-white">
+    <div className="min-h-screen bg-surface-alt text-ink flex flex-col font-sans antialiased selection:bg-brand selection:text-white">
       
       {/* Top Header */}
       <Header
@@ -105,7 +105,7 @@ export function App() {
         />
 
         {/* Dynamic View Area */}
-        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-[#F8FAFC] space-y-8">
+        <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-surface-alt space-y-8">
           {activeTab === 'dashboard' && (
             <DashboardView
               devices={devices}
