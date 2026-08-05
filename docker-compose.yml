@@ -1,0 +1,41 @@
+name: inventario-bbl
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: inventario-bbl-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta POSTGRES_USER en .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD en .env}
+      POSTGRES_DB: ${POSTGRES_DB:?falta POSTGRES_DB en .env}
+      # Variables de libpq: hacen que `psql` y `pg_isready` dentro del
+      # contenedor apunten solos al usuario y la BD correctos. Sin ellas los
+      # scripts de npm tendrían que pasar -U y -d con comillas, y las comillas
+      # no sobreviven a cmd.exe, que es el intérprete de npm en Windows.
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB}
+      # Ordenamiento en español a nivel de base de datos: la 'ñ' cae entre 'n' y
+      # 'o', y los acentos no rompen el orden alfabético. Se fija aquí, en el
+      # initdb, y no columna por columna: así lo hereda toda la BD y el esquema
+      # de Drizzle no necesita saber que existe.
+      # Solo aplica al crear el volumen. Cambiarlo después exige recrearlo.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=es-CO --locale=C.UTF-8"
+    ports:
+      # 5433 por defecto: el 5432 suele estar tomado por un Postgres instalado
+      # en la máquina, y entonces las conexiones llegan a ese en vez de a este.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - datos-postgres:/var/lib/postgresql/data
+    healthcheck:
+      # Sin la BD nombrada, pg_isready responde OK antes de que initdb termine.
+      # Aquí la toma de PGDATABASE.
+      test: ["CMD", "pg_isready"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+volumes:
+  datos-postgres:
+    name: inventario-bbl-datos
