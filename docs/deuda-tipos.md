@@ -53,6 +53,8 @@ src/App.tsx(115,15): error TS2322: Type '{ devices: Device[]; employees: Employe
 
 ### Con `--strict` (sonda, no activado)
 
+Medido **antes** de reconectar las props:
+
 | Archivo | Errores |
 |---|---|
 | `src/App.tsx` | 4 |
@@ -62,9 +64,14 @@ src/App.tsx(115,15): error TS2322: Type '{ devices: Device[]; employees: Employe
 | `TS2322` | 3 |
 | `TS7006` | 1 — parámetro `tab` con `any` implícito, en el mismo `onNavigate` roto |
 
-**La deuda es mucho menor de lo previsto.** Las 9 vistas son internamente
-consistentes; toda la rotura está concentrada en las fronteras de props que
-`App.tsx` cablea. Activar `strict` en la 4a costará poco.
+Medido **después** del commit 3: **0 errores, también con `--strict`.** El
+`TS7006` desapareció solo, porque el `onNavigate` que lo causaba era una de las
+props inexistentes.
+
+**La deuda era mucho menor de lo previsto.** Las 9 vistas son internamente
+consistentes; toda la rotura estaba concentrada en las fronteras de props que
+`App.tsx` cablea. **Activar `strict` en la 4a no cuesta nada:** el árbol ya
+pasa limpio. Solo hay que añadir el flag.
 
 ## Análisis por frontera
 
@@ -108,16 +115,24 @@ botones de acción rápida están muertos y navegar desde las tarjetas lanza
 
 ## Estado
 
-- **Commit 2 (este):** tipos activados, inventario levantado. Los 3 errores
-  siguen abiertos a propósito: arreglarlos es lógica, no color, y mezclarlo con
-  el diff de la paleta lo haría irrevisable.
-- **Commit 3:** se reconectan las tres fronteras editando solo `App.tsx`, sin
-  tocar los componentes ni rediseñar el flujo.
+- **Commit 2:** tipos activados, inventario levantado. Los 3 errores se dejaron
+  abiertos a propósito: arreglarlos es lógica, no color, y mezclarlo con el diff
+  de la paleta lo habría hecho irrevisable.
+- **Commit 3 (cerrado):** reconectadas las tres fronteras editando solo
+  `App.tsx`, sin tocar los componentes ni rediseñar el flujo.
+  `npm run lint` en verde, y también con `--strict`.
+
+### Decisiones de la reconexión
+
+| Prop | Antes | Ahora | Por qué |
+|---|---|---|---|
+| `Sidebar.pendingLogisticsCount` | `inTransitCount` | misma expresión, renombrada | Reconectar lo que existía, sin cambiar la semántica |
+| `Sidebar.maintenanceCount` | `inventoryCount` = `devices.length` | `devices` con `status === 'In Maintenance'` | `devices.length` en un badge de mantenimiento no significaba nada. Es el único dato de mantenimiento que `App` tiene |
+| `Header` / `DashboardView` | handlers con nombre distinto | nombre que declara cada componente | Renombrado puro |
 
 ## Anotado para la etapa 4a
 
-- **Activar `strict`.** Coste medido: 1 error adicional sobre el estado ya
-  corregido.
+- **Activar `strict`.** Coste medido: **cero errores.** Solo añadir el flag.
 - **Eliminar el selector de organización** del `Header` (decisión ya tomada).
   Es multi-tenant y hay una sola empresa. Hoy muestra `"TechCorp Global Inc."`
   hardcodeado mientras `App` mantiene un `selectedOrg = 'Acme LatAm Tech'` que

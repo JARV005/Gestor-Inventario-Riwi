@@ -28,6 +28,9 @@ import { NewDeviceModal } from './components/NewDeviceModal';
 export function App() {
   // Main State
   const [activeTab, setActiveTab] = useState<string>('dashboard');
+  // TODO(4a): eliminar. El selector de organizacion del Header es multi-tenant
+  // y hay una sola empresa. Hoy este estado solo alimenta el contexto de la IA;
+  // el Header muestra un nombre distinto hardcodeado. Ver docs/deuda-tipos.md.
   const [selectedOrg, setSelectedOrg] = useState<string>('Acme LatAm Tech');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
@@ -85,12 +88,13 @@ export function App() {
       
       {/* Top Header */}
       <Header
-        selectedOrg={selectedOrg}
-        setSelectedOrg={setSelectedOrg}
+        activeTab={activeTab}
+        setActiveTab={setActiveTab}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        onOpenCopilot={() => setIsCopilotOpen(true)}
+        onOpenAiCopilot={() => setIsCopilotOpen(true)}
         onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
+        onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
       />
 
       {/* Main Body with Left Sidebar & Content View */}
@@ -100,8 +104,8 @@ export function App() {
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          inTransitCount={logisticsTickets.filter((t) => t.status === 'In Transit').length}
-          inventoryCount={devices.length}
+          pendingLogisticsCount={logisticsTickets.filter((t) => t.status === 'In Transit').length}
+          maintenanceCount={devices.filter((d) => d.status === 'In Maintenance').length}
         />
 
         {/* Dynamic View Area */}
@@ -112,8 +116,10 @@ export function App() {
               employees={employees}
               hubs={hubs}
               logisticsTickets={logisticsTickets}
-              onNavigate={(tab) => setActiveTab(tab)}
-              onOpenCopilot={() => setIsCopilotOpen(true)}
+              setActiveTab={setActiveTab}
+              onOpenAiCopilot={() => setIsCopilotOpen(true)}
+              onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
+              onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
             />
           )}
 
