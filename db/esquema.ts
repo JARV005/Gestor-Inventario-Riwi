@@ -88,10 +88,16 @@ export const estadoEquipo = pgEnum('estado_equipo', [
   'De baja',
 ]);
 
+/**
+ * `Usado` no estaba en el §2. Lo exige la hoja de periféricos, que trae 48
+ * filas `USADO` y 13 `NUEVO`. Mapear `USADO` a `Bueno` seria inventar una
+ * valoración del estado que nadie hizo; dejarlo en NULL tiraría un dato real.
+ */
 export const condicionEquipo = pgEnum('condicion_equipo', [
   'Nuevo',
   'Excelente',
   'Bueno',
+  'Usado',
   'Requiere reparación',
 ]);
 
@@ -219,7 +225,23 @@ export const equipos = pgTable(
     costo: numeric('costo', { precision: 14, scale: 2 }),
     notas: text('notas'),
     requiere_revision: boolean('requiere_revision').notNull().default(false),
-    motivo_revision: text('motivo_revision'),
+    /**
+     * Plural y con códigos fijos de `db/motivos.ts`, no frases.
+     *
+     * Las 126 filas del Excel producen 60 marcadas con 84 motivos entre todas:
+     * hay filas que fallan por varias razones a la vez y un TEXT solo guarda
+     * una. Y con 12 motivos repartidos en 60 filas, una bandeja de texto libre
+     * no se trabaja: nadie resuelve 60 casos revueltos, pero sí resuelve "los
+     * 37 de licencia" de una sentada.
+     *
+     * NOT NULL con default `{}` para que el estado "sin motivos" sea siempre el
+     * array vacío y nunca NULL. Así el CHECK de abajo es una comparación
+     * directa y no tiene que contemplar tres estados.
+     */
+    motivos_revision: text('motivos_revision')
+      .array()
+      .notNull()
+      .default(sql`'{}'::text[]`),
   },
   (t) => [
     // Invariante del §2. Es una equivalencia, no una implicación: un equipo
@@ -233,6 +255,18 @@ export const equipos = pgTable(
     check(
       'equipos_asignado_implica_empleado',
       sql`(estado = 'Asignado') = (empleado_id IS NOT NULL)`,
+    ),
+    // La marca y su explicación son el mismo hecho: una fila marcada sin
+    // motivos es un caso que nadie podrá resolver porque nadie sabe qué tiene
+    // mal, y unos motivos sin marca no aparecen en la bandeja. Equivalencia,
+    // igual que el CHECK de arriba.
+    //
+    // cardinality() y no array_length(): array_length de un array vacío
+    // devuelve NULL, no 0, y eso volvería el CHECK indefinido justo en el caso
+    // que más importa — que es el normal, el de las filas limpias.
+    check(
+      'equipos_revision_con_motivos',
+      sql`requiere_revision = (cardinality(motivos_revision) > 0)`,
     ),
     // Unicidad de serial y etiqueta, pero solo entre las filas ya limpias.
     //

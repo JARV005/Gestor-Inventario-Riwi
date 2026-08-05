@@ -15,6 +15,20 @@
       "when": 1785933591647,
       "tag": "0001_reglas",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1785940926390,
+      "tag": "0002_usado_y_motivos_plurales",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1785940935542,
+      "tag": "0003_retirar_motivo_singular",
+      "breakpoints": true
     }
   ]
 }
