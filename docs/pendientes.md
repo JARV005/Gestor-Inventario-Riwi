@@ -89,14 +89,14 @@ para poder convivir con dos claves durante la migración.
 
 ---
 
-## Sin etapa asignada
+---
 
-### `verificar-datos.sql` es vacuamente verde en una BD vacía
+## Resueltos
 
-Sus 32 comprobaciones cuentan filas que incumplen; sin inventario cargado, todas
-cuentan cero y el fichero pasa. Imprime al final el recuento de filas para que
-se note, pero nada lo impide.
+### ~~`verificar-datos.sql` es vacuamente verde en una BD vacía~~
 
-La corrección sería que fallara explícitamente si `equipos` está vacía. No se
-hizo para no inventar una regla que nadie pidió, pero es el mismo sesgo que este
-fichero existe para corregir.
+Cerrado al final de la etapa 2. El fichero ahora aborta en su primera línea si
+`equipos` está vacía, con exit 3. El motivo de que no bastara con imprimir el
+recuento: `npm run db:reset` deja la BD exactamente así, de modo que correrlo
+justo después es el camino natural y no un descuido raro. Un test de datos
+sobre cero datos no está en verde, está inaplicable.

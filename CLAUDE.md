@@ -62,6 +62,13 @@ Ahora gana `docs/decisiones-01.md`
   estaba a la vista.
 - Ningún resumen de datos se da por bueno sin el conteo que lo respalda.
   Si una afirmación no viene con su SELECT, es una hipótesis.
+- Una constraint deferida no dispara en un fichero que termina en ROLLBACK:
+  solo actúa en el COMMIT. Los tests que la comprueban deben forzar
+  `SET CONSTRAINTS ALL IMMEDIATE` dentro del bloque. Sin eso salen en verde
+  sin comprobar nada, que es el modo de fallo propio de las constraints
+  deferidas: se vuelven invisibles justo en los tests.
+- Un test cuyo resultado depende de que el corpus esté cargado debe fallar
+  si no lo está, no pasar de vacío.
 
 ## Eficiencia
 

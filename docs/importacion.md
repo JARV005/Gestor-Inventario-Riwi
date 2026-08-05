@@ -162,9 +162,11 @@ sesgo real:
 - **`verificar-esquema.sql`** inserta filas sintéticas y hace ROLLBACK. **Pasa
   en una BD vacía**, y eso es su prueba de que no depende de los datos. Si un
   caso de ahí necesita inventario cargado, está mal escrito.
-- **`verificar-datos.sql`** solo lee las 186 filas reales. **No pasa en una BD
-  vacía** — bueno, pasa, pero vacuamente: todas sus cuentas dan cero. Imprime al
-  final el recuento de filas para que se note.
+- **`verificar-datos.sql`** solo lee las 186 filas reales. **Aborta en una BD
+  vacía**, en su primera línea y con exit distinto de cero. Sus comprobaciones
+  cuentan filas que incumplen, así que sin corpus todas darían cero y saldría
+  verde sin haber mirado nada. Un test de datos sobre cero datos no está en
+  verde, está inaplicable, y las dos cosas tienen que distinguirse.
 
 El primero comprueba que la BD sabe rechazar un serial duplicado. El segundo,
 que ningún equipo cargado tiene un motivo que mienta sobre él — que

@@ -1,8 +1,8 @@
 -- Comprueba que LO QUE HAY DENTRO es coherente. `npm run db:verificar-datos`.
 --
 -- Complementa `verificar-esquema.sql`, que solo comprueba que las reglas están
--- puestas. Ese pasa en una BD vacía; **este no**: sin inventario cargado, casi
--- todo da 0 y el fichero entero es vacuamente verde.
+-- puestas. Ese pasa en una BD vacía; **este aborta**, porque sin corpus no hay
+-- nada que comprobar y salir en verde sería mentir.
 --
 -- Existe porque el verificador de esquema tenía un sesgo: 22 casos sobre filas
 -- sintéticas y ninguno sobre las 186 cargadas. Si se borrasen 40 equipos de la
@@ -15,6 +15,26 @@
 -- Solo lee. No inserta nada, así que no necesita ROLLBACK.
 
 \set ON_ERROR_STOP on
+
+-- Lo primero: negarse si no hay corpus.
+--
+-- Las 32 comprobaciones de abajo cuentan filas que incumplen, así que sobre una
+-- BD vacía todas dan cero y el fichero saldría verde sin haber mirado nada. Y
+-- `npm run db:reset` deja la BD exactamente así, de modo que correr esto justo
+-- después es el camino natural, no un descuido raro.
+--
+-- Un test de datos sobre cero datos no está en verde: está inaplicable, y las
+-- dos cosas tienen que distinguirse a simple vista.
+DO $$
+DECLARE n bigint;
+BEGIN
+  SELECT count(*) INTO n FROM equipos;
+  IF n = 0 THEN
+    RAISE EXCEPTION
+      'Inventario vacío: este fichero no es aplicable. Sus comprobaciones cuentan filas que incumplen, y sin filas todas darían cero.'
+      USING HINT = 'Cargar el inventario con npm run import, o correr npm run db:verificar-esquema, que sí aplica en vacío.';
+  END IF;
+END $$;
 
 CREATE TEMP TABLE hallazgo(grupo text, caso text, filas bigint);
 
@@ -268,8 +288,7 @@ SELECT count(*) FILTER (WHERE filas <> 0) AS fallas,
        count(*) AS comprobaciones
 FROM hallazgo;
 
--- Contexto, no comprobación: si esto sale vacío, el fichero entero es
--- vacuamente verde y hay que cargar el inventario antes de creerse nada.
+-- Contexto: sobre cuántas filas se ha comprobado todo lo anterior.
 SELECT (SELECT count(*) FROM equipos) AS equipos,
        (SELECT count(*) FROM empleados) AS empleados,
        (SELECT count(*) FROM equipos WHERE requiere_revision) AS marcados,
