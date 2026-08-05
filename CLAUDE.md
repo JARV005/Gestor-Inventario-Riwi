@@ -36,6 +36,21 @@ Ahora gana `docs/decisiones-01.md`
    contraseñas en texto plano.
 7. Cambios de esquema → migración versionada. Nunca `ALTER TABLE` a mano.
 
+## Verificación
+
+- Toda afirmación sobre el estado de la BD se respalda citando la línea
+  exacta de la salida de psql que la sustenta. En la etapa 1 se leyó un
+  UNIQUE CONSTRAINT simple como si fuera un índice parcial: estaba a la
+  vista en la salida. El riesgo no es el descuido, es buscar una
+  confirmación que ya se espera encontrar.
+- `db/verificar.sql` es la red de seguridad del proyecto. Todo invariante
+  nuevo entra ahí. Ninguna etapa se cierra sin que corra en verde.
+- Un test que solo cubre el camino que ya funciona no es evidencia. Cada
+  invariante se prueba por sus dos lados: que acepte lo que debe aceptar
+  y que rechace lo que debe rechazar.
+- Antes de dar por cerrada una etapa, pregúntate qué prueba la habría
+  dejado en rojo si el trabajo estuviera mal. Si no existe, escríbela.
+
 ## Eficiencia
 
 - `src/data/mockData.ts` (23 KB) y `bun.lock` (81 KB) no se leen completos. El
