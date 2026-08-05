@@ -115,7 +115,19 @@ interface Candidata {
   fila: number;
   motivos: CodigoMotivo[];
   rechazada: boolean;
-  /** Nombre tal cual viene, para crear/vincular el empleado. null = sin responsable */
+  /**
+   * Persona real nombrada en la fila, exista o no el vínculo. Null solo si la
+   * celda venía vacía o traía un marcador.
+   *
+   * Va separado de `responsable` a propósito: una persona mencionada en el
+   * Excel existe aunque su equipo no se le pueda asignar. Si solo se crearan
+   * los empleados vinculables, tres personas del archivo no tendrían fila en
+   * la BD y su único rastro sería `equipos.notas`, que es texto libre que
+   * nadie consulta: quien resolviera esas filas tendría que reescribir el
+   * nombre a mano y confiar en no equivocarse.
+   */
+  persona: string | null;
+  /** Solo cuando el vínculo se puede crear, es decir con estado 'Asignado'. */
   responsable: string | null;
   cedula: string | null;
   ubicacionOriginal: string;
@@ -223,6 +235,7 @@ function candidataDeEquipo(f: Fila, serialesRepetidos: Set<string>): Candidata {
 
   // ------------------------------------------------------------ responsable
   const respBruto = f.celda('USUARIO RESPONSABLE');
+  let persona: string | null = null;
   let responsable: string | null = null;
   let estado = estadoMapeado;
   const notas: string[] = [];
@@ -239,11 +252,14 @@ function candidataDeEquipo(f: Fila, serialesRepetidos: Set<string>): Candidata {
     if (estado === 'Asignado') estado = 'Disponible';
   } else if (estado !== 'Asignado') {
     // El CHECK prohíbe un responsable sobre un equipo que no está Asignado.
-    // No se descarta el dato: se guarda en notas y se marca para que alguien
-    // decida qué es cierto, el estado o el responsable.
+    // El vínculo no se crea, pero la persona sí: existe en el Excel y por
+    // tanto existe. La nota registra el conflicto de estado, que es lo que
+    // hay que resolver, no el nombre.
     anota('RESPONSABLE_EN_ESTADO_NO_ASIGNADO');
     notas.push(`USUARIO RESPONSABLE de origen: "${respBruto}" (estado "${f.celda('ESTADO DEL EQUIPO')}")`);
+    persona = respBruto;
   } else {
+    persona = respBruto;
     responsable = respBruto;
   }
 
@@ -252,6 +268,7 @@ function candidataDeEquipo(f: Fila, serialesRepetidos: Set<string>): Candidata {
     fila: f.numero,
     motivos,
     rechazada,
+    persona,
     responsable,
     cedula: null,
     ubicacionOriginal,
@@ -316,6 +333,7 @@ function candidataDePeriferico(f: Fila, serialesRepetidos: Set<string>): Candida
 
   let estado: EstadoEquipo = norm(f.celda('DISPONIBILIDAD')) === 'asignado' ? 'Asignado' : 'Disponible';
   const respBruto = f.celda('USUARIO RESPONSABLE');
+  let persona: string | null = null;
   let responsable: string | null = null;
   const notas: string[] = [];
 
@@ -331,7 +349,9 @@ function candidataDePeriferico(f: Fila, serialesRepetidos: Set<string>): Candida
   } else if (estado !== 'Asignado') {
     anota('RESPONSABLE_EN_ESTADO_NO_ASIGNADO');
     notas.push(`USUARIO RESPONSABLE de origen: "${respBruto}"`);
+    persona = respBruto;
   } else {
+    persona = respBruto;
     responsable = respBruto;
   }
 
@@ -340,6 +360,7 @@ function candidataDePeriferico(f: Fila, serialesRepetidos: Set<string>): Candida
     fila: f.numero,
     motivos,
     rechazada: false,
+    persona,
     responsable,
     cedula: limpio(f.celda('CEDULA USUARIO')),
     ubicacionOriginal,
@@ -485,6 +506,7 @@ async function main() {
 
   // ------------------------------------------------------------- transacción
   let resumen = { equipos: 0, empleados: 0, movimientos: 0 };
+  let empleadosSinEquipo: string[] = [];
 
   await db.transaction(async (tx) => {
     const sedesBd = await tx.select({ id: sedes.id, nombre: sedes.nombre }).from(sedes);
@@ -505,13 +527,18 @@ async function main() {
       string,
       { nombre: string; cedula: string | null; sede_id: string | null }
     >();
-    for (const c of aImportar) {
-      if (!c.responsable) continue;
-      const k = norm(c.responsable);
+    // Se recorren TODAS las candidatas, no solo las importables, y se usa
+    // `persona` y no `responsable`: una persona nombrada en el archivo existe
+    // aunque su equipo no se le pueda vincular, o aunque la fila entera se
+    // rechace. Así el recuento de empleados cuadra con el del Excel, que es
+    // mucho más auditable que "110 y otros tres en un campo de texto".
+    for (const c of candidatas) {
+      if (!c.persona) continue;
+      const k = norm(c.persona);
       const sede = c.sedeNombre ? (sedePorNombre.get(norm(c.sedeNombre)) ?? null) : null;
       const previo = porNombre.get(k);
       if (!previo) {
-        porNombre.set(k, { nombre: c.responsable, cedula: c.cedula, sede_id: sede });
+        porNombre.set(k, { nombre: c.persona, cedula: c.cedula, sede_id: sede });
       } else {
         // La cédula se guarda cuando existe (regla 4) pero no decide el vínculo.
         if (!previo.cedula && c.cedula) previo.cedula = c.cedula;
@@ -528,6 +555,16 @@ async function main() {
       for (const e of insertados) empleadoPorNombre.set(norm(e.nombre), e.id);
     }
     resumen.empleados = empleadoPorNombre.size;
+
+    // Los que entran sin equipo a su nombre. No es un error: la tabla no exige
+    // que una persona tenga equipos. Se listan porque son exactamente las
+    // filas que alguien tiene que resolver.
+    const vinculados = new Set(
+      aImportar.filter((c) => c.responsable).map((c) => norm(c.responsable!)),
+    );
+    empleadosSinEquipo = [...porNombre.values()]
+      .filter((e) => !vinculados.has(norm(e.nombre)))
+      .map((e) => e.nombre);
 
     // --- equipos
     const valores = aImportar.map((c) => {
@@ -581,6 +618,8 @@ async function main() {
   console.log(`Rechazadas:          ${rechazadas.length}`);
   for (const r of rechazadas) console.log(`  ${r.hoja} fila ${r.fila}: ${r.motivos.join(', ')}`);
   console.log(`\nEmpleados creados:   ${resumen.empleados}`);
+  console.log(`  sin equipo:        ${empleadosSinEquipo.length}`);
+  for (const e of empleadosSinEquipo) console.log(`     ${e}`);
   console.log(`Movimientos 'Alta':  ${resumen.movimientos}`);
   console.log(`\nMotivos (${bloques.reduce((a, [, f]) => a + f.length, 0)} en total):`);
   for (const [m, filas] of bloques) console.log(`  ${String(filas.length).padStart(3)}  ${m}`);

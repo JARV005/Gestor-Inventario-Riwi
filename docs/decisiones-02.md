@@ -115,13 +115,16 @@ pares con 2+ tokens compartidos:              0
    empleado aparece con dos ubicaciones distintas (0 de 113). Si en el futuro
    hay conflicto → `sede_id` NULL + reporte.
 
-### Consecuencia: se crean 110 empleados, no 113
+### Se crean 113 empleados: uno por cada nombre del archivo
 
-Los 3 que faltan solo aparecían como responsables de filas donde el vínculo no
-se pudo crear (ver D9, `RESPONSABLE_EN_ESTADO_NO_ASIGNADO`, y la fila 25
-rechazada). Su nombre está preservado en `equipos.notas` y en el reporte, pero
-no hay fila en `empleados`. **Es una pérdida consciente y reversible**: cuando
-alguien resuelva esas 3 filas, el empleado se crea entonces.
+Un empleado se crea por cada persona **nombrada** en el Excel, exista o no el
+vínculo con un equipo. `empleados` no exige que la persona tenga equipos
+asignados, y 113 en el Excel contra 113 en la BD es auditable de un vistazo.
+
+3 de ellos entran sin equipo a su nombre: son los de las filas donde el vínculo
+no se pudo crear (`RESPONSABLE_EN_ESTADO_NO_ASIGNADO`) más la fila 25
+rechazada. Ver D10 punto 3 para la primera versión de esta decisión, que era la
+contraria.
 
 ---
 
@@ -188,8 +191,69 @@ No estaba en la lista de códigos aprobada. Lo obligó el CHECK del §2: un
 responsable sobre un equipo que no está `Asignado` viola el invariante.
 
 3 filas lo traían — una `De baja`, una `No asignar` y la 25. No se descarta el
-dato: el vínculo no se crea, el nombre queda en `equipos.notas` y la fila se
-marca para que alguien decida qué es cierto, el estado o el responsable.
+dato: el empleado se crea igual, el vínculo no, el conflicto de estado queda en
+`equipos.notas` y la fila se marca para que alguien decida qué es cierto, el
+estado o el responsable.
+
+En la BD quedan 2 y no 3, porque la tercera es la fila 25, que se rechaza.
+
+### 3. Solo crear empleados vinculables — REVERTIDA
+
+**La primera versión del importador creaba 110 empleados y no 113.** Los 3 que
+faltaban solo aparecían como responsables de filas donde el vínculo no se podía
+crear, así que se descartaban como personas y su nombre quedaba únicamente en
+`equipos.notas`.
+
+Se revirtió. El razonamiento que la tumbó:
+
+- `equipos.notas` es texto libre que nadie consulta. Quien fuera a resolver esas
+  filas tendría que releer el nombre a mano y confiar en no equivocarse al
+  teclearlo.
+- «110 empleados más otros tres en un campo de texto» no se audita. «113 en el
+  Excel y 113 en la BD» sí.
+- La tabla no exige que un empleado tenga equipos, así que no había ninguna
+  razón técnica para no crearlos.
+
+Queda escrita porque la decisión descartada explica por qué el importador
+distingue `persona` de `responsable` en `Candidata`, que si no parecería
+duplicación gratuita: `persona` es quien aparece nombrado, `responsable` es
+quien puede quedar vinculado, y solo coinciden cuando el estado es `Asignado`.
+
+### 4. Dos de esos tres «empleados» no son personas
+
+Descubierto al reimportar, después de aprobar la reversión anterior. De las 3
+filas sin equipo:
+
+| Fila | Estado | `USUARIO RESPONSABLE` |
+|---|---|---|
+| `BBL-0061` | `Reservado` | `z No asignar` |
+| serial `FNJ5D9TC7F` | `De baja` | `POLIZA DE SEGURO` |
+| fila 25 (rechazada) | — | `Cristian Andres Correa Alvarez` |
+
+La `z ` inicial de `z No asignar` es el truco de hoja de cálculo para que una
+fila caiga al final al ordenar. `POLIZA DE SEGURO` sobre un equipo dado de baja
+es a quién se le reclamó, no quién lo tiene. Solo el tercero es una persona.
+
+Es decir: el archivo tiene **111 personas y 2 cadenas basura**, no 113 personas.
+
+**Decisión: se quedan las 113.** El criterio de auditabilidad —que el recuento
+del Excel y el de la BD coincidan— se mantuvo por encima de la limpieza de la
+tabla.
+
+> **Riesgo asumido, a tener presente en la etapa 5:** `POLIZA DE SEGURO` y
+> `z No asignar` son filas de `empleados` indistinguibles de las reales para el
+> esquema. Van a aparecer en el desplegable de «a quién se le entrega un
+> equipo» y pueden acabar en un acta. Si eso molesta, se corrigen con un
+> `UPDATE` de `activo = false` sobre esas dos filas, o se vuelven a marcar como
+> no-persona en `db/importar.ts` y se reimporta.
+
+Y un apunte sobre cómo se encontró, porque afecta a la confianza en el resto de
+la exploración: **el informe previo dijo que el único valor no-persona era
+`"Disponible"`, y era falso.** La heurística que lo buscaba descartaba valores
+con dígitos, de una sola palabra, o que contuvieran palabras de cargo o lugar.
+`POLIZA DE SEGURO` y `z No asignar` tienen tres palabras y no caían en ninguna
+de esas redes. Aparecieron solos al mirar los tres empleados sin equipo — es
+decir, los encontró un conteo raro, no la búsqueda que existía para eso.
 
 ### `bios_password_cifrado` tiene 115 filas, no 124
 
@@ -215,7 +279,7 @@ SERIAL WINDOWS   vacías=2  marcadores=14  con dato real=110
 | Importadas | 186 |
 | Rechazadas | 1 (la fila 25) |
 | Marcadas `requiere_revision` | 83, con 98 motivos |
-| Empleados creados | 110 |
+| Empleados creados | 113 (3 sin equipo a su nombre) |
 | Movimientos `Alta` | 186, todos de `sistema@bbl.local` |
 | Filas del reporte | 104 (incluye los 6 motivos de la rechazada) |
 
