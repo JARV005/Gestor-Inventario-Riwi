@@ -3,8 +3,7 @@ import {
   Device, 
   Employee, 
   Hub, 
-  LogisticsTicket, 
-  CatalogItem 
+  LogisticsTicket
 } from './types';
 import { 
   INITIAL_DEVICES, 
@@ -19,8 +18,6 @@ import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
 import { LogisticsHubsView } from './components/LogisticsHubsView';
 import { EmployeesView } from './components/EmployeesView';
-import { ProcurementCatalogView } from './components/ProcurementCatalogView';
-import { LicensesMdmView } from './components/LicensesMdmView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
 
@@ -57,41 +54,6 @@ export function App() {
 
   const handleAddLogisticsTicket = (ticket: LogisticsTicket) => {
     setLogisticsTickets((prev) => [ticket, ...prev]);
-  };
-
-  const handleCatalogOrderSuccess = (item: CatalogItem, mode: 'buy' | 'lease') => {
-    const newDev: Device = {
-      id: `dev-${Date.now().toString().slice(-4)}`,
-      assetTag: `FP-CAT-${Math.floor(1000 + Math.random() * 9000)}`,
-      name: item.name,
-      category: item.category,
-      brand: item.brand,
-      model: 'Model 2026',
-      serialNumber: `SN-${Math.floor(100000 + Math.random() * 900000)}`,
-      status: 'Available',
-      condition: 'Brand New',
-      location: 'CDMX Hub (México)',
-      department: 'Engineering',
-      assignedTo: null,
-      assignedDate: null,
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      warrantyExpiry: '2028-12-31',
-      costUSD: item.priceUSD,
-      specs: {
-        cpu: item.specs,
-        ram: 'Standard Enterprise',
-        storage: 'Enterprise SSD',
-        os: item.category === 'Laptop' ? 'macOS / Windows Pro' : 'N/A',
-      },
-      mdmEnrolled: true,
-      mdmProvider: 'Jamf Pro Enterprise',
-      encrypted: true,
-      healthScore: 100,
-      batteryHealth: 100,
-      imageUrl: item.imageUrl,
-    };
-
-    setDevices((prev) => [newDev, ...prev]);
   };
 
   // Navigate to Handover Document view with pre-selected device
@@ -184,18 +146,6 @@ export function App() {
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
               onOpenOffboardingModal={(emp) => setIsOnboardingModalOpen(true)}
               onAddEmployee={handleAddEmployee}
-            />
-          )}
-
-          {activeTab === 'catalog' && (
-            <ProcurementCatalogView
-              onOrderSuccess={handleCatalogOrderSuccess}
-            />
-          )}
-
-          {activeTab === 'licenses' && (
-            <LicensesMdmView
-              devices={devices}
             />
           )}
 

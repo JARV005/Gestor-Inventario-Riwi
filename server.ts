@@ -155,55 +155,6 @@ El documento debe ser completo, incluir cláusulas legales estándar de custodia
   }
 });
 
-// AI Kit Recommendation Engine API
-app.post("/api/gemini/recommend-kit", async (req, res) => {
-  try {
-    const { role, department, seniority, budgetLevel } = req.body;
-    const ai = getGeminiClient();
-
-    if (!ai) {
-      return res.json({
-        recommendation: {
-          laptop: "MacBook Pro 14\" M3 (16GB RAM, 512GB SSD)",
-          monitor: "Dell UltraSharp 27\" 4K USB-C Hub Monitor",
-          accessories: ["Logitech MX Master 3S Mouse", "Logitech MX Keys Keyboard", "Jabra Evolve2 65 Headset"],
-          reasoning: "Configuración equilibrada de alta productividad recomendada para el puesto.",
-        },
-      });
-    }
-
-    const prompt = `
-Recomienda el Kit de Hardware de TI ideal para un nuevo empleado con el siguiente perfil:
-- Rol: ${role}
-- Departamento: ${department}
-- Seniority: ${seniority}
-- Nivel de Presupuesto: ${budgetLevel}
-
-Devuelve la respuesta ÚNICAMENTE en formato JSON válido con las siguientes claves:
-{
-  "laptop": "Modelo sugerido de laptop con procesador, RAM y almacenamiento",
-  "monitor": "Modelo sugerido de monitor",
-  "accessories": ["Accesorio 1", "Accesorio 2", "Accesorio 3"],
-  "reasoning": "Breve explicación de 2 frases en español sobre por qué este kit se adapta a sus tareas diarias"
-}
-`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-      },
-    });
-
-    const parsed = JSON.parse(response.text || "{}");
-    res.json({ recommendation: parsed });
-  } catch (error: any) {
-    console.error("Error recommending kit:", error);
-    res.status(500).json({ error: "Error al generar recomendación de kit." });
-  }
-});
-
 async function startServer() {
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
