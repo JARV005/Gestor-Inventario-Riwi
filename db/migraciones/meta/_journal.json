@@ -29,6 +29,27 @@
       "when": 1785940935542,
       "tag": "0003_retirar_motivo_singular",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1785948567996,
+      "tag": "0004_motivos_importaciones_y_menciones",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1785948590823,
+      "tag": "0005_retirar_motivos_array",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1785948597170,
+      "tag": "0006_motivos_referenciales",
+      "breakpoints": true
     }
   ]
 }

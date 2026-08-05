@@ -20,10 +20,12 @@ import {
   date,
   index,
   inet,
+  integer,
   jsonb,
   numeric,
   pgEnum,
   pgTable,
+  primaryKey,
   text,
   uniqueIndex,
   timestamp,
@@ -180,6 +182,62 @@ export const empleados = pgTable(
 );
 
 /**
+ * Catálogo de códigos de `equipos_motivos_revision`.
+ *
+ * Es una tabla y no un CHECK con lista literal porque los códigos crecen: la
+ * etapa 2 ya añadió uno que no estaba previsto. Con CHECK, cada código nuevo
+ * costaría una migración; con tabla, una línea en `db/motivos.ts` y `npm run
+ * seed`, que es de donde se siembra.
+ *
+ * `recomendacion` llegará en la etapa 6, cuando la bandeja tenga interfaz.
+ * Hoy vive solo en `db/motivos.ts`, que es lo que alimenta el CSV.
+ */
+export const motivosRevision = pgTable('motivos_revision', {
+  codigo: text('codigo').primaryKey(),
+  descripcion: text('descripcion').notNull(),
+  created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+/**
+ * Una corrida del importador.
+ *
+ * Existe porque la reconciliación «187 leídas = 186 insertadas + 1 rechazada»
+ * la observa el importador y se evapora cuando termina. Sin esta tabla, dentro
+ * de tres meses nadie puede responder cuántas filas tenía el archivo sin
+ * reabrir el Excel.
+ *
+ * `hash_sha256` es lo que delata que alguien reimportó una versión distinta
+ * del archivo con el mismo nombre.
+ */
+export const importaciones = pgTable(
+  'importaciones',
+  {
+    ...columnasBase,
+    archivo: text('archivo').notNull(),
+    hash_sha256: text('hash_sha256').notNull(),
+    fecha: timestamp('fecha', { withTimezone: true }).notNull().defaultNow(),
+    usuario_app_id: uuid('usuario_app_id')
+      .notNull()
+      .references(() => usuariosApp.id, { onDelete: 'restrict' }),
+    filas_leidas: integer('filas_leidas').notNull(),
+    filas_insertadas: integer('filas_insertadas').notNull(),
+    filas_rechazadas: integer('filas_rechazadas').notNull(),
+    filas_marcadas: integer('filas_marcadas').notNull(),
+  },
+  () => [
+    // La aritmética de la reconciliación cabe en una sola fila, así que puede
+    // ser un CHECK de verdad y no una comprobación que alguien tenga que
+    // acordarse de correr.
+    check(
+      'importaciones_cuadran',
+      sql`filas_leidas = filas_insertadas + filas_rechazadas`,
+    ),
+    check('importaciones_marcadas_caben', sql`filas_marcadas <= filas_insertadas`),
+  ],
+);
+
+/**
  * Tabla única para portátiles y periféricos, discriminada por `categoria`.
  *
  * `serial` y `etiqueta` NO llevan UNIQUE simple. Un UNIQUE a secas hace
@@ -217,6 +275,22 @@ export const equipos = pgTable(
     condicion: condicionEquipo('condicion'),
     sede_id: uuid('sede_id').references(() => sedes.id, { onDelete: 'restrict' }),
     empleado_id: uuid('empleado_id').references(() => empleados.id, { onDelete: 'restrict' }),
+    /**
+     * «Esta fila menciona a esta persona, pero el equipo no está asignado a
+     * ella». Ocurre cuando el origen trae responsable con un estado distinto de
+     * `Asignado`: el invariante prohíbe el vínculo real, pero el nombre es un
+     * dato y ahora que los empleados existen hay una FK donde ponerlo.
+     *
+     * Sustituye a dejar el nombre suelto en `notas`, que obligaba a quien
+     * resolviera la fila a releerlo y teclearlo sin equivocarse.
+     */
+    empleado_mencionado_id: uuid('empleado_mencionado_id').references(() => empleados.id, {
+      onDelete: 'restrict',
+    }),
+    /** Corrida del importador de la que vino. NULL = creado a mano. */
+    importacion_id: uuid('importacion_id').references(() => importaciones.id, {
+      onDelete: 'restrict',
+    }),
     sesion_usuario: text('sesion_usuario'),
     fecha_compra: date('fecha_compra'),
     garantia_vence: date('garantia_vence'),
@@ -224,24 +298,15 @@ export const equipos = pgTable(
     // Excel no trae ni un solo valor cargado; el campo sí se conserva.
     costo: numeric('costo', { precision: 14, scale: 2 }),
     notas: text('notas'),
-    requiere_revision: boolean('requiere_revision').notNull().default(false),
     /**
-     * Plural y con códigos fijos de `db/motivos.ts`, no frases.
+     * Marca de la bandeja de limpieza. Los motivos están en
+     * `equipos_motivos_revision`; la equivalencia entre esta bandera y la
+     * existencia de motivos la impone un CONSTRAINT TRIGGER deferido.
      *
-     * Las 126 filas del Excel producen 60 marcadas con 84 motivos entre todas:
-     * hay filas que fallan por varias razones a la vez y un TEXT solo guarda
-     * una. Y con 12 motivos repartidos en 60 filas, una bandeja de texto libre
-     * no se trabaja: nadie resuelve 60 casos revueltos, pero sí resuelve "los
-     * 37 de licencia" de una sentada.
-     *
-     * NOT NULL con default `{}` para que el estado "sin motivos" sea siempre el
-     * array vacío y nunca NULL. Así el CHECK de abajo es una comparación
-     * directa y no tiene que contemplar tres estados.
+     * Ojo al tocarla: es la condición de los índices únicos parciales de
+     * `serial` y `etiqueta`.
      */
-    motivos_revision: text('motivos_revision')
-      .array()
-      .notNull()
-      .default(sql`'{}'::text[]`),
+    requiere_revision: boolean('requiere_revision').notNull().default(false),
   },
   (t) => [
     // Invariante del §2. Es una equivalencia, no una implicación: un equipo
@@ -256,18 +321,7 @@ export const equipos = pgTable(
       'equipos_asignado_implica_empleado',
       sql`(estado = 'Asignado') = (empleado_id IS NOT NULL)`,
     ),
-    // La marca y su explicación son el mismo hecho: una fila marcada sin
-    // motivos es un caso que nadie podrá resolver porque nadie sabe qué tiene
-    // mal, y unos motivos sin marca no aparecen en la bandeja. Equivalencia,
-    // igual que el CHECK de arriba.
-    //
-    // cardinality() y no array_length(): array_length de un array vacío
-    // devuelve NULL, no 0, y eso volvería el CHECK indefinido justo en el caso
-    // que más importa — que es el normal, el de las filas limpias.
-    check(
-      'equipos_revision_con_motivos',
-      sql`requiere_revision = (cardinality(motivos_revision) > 0)`,
-    ),
+    index('idx_equipos_importacion').on(t.importacion_id),
     // Unicidad de serial y etiqueta, pero solo entre las filas ya limpias.
     //
     // El predicado hace dos trabajos:
@@ -295,6 +349,43 @@ export const equipos = pgTable(
     index('idx_equipos_revision')
       .on(t.id)
       .where(sql`requiere_revision`),
+  ],
+);
+
+/**
+ * Motivos por los que un equipo está marcado. Tabla puente y no `text[]`.
+ *
+ * Un array no tiene integridad referencial: `ARRAY['SIN_SERAIL']` con la errata
+ * entraba sin protestar y esa fila desaparecía de su bloque en la bandeja sin
+ * que nadie se enterase. Mismo razonamiento que `actas.equipos_ids`, pero al
+ * revés — allí el array es correcto porque un acta congela su contenido; aquí
+ * los motivos se resuelven y necesitan un catálogo vivo.
+ *
+ * La PK compuesta hace imposible el motivo duplicado sin depender de que el
+ * importador se acuerde de comprobarlo.
+ *
+ * La equivalencia con `equipos.requiere_revision` la impone un CONSTRAINT
+ * TRIGGER deferido, en `0006_motivos_referenciales.sql`. No cabe en un CHECK
+ * porque cruza dos tablas, y no puede quedarse en un test porque
+ * `requiere_revision` es la condición de los índices únicos parciales de
+ * `serial` y `etiqueta`: desincronizarla no pierde una entrada en la bandeja,
+ * pierde en silencio la garantía de unicidad.
+ */
+export const equiposMotivosRevision = pgTable(
+  'equipos_motivos_revision',
+  {
+    equipo_id: uuid('equipo_id')
+      .notNull()
+      .references(() => equipos.id, { onDelete: 'cascade' }),
+    motivo_codigo: text('motivo_codigo')
+      .notNull()
+      .references(() => motivosRevision.codigo, { onDelete: 'restrict' }),
+    created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.equipo_id, t.motivo_codigo] }),
+    // La bandeja se lee por bloques: "dame los 37 de LICENCIA_OK".
+    index('idx_motivos_por_codigo').on(t.motivo_codigo),
   ],
 );
 
