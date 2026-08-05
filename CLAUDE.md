@@ -43,13 +43,25 @@ Ahora gana `docs/decisiones-01.md`
   UNIQUE CONSTRAINT simple como si fuera un índice parcial: estaba a la
   vista en la salida. El riesgo no es el descuido, es buscar una
   confirmación que ya se espera encontrar.
-- `db/verificar.sql` es la red de seguridad del proyecto. Todo invariante
-  nuevo entra ahí. Ninguna etapa se cierra sin que corra en verde.
+- Los dos verificadores son la red de seguridad del proyecto. Todo
+  invariante nuevo entra en uno de ellos, y ninguna etapa se cierra sin que
+  los dos corran en verde:
+  `db/verificar-esquema.sql` comprueba que las reglas están puestas, con
+  filas sintéticas, y **debe pasar en una BD vacía**.
+  `db/verificar-datos.sql` comprueba que lo cargado las cumple, y no.
+  Si un caso del primero necesita datos dentro, está mal escrito.
 - Un test que solo cubre el camino que ya funciona no es evidencia. Cada
   invariante se prueba por sus dos lados: que acepte lo que debe aceptar
   y que rechace lo que debe rechazar.
 - Antes de dar por cerrada una etapa, pregúntate qué prueba la habría
   dejado en rojo si el trabajo estuviera mal. Si no existe, escríbela.
+- Una exploración de datos se diseña para encontrar dónde están mal, no
+  para confirmar que están bien. Ha fallado dos veces por lo mismo: un
+  UNIQUE CONSTRAINT simple leído como índice parcial, y una búsqueda de
+  valores no-persona que devolvió 1 de 3. En ambos casos la evidencia
+  estaba a la vista.
+- Ningún resumen de datos se da por bueno sin el conteo que lo respalda.
+  Si una afirmación no viene con su SELECT, es una hipótesis.
 
 ## Eficiencia
 

@@ -101,18 +101,25 @@ Esa restricción es permanente, no de la fase de exploración.
 
 ## Cerrar un caso de la bandeja
 
-Bajar `requiere_revision` **no basta**: hay que vaciar también
-`motivos_revision`. El CHECK `equipos_revision_con_motivos` rechaza cualquier
-fila donde la marca y los motivos no digan lo mismo.
+Los motivos viven en `equipos_motivos_revision`, no en una columna. Cerrar un
+caso son **dos** operaciones, y las dos van en la misma transacción:
 
 ```sql
-UPDATE equipos
-   SET requiere_revision = false, motivos_revision = ARRAY[]::text[]
- WHERE id = '...';
+BEGIN;
+  DELETE FROM equipos_motivos_revision WHERE equipo_id = '...';
+  UPDATE equipos SET requiere_revision = false WHERE id = '...';
+COMMIT;
 ```
 
-Para cerrar solo uno de varios motivos, quitar ese elemento del array y dejar
-`requiere_revision = true` mientras queden otros.
+Para cerrar solo uno de varios motivos, borrar esa fila y dejar
+`requiere_revision = true` mientras queden otras.
+
+El orden dentro de la transacción da igual: un CONSTRAINT TRIGGER deferido
+comprueba la equivalencia en el `COMMIT`, no sentencia a sentencia. Lo que no
+se puede es hacer solo una de las dos —la transacción entera se rechaza—, y con
+razón: `requiere_revision` es el predicado de los índices únicos parciales de
+`serial` y `etiqueta`, así que desincronizarla no pierde una entrada en la
+bandeja, deja pasar un serial duplicado.
 
 Ojo con `SERIAL_DUPLICADO` y `SIN_ETIQUETA`: al desmarcar, la fila entra en los
 índices únicos parciales y la BD comprueba la unicidad **en ese momento**. Si
@@ -144,9 +151,44 @@ recomendación, que son las dos columnas que lee quien limpia.
 ## Verificar después de importar
 
 ```bash
-npm run db:verificar
+npm run db:verificar          # corre los dos
+npm run db:verificar-esquema  # 27 casos: que las reglas están puestas
+npm run db:verificar-datos    # 32 comprobaciones: que lo cargado las cumple
 ```
 
-22 casos, y ninguna etapa se cierra sin que salgan todos en verde. Cubre los
-índices únicos parciales, el invariante de estado, el de marca-y-motivos, y las
-reglas de append-only.
+Son dos ficheros porque son dos cosas distintas, y confundirlas ya costó un
+sesgo real:
+
+- **`verificar-esquema.sql`** inserta filas sintéticas y hace ROLLBACK. **Pasa
+  en una BD vacía**, y eso es su prueba de que no depende de los datos. Si un
+  caso de ahí necesita inventario cargado, está mal escrito.
+- **`verificar-datos.sql`** solo lee las 186 filas reales. **No pasa en una BD
+  vacía** — bueno, pasa, pero vacuamente: todas sus cuentas dan cero. Imprime al
+  final el recuento de filas para que se note.
+
+El primero comprueba que la BD sabe rechazar un serial duplicado. El segundo,
+que ningún equipo cargado tiene un motivo que mienta sobre él — que
+`SIN_SERIAL` esté solo donde no hay serial, que todo equipo sin sede explique
+por qué, que cada equipo tenga exactamente un `Alta`. Ninguna constraint puede
+ver eso: una constraint sabe que un motivo existe, no que diga la verdad.
+
+Ninguna etapa se cierra sin los dos en verde.
+
+## Reconciliación
+
+El importador comprueba, **antes del commit**, que las filas leídas cuadran con
+las insertadas más las rechazadas, y que la BD acabó teniendo exactamente lo que
+él dijo que iba a meter. Si no cuadra, lanza y no entra nada.
+
+Esa comprobación no puede vivir en la BD: Postgres no observa cuántas filas
+tenía el Excel. Pero el resultado sí se persiste, en `importaciones`:
+
+```sql
+SELECT archivo, hash_sha256, fecha,
+       filas_leidas, filas_insertadas, filas_rechazadas, filas_marcadas
+FROM importaciones ORDER BY fecha DESC;
+```
+
+Y `equipos.importacion_id` dice de qué corrida vino cada fila. El `hash_sha256`
+es lo que delata que alguien reimportó una versión distinta del archivo con el
+mismo nombre.

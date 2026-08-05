@@ -271,6 +271,87 @@ SERIAL WINDOWS   vacías=2  marcadores=14  con dato real=110
 
 ---
 
+---
+
+## D11. Tercera ronda de esquema: los motivos dejan de ser un array
+
+Salió de auditar `db/verificar.sql` y encontrarle el mismo sesgo que a la
+exploración de datos: sus 22 casos comprobaban **que las reglas estaban
+puestas**, ninguno **que lo de dentro las cumpliera**. Si se hubieran borrado 40
+equipos de la BD, seguía dando 22/22.
+
+### `equipos_motivos_revision`, tabla puente
+
+`motivos_revision text[]` no tenía integridad referencial: `ARRAY['SIN_SERAIL']`
+con la errata entraba sin protestar y esa fila desaparecía de su bloque en la
+bandeja sin que nadie se enterase. Todo el argumento de «códigos fijos y no
+frases» se caía ahí.
+
+Ahora hay catálogo (`motivos_revision`) y puente con PK compuesta. La PK hace
+imposible el motivo duplicado sin depender del `includes()` del importador.
+
+Catálogo y no CHECK con lista literal porque los códigos crecen —esta misma
+etapa añadió uno no previsto— y con CHECK cada uno costaría una migración.
+Se siembra desde `db/motivos.ts` en `npm run seed`.
+
+### La equivalencia marca ⟺ motivos pasa a CONSTRAINT TRIGGER deferido
+
+Esta es la parte fácil de perder del cambio. El CHECK de la 0002 era posible
+porque ambos lados vivían en la misma fila; al cruzar dos tablas, Postgres no lo
+admite.
+
+No podía degradarse a una comprobación de `verificar-datos.sql`, y el motivo no
+es la bandeja: **`requiere_revision` es el predicado de los índices únicos
+parciales de `serial` y `etiqueta`**. Desincronizarla no pierde una entrada en
+una lista de pendientes, deja pasar en silencio un serial duplicado. Una
+constraint de la que depende otra constraint no se protege con un test que corre
+cuando alguien se acuerda.
+
+Deferido porque el importador inserta el equipo antes que sus motivos: entre
+las dos sentencias, una fila marcada sin motivos es un estado legítimo e
+inevitable, y un trigger inmediato reventaría la carga normal.
+
+Consecuencia para los tests, que casi se cuela: un fichero que acaba en ROLLBACK
+nunca llega al COMMIT, así que los triggers deferidos **no dispararían** y sus
+casos pasarían en verde sin comprobar nada. `verificar-esquema.sql` los fuerza
+con `SET CONSTRAINTS ALL IMMEDIATE` dentro de cada bloque.
+
+### `importaciones` y `equipos.importacion_id`
+
+La reconciliación «187 leídas = 186 insertadas + 1 rechazada» la observa el
+importador y se evaporaba al terminar. Sin la tabla, dentro de tres meses nadie
+puede responder cuántas filas tenía el archivo sin reabrir el Excel.
+
+`hash_sha256` delata que se reimportó una versión distinta del archivo con el
+mismo nombre. La aritmética sí cabe en una fila, así que va como CHECK.
+
+La comprobación completa la hace el importador antes del commit, porque la BD no
+observa el Excel: contrasta lo que dijo que iba a hacer contra lo que la BD acabó
+teniendo, y si no cuadra lanza y deshace la transacción entera.
+
+### `equipos.empleado_mencionado_id`
+
+«Esta fila menciona a esta persona pero el equipo no está asignado a ella».
+Sustituye a dejar el nombre suelto en `notas`, que obligaba a quien resolviera la
+fila a releerlo y teclearlo sin equivocarse. Ahora que los 113 empleados existen,
+había una FK disponible y no usarla era la peor opción.
+
+### El verificador se parte en dos
+
+| Fichero | Qué comprueba | ¿Pasa en BD vacía? |
+|---|---|---|
+| `db/verificar-esquema.sql` | Que las reglas están puestas. Filas sintéticas, ROLLBACK | **Sí**, y es su prueba de que no depende de los datos |
+| `db/verificar-datos.sql` | Que las 186 filas cargadas son coherentes. Solo lee | **No** |
+
+27 casos el primero, 32 comprobaciones el segundo.
+
+Y se corrigió un caso que iba a envenenar la etapa 5: «traslados abiertos» era
+un `count(*) = 0` absoluto, verde solo mientras el inventario no tuviera ni un
+traslado. Ahora mide el delta contra los que hubiera al empezar. Un test que se
+pondrá rojo sin que nada esté mal enseña a ignorar los rojos.
+
+---
+
 ## Resultado de la carga
 
 | | |
@@ -281,6 +362,7 @@ SERIAL WINDOWS   vacías=2  marcadores=14  con dato real=110
 | Marcadas `requiere_revision` | 83, con 98 motivos |
 | Empleados creados | 113 (3 sin equipo a su nombre) |
 | Movimientos `Alta` | 186, todos de `sistema@bbl.local` |
+| Motivos en la tabla puente | 98 |
 | Filas del reporte | 104 (incluye los 6 motivos de la rechazada) |
 
 Desglose por motivo, medido sobre la BD:

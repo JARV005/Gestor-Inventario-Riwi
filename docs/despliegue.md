@@ -30,7 +30,9 @@ duplica nada ni pisa cambios.
 | `npm run db:down` | Lo para. **Conserva** los datos |
 | `npm run db:reset` | Lo para, **borra el volumen** y lo vuelve a levantar. Vacío |
 | `npm run db:psql` | Abre una sesión psql interactiva dentro del contenedor |
-| `npm run db:verificar` | Corre `db/verificar.sql`. Termina en ROLLBACK: no deja filas |
+| `npm run db:verificar` | Corre los dos verificadores |
+| `npm run db:verificar-esquema` | Que las reglas están puestas. Filas sintéticas y ROLLBACK: no deja nada. Pasa en BD vacía |
+| `npm run db:verificar-datos` | Que las filas cargadas son coherentes. Solo lee. **No** tiene sentido en BD vacía |
 | `npm run migrate` | Aplica las migraciones pendientes |
 | `npm run migrate:generate` | Genera una migración nueva a partir de `db/esquema.ts` |
 | `npm run seed` | Siembra sedes y usuario de sistema |

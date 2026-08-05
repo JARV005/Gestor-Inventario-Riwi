@@ -61,7 +61,7 @@ la marca, esa fila entra al índice y la unicidad se comprueba **en ese momento*
 Si el conflicto seguía ahí, la BD rechaza el cambio. La limpieza de la etapa 2
 no se puede cerrar en falso.
 
-`db/verificar.sql` cubre las dos direcciones: dos filas con `GH14W64` marcadas
+`db/verificar-esquema.sql` cubre las dos direcciones: dos filas con `GH14W64` marcadas
 entran; desmarcar la segunda sin resolver el duplicado rebota.
 
 ### 4. `movimientos` es append-only, con una excepción exacta
@@ -117,7 +117,7 @@ Usa `clock_timestamp()` y no `now()`. `now()` es `transaction_timestamp()`,
 congelado al abrir la transacción: con él, una fila insertada y luego modificada
 dentro de la misma transacción —el caso normal en las mutaciones del §4, que
 tocan `equipos` y `movimientos` juntas— conservaría el `updated_at` del INSERT.
-Se detectó porque la prueba del trigger fallaba en `db/verificar.sql`.
+Se detectó porque la prueba del trigger fallaba en el verificador.
 
 ### Orden de los triggers sobre `movimientos`
 
@@ -155,11 +155,24 @@ la etapa 1 no interpreta.
 
 ---
 
-## Qué queda pendiente y de qué etapa es
+## Qué queda pendiente
 
-| Pendiente | Etapa |
+Se llevó a `pendientes.md`, que es la lista viva. Lo que quedaba de la etapa 1 y
+sigue abierto: el invariante «`En tránsito` ⟺ traslado abierto» (etapa 5),
+las escrituras en `auditoria` (etapas 3 y 7) y `password_hash` con bcrypt
+(etapa 3).
+
+El cifrado AES-256-GCM de los dos campos `bytea` ya no está pendiente: lo
+implementó la etapa 2 en `db/cifrado.ts`.
+
+---
+
+## Cambios posteriores a este documento
+
+La etapa 2 tocó el esquema tres veces más. Está en `decisiones-02.md`:
+
+| Migración | Qué |
 |---|---|
-| El invariante «`En tránsito` ⟺ traslado abierto» (D1) cruza dos tablas: no cabe en un CHECK. Lo tiene que imponer la transacción | 5 |
-| Escrituras en `auditoria`: la tabla existe, nadie la llena todavía | 3 y 7 |
-| Cifrado AES-256-GCM de los dos campos `bytea`: las columnas están, la clave y las funciones no | 7 |
-| `usuarios_app.password_hash` con bcrypt cost 12 | 3 |
+| 0002 / 0003 | `condicion_equipo` gana `Usado`; `motivo_revision TEXT` → `motivos_revision TEXT[]` |
+| 0004 / 0005 | Los motivos pasan a catálogo + tabla puente; llegan `importaciones`, `equipos.importacion_id` y `equipos.empleado_mencionado_id`; se retira el array |
+| 0006 | La equivalencia marca ⟺ motivos pasa de CHECK a CONSTRAINT TRIGGER deferido, porque ya cruza dos tablas |
