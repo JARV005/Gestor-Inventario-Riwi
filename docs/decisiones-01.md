@@ -143,6 +143,20 @@ direcciones y nombres de empleados.
 
 ---
 
+## D7. Los dos roles se llaman `admin` y `tecnico`
+
+Este documento decía `admin/aux` en la tabla de abajo y el §2 del plan decía
+`ENUM('admin','tecnico')`. Gana el §2, que es donde el enum está definido y de
+donde salió la migración 0000.
+
+`aux` no vuelve a aparecer: un nombre no justifica una migración, y dos nombres
+para lo mismo sí garantizan que alguien escriba el equivocado.
+
+**En la interfaz el rol se muestra como «Auxiliar»**, que es lo que la gente
+entiende. `tecnico` es el valor interno del enum y no se enseña.
+
+---
+
 ## Orden actualizado
 
 | # | Etapa |
@@ -150,7 +164,7 @@ direcciones y nombres de empleados.
 | 0 | **Recorte de alcance + paleta RIWI** (solo frontend, sin BD) |
 | 1 | Infraestructura: Postgres, migraciones, semillas (incluye usuario sistema) |
 | 2 | Importador + reporte de rechazos |
-| 3 | Auth (admin/aux) + API núcleo |
+| 3 | Auth (admin/tecnico) + API núcleo |
 | 4a | Reescribir `types.ts` al contrato en español |
 | 4b | Conectar UI, borrar `mockData.ts` |
 | 5 | Movimientos y actas |

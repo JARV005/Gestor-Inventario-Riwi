@@ -21,6 +21,7 @@ import {
   index,
   inet,
   integer,
+  json,
   jsonb,
   numeric,
   pgEnum,
@@ -30,6 +31,7 @@ import {
   uniqueIndex,
   timestamp,
   uuid,
+  varchar,
 } from 'drizzle-orm/pg-core';
 
 /**
@@ -179,6 +181,29 @@ export const empleados = pgTable(
     activo: boolean('activo').notNull().default(true),
   },
   (t) => [index('idx_empleados_sede').on(t.sede_id)],
+);
+
+/**
+ * Store de sesiones de `connect-pg-simple`. §5.4: sesión en cookie con el
+ * estado en Postgres, nada de JWT en localStorage.
+ *
+ * Se declara aquí, y no se deja que connect-pg-simple la cree al arrancar,
+ * porque eso sería un cambio de esquema sin migración (regla 7). Declarada,
+ * sale en la 0007 como cualquier otra tabla y `drizzle-kit generate` no la ve
+ * como sobrante.
+ *
+ * Es la única tabla del esquema sin `id` UUID ni `created_at`/`updated_at`: su
+ * forma es un contrato de la librería, no una decisión nuestra. Los nombres en
+ * inglés y la tabla en singular vienen de ahí.
+ */
+export const session = pgTable(
+  'session',
+  {
+    sid: varchar('sid').primaryKey(),
+    sess: json('sess').notNull(),
+    expire: timestamp('expire', { precision: 6, mode: 'date' }).notNull(),
+  },
+  (t) => [index('IDX_session_expire').on(t.expire)],
 );
 
 /**

@@ -1,0 +1,27 @@
+/**
+ * Punto de entrada de los tests. `npm test`.
+ *
+ * Este fichero tiene UN SOLO import estático, y es a propósito.
+ *
+ * `db/cliente.ts` lee `DATABASE_URL` al cargarse y crea el pool ahí mismo. Los
+ * imports estáticos se evalúan antes que cualquier línea de código, así que si
+ * aquí hubiera un `import { db } from '../db/cliente.js'`, el pool apuntaría a
+ * la base de desarrollo antes de que diera tiempo a redirigirlo — y los tests,
+ * que crean y destruyen usuarios, la usarían.
+ *
+ * De ahí la forma rara: fijar la variable primero, importar después y en
+ * dinámico. La comprobación de `ayuda.ts` es la red por si esto se rompe.
+ */
+
+import 'dotenv/config';
+
+if (!process.env.DATABASE_URL_TEST) {
+  throw new Error('Falta DATABASE_URL_TEST en .env. Correr antes: npm run test:preparar');
+}
+process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
+
+// El límite por defecto son 10 intentos por cuarto de hora, y la batería hace
+// más logins que eso. El test que comprueba el rate limit fija el suyo propio.
+process.env.LOGIN_LIMITE ??= '1000';
+
+await import('./auth.test.js');
