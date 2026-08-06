@@ -55,6 +55,13 @@ Ahora gana `docs/decisiones-01.md`
 - Un test que solo cubre el camino que ya funciona no es evidencia. Cada
   invariante se prueba por sus dos lados: que acepte lo que debe aceptar
   y que rechace lo que debe rechazar.
+- Un exit code distinto de cero con todos los tests en verde es un fallo
+  real, no ruido del arnés. `node:test` cuenta el fallo de un hook como
+  `hookFailed` y lo deja fuera de `# fail`. Si `npm test` sale con 1, hay
+  algo roto aunque diga 48/48. Ocurrió: la limpieza de dos suites llevaba
+  rota desde la etapa 3, la base de tests acumulaba filas corrida a
+  corrida, y la corrida siguiente moría por un choque de UNIQUE — un
+  síntoma dos pasos por delante de la causa.
 - Antes de dar por cerrada una etapa, pregúntate qué prueba la habría
   dejado en rojo si el trabajo estuviera mal. Si no existe, escríbela.
 - Una exploración de datos se diseña para encontrar dónde están mal, no

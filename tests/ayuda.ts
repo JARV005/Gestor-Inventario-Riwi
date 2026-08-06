@@ -152,7 +152,31 @@ export function ambito(nombre: string) {
     prefijo,
     crearUsuario: (opciones: OpcionesUsuario & { sufijo: string }) =>
       crearUsuario({ ...opciones, sufijo: `${nombre}-${opciones.sufijo}` }),
+    /**
+     * Borra los usuarios de la suite, y antes lo que los referencia.
+     *
+     * `auditoria.usuario_app_id` es `ON DELETE RESTRICT`, así que en cuanto una
+     * suite lee una clave BIOS —que deja fila en `auditoria` por diseño— su
+     * usuario deja de poder borrarse. Este `DELETE` llevaba fallando desde la
+     * etapa 3 en las suites de cifrados y de roles, **sin que nadie lo viera**:
+     * node:test cuenta el fallo de un `after` como `hookFailed` y lo deja fuera
+     * del `# fail`, así que el resumen decía «48 pass, 0 fail» mientras `npm
+     * test` salía con código 1 y la base de tests acumulaba basura corrida a
+     * corrida. La corrida siguiente fallaba por el choque de UNIQUE, que es un
+     * síntoma dos pasos por delante de la causa.
+     *
+     * Se borra la auditoría de la suite y no toda: las filas son suyas, las
+     * escribió su usuario, y una limpieza que arrase la tabla entera taparía a
+     * la suite de al lado.
+     */
     limpiar: async () => {
+      await db.execute(
+        sql`DELETE FROM auditoria
+             WHERE auditoria.usuario_app_id IN (
+               SELECT usuarios_app.id FROM usuarios_app
+                WHERE usuarios_app.email LIKE ${`${prefijo}%`}
+             )`,
+      );
       await db.delete(usuariosApp).where(like(usuariosApp.email, `${prefijo}%`));
     },
   };
@@ -262,12 +286,75 @@ export async function crearEmpleado(nombre: string) {
   return fila.id;
 }
 
+/**
+ * Borra equipos **con sus movimientos**.
+ *
+ * Antes era un `DELETE FROM equipos` a secas, y bastaba: nada escribía en
+ * `movimientos`. Desde que `POST /api/equipos` escribe la fila y su `Alta` en
+ * la misma transacción, un equipo creado por un test ya no se puede borrar —la
+ * FK es `ON DELETE RESTRICT`— y `movimientos` no admite `DELETE` por trigger.
+ *
+ * Lo interesante es cómo se manifestó: los tests **seguían pasando**
+ * (`# pass 48, # fail 0`) y lo que fallaba era el `after` de tres suites, que
+ * node:test cuenta como `hookFailed` y no como test roto. El resumen decía cero
+ * fallos y `npm test` salía con código 1. Si el criterio hubiera sido leer el
+ * resumen, esto se cierra en verde con la limpieza rota.
+ *
+ * `session_replication_role = replica` desactiva triggers y FKs para esta
+ * sesión, y va con `SET LOCAL`: muere con la transacción. Es aceptable aquí
+ * porque `comprobarBaseDeTest()` ya garantizó que la base es la de tests.
+ */
 export async function borrarEquipos(ids: string[]): Promise<void> {
-  for (const id of ids) await db.delete(equipos).where(eq(equipos.id, id));
+  if (ids.length === 0) return;
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SET LOCAL session_replication_role = replica`);
+    for (const id of ids) {
+      await tx.execute(sql`DELETE FROM movimientos WHERE movimientos.equipo_id = ${id}`);
+      await tx.execute(sql`DELETE FROM equipos WHERE equipos.id = ${id}`);
+    }
+  });
 }
 
 export async function borrarEmpleados(ids: string[]): Promise<void> {
   for (const id of ids) await db.delete(empleados).where(eq(empleados.id, id));
+}
+
+/** La primera sede sembrada. Las altas necesitan una que exista de verdad. */
+export async function primeraSede(): Promise<string> {
+  const r = await db.execute<{ id: string }>(
+    sql`SELECT sedes.id FROM sedes ORDER BY sedes.nombre LIMIT 1`,
+  );
+  const id = r.rows[0]?.id;
+  if (!id) throw new Error('No hay sedes en la base de test. Correr: npm run test:preparar');
+  return id;
+}
+
+export async function contarEquiposConEtiqueta(etiqueta: string): Promise<number> {
+  const r = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM equipos WHERE equipos.etiqueta = ${etiqueta}`,
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/** Los movimientos de un equipo, del más antiguo al más nuevo. */
+export async function movimientosDe(
+  equipoId: string,
+): Promise<{ tipo: string; sede_destino_id: string | null; empleado_destino_id: string | null; usuario_app_id: string }[]> {
+  const r = await db.execute<{
+    tipo: string;
+    sede_destino_id: string | null;
+    empleado_destino_id: string | null;
+    usuario_app_id: string;
+  }>(
+    sql`SELECT movimientos.tipo,
+               movimientos.sede_destino_id,
+               movimientos.empleado_destino_id,
+               movimientos.usuario_app_id
+          FROM movimientos
+         WHERE movimientos.equipo_id = ${equipoId}
+         ORDER BY movimientos.fecha, movimientos.created_at`,
+  );
+  return r.rows;
 }
 
 export async function contarAuditoria(registroId: string, accion: string): Promise<number> {
