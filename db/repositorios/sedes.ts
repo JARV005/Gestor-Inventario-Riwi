@@ -67,7 +67,7 @@ export async function listarConConteos(bd: BD = db) {
 /** Equipos que no tienen sede. Son deuda del Excel y tienen que verse. */
 export async function equiposSinSede(bd: BD = db) {
   const [{ n }] = await bd.execute<{ n: number }>(
-    sql`SELECT count(*)::int AS n FROM equipos WHERE sede_id IS NULL`,
+    sql`SELECT count(*)::int AS n FROM equipos WHERE equipos.sede_id IS NULL`,
   ).then((r) => r.rows as { n: number }[]);
   return n;
 }

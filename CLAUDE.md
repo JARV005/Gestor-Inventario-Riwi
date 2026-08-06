@@ -75,12 +75,18 @@ Ahora gana `docs/decisiones-01.md`
   correlacionada). El último caso devolvía ceros plausibles sin error. En
   SQL crudo, calificar las tablas a mano y comprobar el SQL emitido, no el
   TypeScript.
-- La causa: Drizzle califica las columnas en `.where()` y **no** las
-  califica en la lista de SELECT. Por eso el patrón falla donde nadie mira:
-  una lista de SELECT sobre una sola tabla siempre parece correcta, y se
-  rompe al añadir un JOIN o una subconsulta correlacionada. En SQL crudo,
-  calificar a mano siempre, aunque hoy solo haya una tabla. Mejor aún:
-  usar los helpers tipados (`eq`, `isNotNull`, …) en vez de SQL crudo.
+- La causa, comprobada con `.toSQL()` y no supuesta: drizzle califica la
+  lista de SELECT **solo cuando la consulta tiene un JOIN**. Con una sola
+  tabla emite la columna a secas, y eso normalmente da igual… salvo que el
+  fragmento crudo haya abierto una subconsulta, porque drizzle no ve ese
+  ámbito y el nombre pelado resuelve contra la tabla de dentro:
+  `` sql`(SELECT count(*) FROM equipos WHERE equipos.sede_id = ${sedes.id})` ``
+  emite `... WHERE equipos.sede_id = "id"` — cero filas, sin error.
+  **Añadir un JOIN no es el disparador**: ahí drizzle sí recalifica, tanto
+  las columnas como los helpers. El disparador es la subconsulta
+  correlacionada. De ahí la regla: en SQL crudo calificar a mano siempre,
+  aunque hoy solo haya una tabla, y leer el SQL emitido. Mejor aún: usar
+  los helpers tipados (`eq`, `isNotNull`, …), que sí se recalifican solos.
 - Un conteo que la API devuelve se contrasta contra el mismo conteo hecho
   en SQL. Comparar la API consigo misma no prueba nada: un número puede ser
   correcto por accidente.

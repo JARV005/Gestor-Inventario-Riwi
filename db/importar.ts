@@ -665,8 +665,11 @@ async function main() {
     // transacción entera y no queda medio inventario dentro.
     const [contado] = await tx
       .select({
-        equipos: sql<number>`(SELECT count(*)::int FROM equipos WHERE importacion_id = ${corrida.id})`,
-        marcados: sql<number>`(SELECT count(*)::int FROM equipos WHERE importacion_id = ${corrida.id} AND requiere_revision)`,
+        equipos: sql<number>`(SELECT count(*)::int FROM equipos
+                               WHERE equipos.importacion_id = ${corrida.id})`,
+        marcados: sql<number>`(SELECT count(*)::int FROM equipos
+                                WHERE equipos.importacion_id = ${corrida.id}
+                                  AND equipos.requiere_revision)`,
         movimientos: sql<number>`(SELECT count(*)::int FROM movimientos m JOIN equipos e ON e.id = m.equipo_id WHERE e.importacion_id = ${corrida.id})`,
       })
       .from(importaciones)

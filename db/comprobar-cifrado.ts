@@ -36,7 +36,8 @@ export type ResultadoComprobacion =
  */
 export async function comprobarClaveDeCifrado(bd: BD = db): Promise<ResultadoComprobacion> {
   const conteo = await bd.execute<{ n: string }>(
-    sql`SELECT count(*)::text AS n FROM equipos WHERE bios_password_cifrado IS NOT NULL`,
+    sql`SELECT count(*)::text AS n FROM equipos
+        WHERE equipos.bios_password_cifrado IS NOT NULL`,
   );
   const filasCifradas = Number(conteo.rows[0]?.n ?? 0);
 
@@ -46,9 +47,9 @@ export async function comprobarClaveDeCifrado(bd: BD = db): Promise<ResultadoCom
   if (filasCifradas === 0) return { estado: 'sin-datos' };
 
   const muestra = await bd.execute<{ bios: Buffer }>(
-    sql`SELECT bios_password_cifrado AS bios FROM equipos
-        WHERE bios_password_cifrado IS NOT NULL
-        ORDER BY id LIMIT 1`,
+    sql`SELECT equipos.bios_password_cifrado AS bios FROM equipos
+        WHERE equipos.bios_password_cifrado IS NOT NULL
+        ORDER BY equipos.id LIMIT 1`,
   );
 
   try {
