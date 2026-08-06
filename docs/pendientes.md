@@ -25,7 +25,7 @@ movimientos `Alta`.
 
 ### El cuerpo del acta quedó en TODO(5)
 
-Sin IA (`decisiones-03.md` §D6), el acta pasa a plantilla fija. Construirla es
+Sin IA (`decisiones-03.md` §D12), el acta pasa a plantilla fija. Construirla es
 trabajo de la etapa 5; lo que la 4b dejó hecho es la mitad de lectura:
 `HandoverDocumentView` saca de la base los datos del colaborador (nombre,
 puesto, área, cédula, sede) y del equipo (modelo, etiqueta, serial, licencia,

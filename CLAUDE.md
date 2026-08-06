@@ -10,7 +10,7 @@ ni autenticación. El objetivo es construirle el backend por debajo y reusar la 
 `docs/plan-migracion-v1.md` — esquema de BD, endpoints, reglas del importador,
 requisitos de seguridad y el orden de las 7 etapas. Es la fuente de verdad.
 Si algo de este archivo contradice ese documento, gana ese documento.
-Ahora gana `docs/decisiones-01.md`
+Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
 
 ## Stack
 
@@ -18,7 +18,7 @@ Ahora gana `docs/decisiones-01.md`
 - Back: Express (`server.ts`), TypeScript, `tsx` en desarrollo
 - BD: PostgreSQL propio (no Supabase, no ORM impuesto — proponer antes de instalar)
 - IA: **ninguna**. Se eliminó entera en la etapa 4b (`docs/decisiones-03.md`
-  §D6). La aplicación no hace ninguna llamada a servicios externos: no añadir
+  §D12). La aplicación no hace ninguna llamada a servicios externos: no añadir
   una sin proponerlo antes.
 
 ## Reglas del proyecto

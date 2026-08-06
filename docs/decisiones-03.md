@@ -7,7 +7,7 @@ que se decidió entonces. Este es el que dice que ya no vale.
 
 ---
 
-## D6. El proyecto no lleva IA
+## D12. El proyecto no lleva IA
 
 **No va a haber copiloto ni ningún asistente.** Se elimina todo lo relacionado.
 

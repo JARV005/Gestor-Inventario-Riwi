@@ -76,7 +76,7 @@ ella misma.
 Hasta la etapa 4b no era así. El copiloto mandaba datos del inventario a la API
 de Google (`generativelanguage.googleapis.com`) y eso obligaba a que la máquina
 tuviera salida a internet y a que alguien custodiara una clave de API. El módulo
-se eliminó entero — `docs/decisiones-03.md` §D6 — y con él la única salida.
+se eliminó entero — `docs/decisiones-03.md` §D12 — y con él la única salida.
 
 Lo que esto permite, y conviene aprovechar:
 

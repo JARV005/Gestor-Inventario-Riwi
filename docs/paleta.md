@@ -17,7 +17,7 @@ posteriores:
 `OnboardingModal` · `NewDeviceModal`
 
 *(`AiCopilotModal` estaba en esta lista y ya no existe: el copiloto se eliminó
-en la 4b, `decisiones-03.md` §D6. `LogisticsHubsView` lo sustituyó `SedesView`
+en la 4b, `decisiones-03.md` §D12. `LogisticsHubsView` lo sustituyó `SedesView`
 en la 4a.)*
 
 **La app se ve despareja a propósito.** No es un defecto pendiente de arreglar:
