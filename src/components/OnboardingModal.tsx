@@ -1,57 +1,55 @@
 import React, { useState } from 'react';
-import { Employee, Device, LogisticsTicket } from '../types';
+import type { Empleado, Equipo } from '../types';
 import { PackageCheck, Truck, CheckCircle2, ChevronRight, X, Sparkles, Building, UserCheck, ShieldCheck } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface OnboardingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  employees: Employee[];
-  devices: Device[];
-  onAddLogisticsTicket: (ticket: LogisticsTicket) => void;
+  empleados: Empleado[];
+  equipos: Equipo[];
 }
 
+/**
+ * TODO(5): sin conectar, y su salida cambió de naturaleza.
+ *
+ * Antes creaba un `LogisticsTicket` con transportadora y número de guía
+ * inventados. Según D1 lo que tiene que producir es un **movimiento**: de tipo
+ * `Asignación`, o `Traslado` si además cambia de sede. Eso escribe en `equipos`
+ * y `movimientos` en la misma transacción y no existe hasta la etapa 5.
+ *
+ * Hasta entonces el asistente recorre sus tres pasos y no persiste nada. El
+ * paso de transportadora y guía se queda porque esos campos SÍ existen en
+ * `movimientos` desde la 0000; lo que no hay es a dónde mandarlos.
+ */
 export const OnboardingModal: React.FC<OnboardingModalProps> = ({
   isOpen,
   onClose,
-  employees,
-  devices,
-  onAddLogisticsTicket,
+  empleados,
+  equipos,
 }) => {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [selectedEmpId, setSelectedEmpId] = useState(employees[0]?.id || '');
+  const [selectedEmpId, setSelectedEmpId] = useState(empleados[0]?.id || '');
   const [selectedLaptopId, setSelectedLaptopId] = useState(
-    devices.find((d) => d.category === 'Laptop' && d.status === 'Available')?.id || devices[0]?.id || ''
+    equipos.find((d) => d.categoria === 'Portátil' && d.estado === 'Disponible')?.id ||
+      equipos[0]?.id ||
+      '',
   );
   const [includeMonitor, setIncludeMonitor] = useState(true);
   const [includePeripherals, setIncludePeripherals] = useState(true);
-  const [courier, setCourier] = useState<LogisticsTicket['courier']>('DHL Express');
+  const [courier, setCourier] = useState('Servientrega');
 
   if (!isOpen) return null;
 
-  const selectedEmp = employees.find((e) => e.id === selectedEmpId) || employees[0];
-  const selectedLaptop = devices.find((d) => d.id === selectedLaptopId) || devices[0];
+  const selectedEmp = empleados.find((e) => e.id === selectedEmpId) ?? empleados[0];
+  const selectedLaptop = equipos.find((d) => d.id === selectedLaptopId) ?? equipos[0];
+
+  const nombreEquipo = (e: Equipo | undefined) =>
+    e?.nombre_equipo ?? e?.etiqueta ?? ([e?.marca, e?.modelo].filter(Boolean).join(' ') || 'equipo');
 
   const handleFinishOnboardingKit = () => {
-    const includedItems = [selectedLaptop?.name || 'MacBook Pro'];
-    if (includeMonitor) includedItems.push('Monitor Dell UltraSharp 27" 4K');
-    if (includePeripherals) includedItems.push('Kit Ergonómico (Logitech MX Master + Teclado)');
-
-    const newTicket: LogisticsTicket = {
-      id: `LOG-ONB-${Math.floor(1000 + Math.random() * 9000)}`,
-      type: 'Onboarding Ship',
-      status: 'In Transit',
-      employeeName: selectedEmp.name,
-      employeeAddress: `${selectedEmp.address}, ${selectedEmp.city}, ${selectedEmp.country}`,
-      deviceNames: includedItems,
-      courier,
-      trackingNumber: `DHL-MX-${Math.floor(10000000 + Math.random() * 90000000)}`,
-      estimatedDelivery: new Date(Date.now() + 2 * 86400000).toISOString().slice(0, 10),
-      createdDate: new Date().toISOString().slice(0, 10),
-      hubOrigin: `FirstPlug Hub ${selectedEmp.country}`,
-    };
-
-    onAddLogisticsTicket(newTicket);
+    // TODO(5): POST /api/equipos/:id/asignar — crea el movimiento y mueve el
+    // estado del equipo en la misma transacción.
     confetti({ particleCount: 70, spread: 80, origin: { y: 0.6 } });
     onClose();
   };
@@ -98,18 +96,18 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 onChange={(e) => setSelectedEmpId(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               >
-                {employees.map((e) => (
+                {empleados.map((e) => (
                   <option key={e.id} value={e.id}>
-                    {e.name} — {e.role} ({e.city}, {e.country})
+                    {e.nombre}{e.cargo ? ` — ${e.cargo}` : ''}
                   </option>
                 ))}
               </select>
             </div>
 
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
-              <div className="font-bold text-slate-900 text-sm">{selectedEmp?.name}</div>
-              <p className="text-slate-500">{selectedEmp?.role} • {selectedEmp?.department}</p>
-              <p className="text-blue-600 font-medium">Dirección de envío: {selectedEmp?.address}, {selectedEmp?.city}, {selectedEmp?.country}</p>
+              <div className="font-bold text-slate-900 text-sm">{selectedEmp?.nombre}</div>
+              <p className="text-slate-500">{selectedEmp?.cargo ?? '—'}{selectedEmp?.area ? ` • ${selectedEmp.area}` : ''}</p>
+              <p className="text-blue-600 font-medium">Dirección de envío: {selectedEmp?.direccion ?? 'sin dirección registrada'}</p>
             </div>
 
             <div className="flex justify-end pt-2">
@@ -134,9 +132,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
                 onChange={(e) => setSelectedLaptopId(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               >
-                {devices.filter(d => d.category === 'Laptop').map((d) => (
+                {equipos.filter((d) => d.categoria === 'Portátil').map((d) => (
                   <option key={d.id} value={d.id}>
-                    {d.name} ({d.assetTag} — Ubicación: {d.location})
+                    {nombreEquipo(d)}{d.etiqueta ? ` (${d.etiqueta})` : ''}
                   </option>
                 ))}
               </select>
@@ -208,12 +206,12 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
 
             <div className="bg-slate-50 p-4 rounded-xl border border-slate-200 space-y-2">
               <div className="font-bold text-slate-900 text-sm">Resumen del Kit de Onboarding</div>
-              <p className="text-blue-600 font-medium">Destinatario: {selectedEmp?.name}</p>
-              <p className="text-slate-600">Dirección: {selectedEmp?.address}, {selectedEmp?.city}</p>
+              <p className="text-blue-600 font-medium">Destinatario: {selectedEmp?.nombre}</p>
+              <p className="text-slate-600">Dirección: {selectedEmp?.direccion ?? 'sin dirección registrada'}</p>
               <div className="pt-2 border-t border-slate-200 text-slate-600">
                 <strong className="text-slate-900 block mb-1">Contenido de la Caja:</strong>
                 <ul className="list-disc pl-4 space-y-0.5 text-slate-500">
-                  <li>{selectedLaptop?.name} ({selectedLaptop?.serialNumber})</li>
+                  <li>{nombreEquipo(selectedLaptop)}{selectedLaptop?.serial ? ` (${selectedLaptop.serial})` : ''}</li>
                   {includeMonitor && <li>Monitor Dell UltraSharp 27" 4K</li>}
                   {includePeripherals && <li>Kit Ergonómico Logitech MX</li>}
                 </ul>

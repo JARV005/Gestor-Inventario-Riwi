@@ -13,14 +13,15 @@ import {
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  pendingLogisticsCount: number;
+  /** D1: equipos en estado 'En transito'. Ya no hay tickets de logistica. */
+  enTransitoCount: number;
   maintenanceCount: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   activeTab,
   setActiveTab,
-  pendingLogisticsCount,
+  enTransitoCount,
   maintenanceCount,
 }) => {
   const menuItems = [
@@ -44,9 +45,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     {
       id: 'logistics',
-      label: 'Logística y Hubs',
+      label: 'Sedes',
       icon: Truck,
-      badge: pendingLogisticsCount > 0 ? `${pendingLogisticsCount} activos` : null,
+      badge: enTransitoCount > 0 ? `${enTransitoCount} en tránsito` : null,
       badgeColor: 'bg-info text-ink border-transparent',
     },
     {

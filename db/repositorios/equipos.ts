@@ -20,7 +20,7 @@
  * un `.select()` sin argumentos. El comentario avisa; el test es lo que impide.
  */
 
-import { and, desc, eq, ilike, or, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 
 import { db, type BD } from '../cliente.js';
 import { descifrar } from '../cifrado.js';
@@ -68,6 +68,8 @@ export interface FiltrosEquipos {
   categoria?: string;
   q?: string;
   revision?: boolean;
+  /** Código de `motivos_revision`. Es para lo que existe la tabla puente. */
+  motivo?: string;
   pagina?: number;
   porPagina?: number;
 }
@@ -78,6 +80,14 @@ export async function listar(f: FiltrosEquipos = {}, bd: BD = db) {
   if (f.sede) condiciones.push(eq(equipos.sede_id, f.sede));
   if (f.categoria) condiciones.push(eq(equipos.categoria, f.categoria as never));
   if (f.revision !== undefined) condiciones.push(eq(equipos.requiere_revision, f.revision));
+  if (f.motivo) {
+    // EXISTS y no JOIN: un equipo con tres motivos aparecería tres veces, y el
+    // total de la paginación contaría filas en vez de equipos.
+    condiciones.push(
+      sql`EXISTS (SELECT 1 FROM ${equiposMotivosRevision} m
+                   WHERE m.equipo_id = ${equipos.id} AND m.motivo_codigo = ${f.motivo})`,
+    );
+  }
   if (f.q) {
     const patron = `%${f.q}%`;
     const busqueda = or(
@@ -107,7 +117,43 @@ export async function listar(f: FiltrosEquipos = {}, bd: BD = db) {
     .from(equipos)
     .where(donde);
 
-  return { filas, total, pagina, porPagina };
+  // Los motivos, en una segunda consulta y no con un JOIN, por lo mismo que
+  // arriba: el JOIN multiplicaría las filas de los equipos con varios motivos.
+  const ids = filas.map((f) => f.id);
+  const porEquipo = new Map<string, string[]>();
+  if (ids.length > 0) {
+    const motivos = await bd
+      .select({
+        equipo_id: equiposMotivosRevision.equipo_id,
+        codigo: equiposMotivosRevision.motivo_codigo,
+      })
+      .from(equiposMotivosRevision)
+      .where(inArray(equiposMotivosRevision.equipo_id, ids));
+    for (const m of motivos) {
+      const lista = porEquipo.get(m.equipo_id) ?? [];
+      lista.push(m.codigo);
+      porEquipo.set(m.equipo_id, lista);
+    }
+  }
+
+  return {
+    filas: filas.map((f) => ({ ...f, motivos_revision: porEquipo.get(f.id) ?? [] })),
+    total,
+    pagina,
+    porPagina,
+  };
+}
+
+/** Cuántos equipos hay por cada código. Alimenta la bandeja de revisión. */
+export async function conteoPorMotivo(bd: BD = db) {
+  return bd
+    .select({
+      codigo: equiposMotivosRevision.motivo_codigo,
+      equipos: sql<number>`count(*)::int`,
+    })
+    .from(equiposMotivosRevision)
+    .groupBy(equiposMotivosRevision.motivo_codigo)
+    .orderBy(sql`count(*) DESC`, equiposMotivosRevision.motivo_codigo);
 }
 
 export async function porId(id: string, bd: BD = db) {

@@ -1,5 +1,6 @@
 import React from 'react';
-import { Device, Employee, Hub, LogisticsTicket } from '../types';
+import type { Empleado, Equipo, Sede } from '../types';
+import { PendienteEtapa6 } from './PendienteEtapa6';
 import { 
   Laptop, 
   DollarSign, 
@@ -31,10 +32,9 @@ import {
 } from 'recharts';
 
 interface DashboardViewProps {
-  devices: Device[];
-  employees: Employee[];
-  hubs: Hub[];
-  logisticsTickets: LogisticsTicket[];
+  equipos: Equipo[];
+  empleados: Empleado[];
+  sedes: Sede[];
   onOpenNewDeviceModal: () => void;
   onOpenOnboardingModal: () => void;
   onOpenAiCopilot: () => void;
@@ -44,47 +44,33 @@ interface DashboardViewProps {
 const COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#8b5cf6'];
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
-  devices,
-  employees,
-  hubs,
-  logisticsTickets,
+  equipos,
+  empleados,
+  sedes,
   onOpenNewDeviceModal,
   onOpenOnboardingModal,
   onOpenAiCopilot,
   setActiveTab,
 }) => {
-  // Calculations
-  const totalValueUSD = devices.reduce((sum, d) => sum + d.costUSD, 0);
-  const totalCount = devices.length;
-  const inUseCount = devices.filter((d) => d.status === 'In Use').length;
-  const availableInHubs = devices.filter((d) => d.status === 'Available').length;
-  const inTransitCount = devices.filter((d) => d.status === 'In Transit').length;
-  const inMaintenanceCount = devices.filter((d) => d.status === 'In Maintenance').length;
-  const pendingReturnCount = devices.filter((d) => d.status === 'Pending Return').length;
+  // TODO(6): sustituir estas cuentas por los 7 widgets de D3.
+  const totalCount = equipos.length;
+  const inUseCount = equipos.filter((d) => d.estado === 'Asignado').length;
+  const availableInHubs = equipos.filter((d) => d.estado === 'Disponible').length;
+  const inTransitCount = equipos.filter((d) => d.estado === 'En tránsito').length;
+  const inMaintenanceCount = equipos.filter((d) => d.estado === 'En mantenimiento').length;
+  const pendingReturnCount = equipos.filter((d) => d.estado === 'Reservado').length;
 
-  const mdmEnrolledCount = devices.filter((d) => d.mdmEnrolled).length;
-  const mdmPercentage = Math.round((mdmEnrolledCount / (totalCount || 1)) * 100);
 
   // Category chart data
   const categoryMap: Record<string, number> = {};
-  devices.forEach((d) => {
-    categoryMap[d.category] = (categoryMap[d.category] || 0) + 1;
+  equipos.forEach((d) => {
+    categoryMap[d.categoria] = (categoryMap[d.categoria] || 0) + 1;
   });
   const categoryChartData = Object.keys(categoryMap).map((cat) => ({
     name: cat,
     value: categoryMap[cat],
   }));
 
-  // Department cost data
-  const deptCostMap: Record<string, number> = {};
-  devices.forEach((d) => {
-    const dept = d.department || 'General';
-    deptCostMap[dept] = (deptCostMap[dept] || 0) + d.costUSD;
-  });
-  const deptChartData = Object.keys(deptCostMap).map((dept) => ({
-    department: dept,
-    costUSD: deptCostMap[dept],
-  }));
 
   // Status breakdown data
   const statusChartData = [
@@ -92,7 +78,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     { name: 'Disponible Hub', value: availableInHubs, color: '#06b6d4' },
     { name: 'En Tránsito', value: inTransitCount, color: '#6366f1' },
     { name: 'Mantenimiento', value: inMaintenanceCount, color: '#f59e0b' },
-    { name: 'Por Retirar', value: pendingReturnCount, color: '#ec4899' },
+    { name: 'Reservado', value: pendingReturnCount, color: '#ec4899' },
   ].filter((item) => item.value > 0);
 
   return (
@@ -110,7 +96,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Gestión de Inventario TI Global
             </h1>
             <p className="text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-              Monitorea activos de hardware, envíos de onboarding/offboarding, licencias MDM y almacenamiento en hubs de LatAm, EE.UU. y Europa.
+              Monitorea activos de hardware, envíos de onboarding/offboarding, licencias MDM y almacenamiento en sedes de LatAm, EE.UU. y Europa.
             </p>
           </div>
 
@@ -145,13 +131,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">
-              ${totalValueUSD.toLocaleString('en-US')} <span className="text-xs font-normal text-slate-500">USD</span>
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
-              <TrendingUp className="w-3.5 h-3.5" />
-              <span>{totalCount} equipos valorados y en regla</span>
-            </div>
+            <PendienteEtapa6
+              clase="pendiente"
+              motivo="El Excel no trae ni un costo cargado. El campo existe en la BD; el widget vuelve cuando haya datos (D3)."
+            />
           </div>
         </div>
 
@@ -183,31 +166,28 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="mt-3">
             <div className="text-2xl font-bold text-slate-900">
-              {logisticsTickets.length} <span className="text-xs font-normal text-slate-500">Envíos DHL/FedEx</span>
+              {inTransitCount} <span className="text-xs font-normal text-slate-500">en tránsito</span>
             </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-indigo-700 font-medium">
-              <Clock className="w-3.5 h-3.5 text-indigo-600" />
-              <span>{inTransitCount} en tránsito hacia destino</span>
-            </div>
+            <PendienteEtapa6
+              clase="pendiente"
+              motivo="El detalle del traslado —transportadora, guía, origen y destino— es un movimiento y llega en la etapa 5 (D1)."
+            />
           </div>
         </div>
 
         {/* Card 4: Seguridad & MDM Enrolled */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm transition-all hover:shadow-md">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Cumplimiento MDM</span>
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Cumplimiento</span>
             <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
               <ShieldCheck className="w-4 h-4" />
             </div>
           </div>
           <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">
-              {mdmPercentage}% <span className="text-xs font-normal text-slate-500">Inscriptos</span>
-            </div>
-            <div className="mt-1 flex items-center gap-1.5 text-[11px] text-teal-700 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5 text-teal-600" />
-              <span>Jamf, Kandji & Intune Activos</span>
-            </div>
+            <PendienteEtapa6
+              clase="retirado"
+              motivo="No hay MDM. El widget graficaba un dato inventado, y eso es peor que no tener widget (D3). No vuelve."
+            />
           </div>
         </div>
 
@@ -219,32 +199,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         {/* Left Column: Recharts Visualization (Spans 2 cols) */}
         <div className="lg:col-span-2 space-y-6">
           
-          {/* Chart 1: Asset Value by Department */}
+          {/* Antes: inversión en hardware por departamento, en USD.
+              Perdió las dos mitades a la vez — `costo` está vacío en las 186
+              filas y `department` pasó a `empleados.area` (D3). */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900">Inversión en Hardware por Departamento</h3>
-                <p className="text-xs text-slate-500">Distribución del presupuesto de equipos acumulado en USD</p>
-              </div>
-              <span className="text-xs font-semibold text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-200">
-                Total ${totalValueUSD.toLocaleString('en-US')}
-              </span>
+            <div className="mb-3">
+              <h3 className="text-sm font-bold text-slate-900">Inversión en hardware por área</h3>
+              <p className="text-xs text-slate-500">Distribución del costo de los equipos</p>
             </div>
-
-            <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={deptChartData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                  <XAxis dataKey="department" stroke="#64748b" fontSize={12} tickLine={false} />
-                  <YAxis stroke="#64748b" fontSize={11} tickLine={false} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#ffffff', borderColor: '#cbd5e1', borderRadius: '8px', color: '#0f172a', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} 
-                    formatter={(value: any) => [`$${Number(value).toLocaleString()} USD`, 'Costo Total']}
-                  />
-                  <Bar dataKey="costUSD" fill="#2563eb" radius={[6, 6, 0, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
+            <PendienteEtapa6
+              clase="pendiente"
+              motivo="Ninguna de las 186 filas del Excel trae costo. El campo existe en la BD y el gráfico vuelve cuando haya datos que graficar (D3)."
+            />
           </div>
 
           {/* Chart 2: Category & Status Breakdown (Side by Side inside left col) */}
@@ -353,42 +319,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             </div>
 
-            <div className="space-y-3">
-              {logisticsTickets.map((ticket) => (
-                <div 
-                  key={ticket.id}
-                  className="bg-slate-50 p-3.5 rounded-xl border border-slate-200 hover:bg-slate-100/80 transition-colors space-y-2"
-                >
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-slate-900 flex items-center gap-1.5">
-                      <span className={`w-2 h-2 rounded-full ${
-                        ticket.status === 'In Transit' ? 'bg-indigo-500 animate-pulse' :
-                        ticket.status === 'Delivered' ? 'bg-emerald-500' : 'bg-amber-500'
-                      }`} />
-                      {ticket.type}
-                    </span>
-                    <span className="text-[10px] text-slate-500 font-mono bg-white px-1.5 py-0.5 rounded border border-slate-200">
-                      {ticket.id}
-                    </span>
-                  </div>
-
-                  <div className="text-xs text-slate-700">
-                    <span className="font-semibold text-slate-900">{ticket.employeeName}</span>
-                    <p className="text-[11px] text-slate-500 truncate">{ticket.deviceNames.join(', ')}</p>
-                  </div>
-
-                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-slate-200">
-                    <span className="flex items-center gap-1 text-slate-700 font-medium">
-                      <MapPin className="w-3 h-3 text-blue-600" />
-                      {ticket.courier}
-                    </span>
-                    <span className="text-blue-700 font-semibold">
-                      Est. {ticket.estimatedDelivery}
-                    </span>
-                  </div>
-                </div>
-              ))}
-            </div>
+            {/* Antes: lista de envíos con transportadora, guía y fecha estimada,
+                toda inventada por el prototipo. */}
+            <PendienteEtapa6
+              clase="pendiente"
+              motivo="Un traslado en curso es un movimiento de tipo 'Traslado' sin fecha de confirmación (D1). La tabla ya tiene transportadora, guía y fecha estimada desde la migración 0000; los endpoints llegan en la etapa 5."
+            />
           </div>
 
           {/* Regional Hubs Overview */}
@@ -396,43 +332,24 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                 <Building className="w-4 h-4 text-emerald-600" />
-                Hubs y Almacenamiento
+                Ocupación por sede
               </h3>
-              <button 
+              <button
                 onClick={() => setActiveTab('logistics')}
                 className="text-xs text-blue-600 hover:underline font-semibold"
               >
-                Gestionar Hubs
+                Ver sedes
               </button>
             </div>
 
-            <div className="space-y-3">
-              {hubs.slice(0, 4).map((hub) => {
-                const percentage = Math.round((hub.currentItems / hub.capacityItems) * 100);
-                return (
-                  <div key={hub.id} className="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-1.5">
-                    <div className="flex justify-between items-center text-xs">
-                      <span className="font-semibold text-slate-900 flex items-center gap-1.5">
-                        <span className="text-base">{hub.flag}</span>
-                        {hub.city}
-                      </span>
-                      <span className="text-[11px] text-slate-600 font-medium">
-                        {hub.currentItems} / {hub.capacityItems} ítems
-                      </span>
-                    </div>
-
-                    <div className="w-full bg-slate-200 h-1.5 rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full ${
-                          percentage > 80 ? 'bg-amber-500' : 'bg-emerald-500'
-                        }`}
-                        style={{ width: `${percentage}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+            {/* Antes: barra de ocupación por hub, sobre una capacidad inventada.
+                Ninguna sede tiene capacidad declarada: no existía el dato. El
+                conteo de equipos por sede sí es real y es el widget 3 de D3,
+                que llega en la etapa 6. Mientras tanto está en SedesView. */}
+            <PendienteEtapa6
+              clase="pendiente"
+              motivo="Las sedes no tienen capacidad declarada, así que no hay porcentaje que calcular. El conteo de equipos por sede es el widget 3 de D3 y llega en la etapa 6."
+            />
           </div>
 
         </div>

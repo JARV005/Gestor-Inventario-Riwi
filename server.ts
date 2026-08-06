@@ -1,12 +1,31 @@
+// Sin esto no hay DATABASE_URL, ni SESSION_SECRET, ni ENCRYPTION_KEY: `tsx` no
+// lee .env por su cuenta y el servidor moría al construir el pool.
+import "dotenv/config";
+
 import express from "express";
 import path from "path";
 import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
+import { crearApp } from "./server/app.js";
+
 const app = express();
 const PORT = 3000;
 
 app.use(express.json({ limit: "10mb" }));
+
+/**
+ * La API de la etapa 3, montada solo para `/api`.
+ *
+ * Con `app.use(api)` a secas, la sesión y el parseo de JSON correrían también
+ * para cada asset que sirve Vite — una consulta a Postgres por cada .tsx del
+ * arranque. El filtro por prefijo lo evita.
+ *
+ * Las rutas que la API no conoce, como `/api/gemini/*`, caen al `next()` y las
+ * atienden los manejadores de más abajo.
+ */
+const api = crearApp();
+app.use((req, res, next) => (req.path.startsWith("/api") ? api(req, res, next) : next()));
 
 // Lazy GoogleGenAI instance initialization helper
 function getGeminiClient(): GoogleGenAI | null {
@@ -25,10 +44,7 @@ function getGeminiClient(): GoogleGenAI | null {
   });
 }
 
-// Health check route
-app.get("/api/health", (req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+// `/api/health` lo sirve ahora la API de arriba.
 
 // AI IT Inventory Chat / Copilot API
 app.post("/api/gemini/chat", async (req, res) => {

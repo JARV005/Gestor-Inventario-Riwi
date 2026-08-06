@@ -18,6 +18,7 @@ import {
   licenciaTipo,
   propiedadEquipo,
 } from '../../db/esquema.js';
+import { CODIGOS } from '../../db/motivos.js';
 import { guardian } from '../autenticar.js';
 import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
 import { ruta } from '../permisos.js';
@@ -58,6 +59,9 @@ const esquemaFiltros = z.object({
   categoria: z.enum(categoriaEquipo.enumValues).optional(),
   sede: uuid.optional(),
   q: z.string().trim().max(120).optional(),
+  // Se valida contra el catálogo de códigos, no como texto libre: un código
+  // inexistente devolvería cero filas y parecería "no hay ninguno".
+  motivo: z.enum(CODIGOS as [string, ...string[]]).optional(),
   pagina: z.coerce.number().int().min(1).optional(),
   porPagina: z.coerce.number().int().min(1).max(200).optional(),
 });
@@ -96,7 +100,14 @@ export function registrarRutasEquipos(app: Express): void {
     guardian,
     asincrono(async (req, res) => {
       const f = validar(esquemaFiltros, req.query);
-      res.json(await repoEquipos.listar({ ...f, revision: true }));
+      const [pagina, conteos] = await Promise.all([
+        repoEquipos.listar({ ...f, revision: true }),
+        repoEquipos.conteoPorMotivo(),
+      ]);
+      // Los conteos van con el listado para que la bandeja pueda pintar los
+      // bloques sin una segunda petición: "los 37 de licencia" tiene que ser
+      // visible antes de filtrar, o nadie sabe por dónde empezar.
+      res.json({ ...pagina, conteos });
     }),
   );
 

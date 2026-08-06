@@ -1,38 +1,49 @@
 import React, { useState } from 'react';
-import { MaintenanceRecord, Device } from '../types';
-import { INITIAL_MAINTENANCE_RECORDS } from '../data/mockData';
+import type { Mantenimiento, Equipo } from '../types';
+import { MANTENIMIENTOS_DEMO } from '../data/mockData';
 import { Wrench, Plus, CheckCircle2, Clock, AlertTriangle, BatteryCharging, Shield, X } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface MaintenanceViewProps {
-  devices: Device[];
+  equipos: Equipo[];
 }
 
-export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ devices }) => {
-  const [records, setRecords] = useState<MaintenanceRecord[]>(INITIAL_MAINTENANCE_RECORDS);
+/**
+ * TODO(4b): sin conectar. Sigue leyendo `mockData` y guardando los partes en su
+ * propio `useState`, invisible para `App` (D2). Conectar contra
+ * `/api/mantenimientos`, que además no existe hasta la etapa 6.
+ */
+export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ equipos }) => {
+  const [records, setRecords] = useState<Mantenimiento[]>(MANTENIMIENTOS_DEMO);
+
+  /** El parte guarda `equipo_id`; el nombre se resuelve contra la lista. */
+  const equipoDe = (rec: Mantenimiento) => equipos.find((e) => e.id === rec.equipo_id);
   const [showNewTicketModal, setShowNewTicketModal] = useState(false);
 
-  const [selectedDeviceId, setSelectedDeviceId] = useState(devices[0]?.id || '');
+  const [selectedDeviceId, setSelectedDeviceId] = useState(equipos[0]?.id || '');
   const [issueDescription, setIssueDescription] = useState('');
-  const [repairType, setRepairType] = useState<MaintenanceRecord['type']>('Battery Replacement');
+  const [repairType, setRepairType] = useState<string>('Cambio de batería');
   const [estCost, setEstCost] = useState('150');
 
   const handleCreateRecord = (e: React.FormEvent) => {
     e.preventDefault();
-    const dev = devices.find((d) => d.id === selectedDeviceId);
+    const dev = equipos.find((d) => d.id === selectedDeviceId);
     if (!dev) return;
 
-    const newRecord: MaintenanceRecord = {
+    const ahora = new Date().toISOString();
+    const newRecord: Mantenimiento = {
       id: `mnt-${Math.floor(100 + Math.random() * 900)}`,
-      deviceId: dev.id,
-      deviceName: dev.name,
-      serialNumber: dev.serialNumber,
-      issue: issueDescription || 'Solicitud de diagnóstico preventivo FirstPlug.',
-      type: repairType,
-      status: 'Pending Approval',
-      reportedDate: new Date().toISOString().slice(0, 10),
-      costUSD: Number(estCost) || 120,
-      technician: 'Centro de Servicio Autorizado FirstPlug',
+      equipo_id: dev.id,
+      tipo: repairType,
+      descripcion: issueDescription || 'Solicitud de diagnóstico preventivo.',
+      estado: 'Pendiente',
+      fecha_reporte: ahora,
+      fecha_cierre: null,
+      responsable: 'Soporte TI',
+      proveedor: null,
+      costo: estCost || null,
+      created_at: ahora,
+      updated_at: ahora,
     };
 
     setRecords([newRecord, ...records]);
@@ -80,32 +91,32 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ devices }) => 
                 <span className="font-mono font-bold text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200">
                   {rec.id}
                 </span>
-                <span className="font-bold text-slate-900 text-sm">{rec.deviceName}</span>
+                <span className="font-bold text-slate-900 text-sm">{equipoDe(rec)?.nombre_equipo ?? equipoDe(rec)?.etiqueta ?? '(sin nombre)'}</span>
                 <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200 font-mono">
-                  {rec.serialNumber}
+                  {equipoDe(rec)?.serial ?? '(sin serial)'}
                 </span>
               </div>
 
               <span className={`text-[11px] px-2.5 py-0.5 rounded-full font-semibold ${
-                rec.status === 'In Repair Shop' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
-                rec.status === 'Completed' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
+                rec.estado === 'En taller' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                rec.estado === 'Completado' ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' :
                 'bg-slate-100 text-slate-700 border border-slate-200'
               }`}>
-                {rec.status === 'In Repair Shop' ? 'En Taller Técnico Autorizado' : rec.status}
+                {rec.estado === 'En taller' ? 'En Taller Técnico Autorizado' : rec.estado}
               </span>
             </div>
 
             <div className="bg-slate-50 p-3 rounded-lg border border-slate-200 text-xs space-y-1">
               <div className="flex justify-between items-center text-slate-500 font-medium">
-                <span>Tipo: <strong className="text-slate-900">{rec.type}</strong></span>
-                <span>Costo Est.: <strong className="text-emerald-700">${rec.costUSD} USD</strong></span>
+                <span>Tipo: <strong className="text-slate-900">{rec.tipo}</strong></span>
+                <span>Costo Est.: <strong className="text-emerald-700">${rec.costo ?? '—'}</strong></span>
               </div>
-              <p className="text-slate-700 leading-relaxed pt-1">{rec.issue}</p>
+              <p className="text-slate-700 leading-relaxed pt-1">{rec.descripcion}</p>
             </div>
 
             <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
-              <span>Técnico: <strong className="text-slate-800">{rec.technician}</strong></span>
-              <span>Reportado: {rec.reportedDate}</span>
+              <span>Técnico: <strong className="text-slate-800">{rec.responsable}</strong></span>
+              <span>Reportado: {rec.fecha_reporte.slice(0, 10)}</span>
             </div>
           </div>
         ))}
@@ -140,9 +151,9 @@ export const MaintenanceView: React.FC<MaintenanceViewProps> = ({ devices }) => 
                   onChange={(e) => setSelectedDeviceId(e.target.value)}
                   className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
                 >
-                  {devices.map((d) => (
+                  {equipos.map((d) => (
                     <option key={d.id} value={d.id}>
-                      {d.name} ({d.assetTag} - {d.serialNumber})
+                      {d.nombre_equipo ?? d.etiqueta ?? d.id.slice(0, 8)} ({d.etiqueta ?? '—'} - {d.serial ?? '—'})
                     </option>
                   ))}
                 </select>

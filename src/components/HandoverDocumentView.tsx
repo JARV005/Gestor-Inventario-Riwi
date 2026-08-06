@@ -1,23 +1,23 @@
 import React, { useState } from 'react';
-import { Device, Employee } from '../types';
+import type { Empleado, Equipo } from '../types';
 import { FileText, Printer, Sparkles, CheckCircle2, User, Laptop, MapPin, Download, PenTool, X } from 'lucide-react';
 
 interface HandoverDocumentViewProps {
-  devices: Device[];
-  employees: Employee[];
-  selectedDeviceForDoc?: Device | null;
+  equipos: Equipo[];
+  empleados: Empleado[];
+  equipoSeleccionado?: Equipo | null;
 }
 
 export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
-  devices,
-  employees,
-  selectedDeviceForDoc,
+  equipos,
+  empleados,
+  equipoSeleccionado,
 }) => {
   const [selectedEmpId, setSelectedEmpId] = useState<string>(
-    selectedDeviceForDoc?.assignedTo || employees[0]?.id || ''
+    equipoSeleccionado?.empleado_id || empleados[0]?.id || ''
   );
   const [selectedDevId, setSelectedDevId] = useState<string>(
-    selectedDeviceForDoc?.id || devices[0]?.id || ''
+    equipoSeleccionado?.id || equipos[0]?.id || ''
   );
 
   const [loadingAi, setLoadingAi] = useState(false);
@@ -25,8 +25,15 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
   const [signed, setSigned] = useState(false);
   const [showSignatureModal, setShowSignatureModal] = useState(false);
 
-  const currentEmp = employees.find((e) => e.id === selectedEmpId) || employees[0];
-  const currentDev = devices.find((d) => d.id === selectedDevId) || devices[0];
+  const currentEmp = empleados.find((e) => e.id === selectedEmpId) || empleados[0];
+  const currentDev = equipos.find((d) => d.id === selectedDevId) || equipos[0];
+
+  /** Ya no hay `name` ni `specs`: el nombre se compone y las specs son columnas. */
+  const nombreEquipo = (e: Equipo) =>
+    e.nombre_equipo ?? e.etiqueta ?? ([e.marca, e.modelo].filter(Boolean).join(' ') || 'Equipo');
+
+  const especificaciones = (e: Equipo) =>
+    [e.procesador, e.ram, e.disco, e.sistema_operativo].filter(Boolean).join(', ') || '—';
 
   const handleGenerateActWithAi = async () => {
     if (!currentEmp || !currentDev) return;
@@ -37,13 +44,13 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          employeeName: currentEmp.name,
-          employeeRole: currentEmp.role,
+          employeeName: currentEmp.nombre,
+          employeeRole: currentEmp.cargo ?? '',
           employeeDocId: `ID-${currentEmp.id.toUpperCase()}`,
-          deviceName: currentDev.name,
-          serialNumber: currentDev.serialNumber,
-          specs: `${currentDev.specs.cpu}, ${currentDev.specs.ram}, ${currentDev.specs.storage}`,
-          location: currentDev.location,
+          deviceName: nombreEquipo(currentDev),
+          serialNumber: currentDev.serial ?? '',
+          specs: especificaciones(currentDev),
+          location: currentDev.sede_id ?? null,
           handoverDate: new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }),
         }),
       });
@@ -109,9 +116,9 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             onChange={(e) => setSelectedEmpId(e.target.value)}
             className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
           >
-            {employees.map((e) => (
+            {empleados.map((e) => (
               <option key={e.id} value={e.id}>
-                {e.name} ({e.role} - {e.country})
+                {e.nombre}{e.cargo ? ` (${e.cargo})` : ''}
               </option>
             ))}
           </select>
@@ -124,9 +131,9 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             onChange={(e) => setSelectedDevId(e.target.value)}
             className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
           >
-            {devices.map((d) => (
+            {equipos.map((d) => (
               <option key={d.id} value={d.id}>
-                {d.name} [{d.assetTag} - {d.serialNumber}]
+                {nombreEquipo(d)} [{d.etiqueta ?? '—'} - {d.serial ?? '—'}]
               </option>
             ))}
           </select>
@@ -172,10 +179,11 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
               <div className="font-bold uppercase text-[10px] text-slate-500">Datos del Colaborador Receptor</div>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>Nombre: <strong>{currentEmp?.name}</strong></div>
-                <div>Puesto: <strong>{currentEmp?.role}</strong></div>
-                <div>Departamento: <strong>{currentEmp?.department}</strong></div>
-                <div>Ubicación: <strong>{currentEmp?.city}, {currentEmp?.country}</strong></div>
+                <div>Nombre: <strong>{currentEmp?.nombre}</strong></div>
+                <div>Puesto: <strong>{currentEmp?.cargo ?? '—'}</strong></div>
+                <div>Área: <strong>{currentEmp?.area ?? '—'}</strong></div>
+                {/* TODO(4b): la sede se resuelve con GET /api/sedes; aquí solo hay el id. */}
+                <div>Cédula: <strong>{currentEmp?.cedula ?? '—'}</strong></div>
               </div>
             </div>
 
@@ -183,11 +191,14 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
               <div className="font-bold uppercase text-[10px] text-slate-500">Detalles del Equipo Tecnológico</div>
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>Equipo / Modelo: <strong>{currentDev?.name}</strong></div>
-                <div>Etiqueta Activo: <strong>{currentDev?.assetTag}</strong></div>
-                <div>Número de Serie: <strong>{currentDev?.serialNumber}</strong></div>
-                <div>Enrolamiento MDM: <strong>{currentDev?.mdmEnrolled ? currentDev?.mdmProvider : 'Activo'}</strong></div>
-                <div className="col-span-2">Especificaciones: <strong>{currentDev?.specs.cpu}, {currentDev?.specs.ram}, {currentDev?.specs.storage}</strong></div>
+                <div>Equipo / Modelo: <strong>{currentDev ? nombreEquipo(currentDev) : '—'}</strong></div>
+                <div>Etiqueta Activo: <strong>{currentDev?.etiqueta ?? '—'}</strong></div>
+                <div>Número de Serie: <strong>{currentDev?.serial ?? '—'}</strong></div>
+                {/* El enrolamiento MDM se fue con D3: no hay MDM, y el acta no
+                    puede afirmar algo que nadie comprobó. La licencia de
+                    Windows sí es un dato real del equipo. */}
+                <div>Licencia: <strong>{currentDev?.licencia_tipo ?? '—'}</strong></div>
+                <div className="col-span-2">Especificaciones: <strong>{currentDev ? especificaciones(currentDev) : '—'}</strong></div>
               </div>
             </div>
 
@@ -209,14 +220,14 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             {signed ? (
               <div className="bg-emerald-50 border border-emerald-300 p-2 rounded text-emerald-800 font-semibold text-[11px] flex items-center justify-center gap-1">
                 <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Firmado Digitalmente por {currentEmp?.name}
+                Firmado Digitalmente por {currentEmp?.nombre}
               </div>
             ) : (
               <div className="h-16 border-b border-dashed border-slate-400 flex items-center justify-center text-slate-400">
                 Firma del Colaborador
               </div>
             )}
-            <p className="font-bold text-slate-900">{currentEmp?.name}</p>
+            <p className="font-bold text-slate-900">{currentEmp?.nombre}</p>
             <p className="text-[10px] text-slate-500">Colaborador Receptor</p>
           </div>
 

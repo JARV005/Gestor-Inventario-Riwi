@@ -1,72 +1,85 @@
 import React, { useState } from 'react';
-import { Device, DeviceCategory, DeviceStatus, Employee } from '../types';
+import type { CategoriaEquipo, Empleado, Equipo, Sede } from '../types';
+import { CATEGORIAS_EQUIPO } from '../types';
 import { Laptop, Plus, X } from 'lucide-react';
 import confetti from 'canvas-confetti';
 
 interface NewDeviceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  employees: Employee[];
-  onAddDevice: (device: Device) => void;
+  empleados: Empleado[];
+  sedes: Sede[];
+  onAddEquipo: (equipo: Equipo) => void;
 }
 
+/**
+ * TODO(4b): sin conectar. Construye el equipo en memoria y se lo pasa a `App`.
+ * Debe hacer `POST /api/equipos` y refrescar el listado.
+ */
 export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
   isOpen,
   onClose,
-  employees,
-  onAddDevice,
+  empleados,
+  sedes,
+  onAddEquipo,
 }) => {
-  const [name, setName] = useState('MacBook Pro 16" M3 Pro');
-  const [category, setCategory] = useState<DeviceCategory>('Laptop');
-  const [brand, setBrand] = useState('Apple');
-  const [model, setModel] = useState('A2992');
-  const [serialNumber, setSerialNumber] = useState(`C02G${Math.floor(10000 + Math.random() * 90000)}FP`);
-  const [assetTag, setAssetTag] = useState(`FP-MX-${Math.floor(1000 + Math.random() * 9000)}`);
-  const [status, setStatus] = useState<DeviceStatus>('Available');
-  const [location, setLocation] = useState('FirstPlug Hub Ciudad de México');
-  const [assignedTo, setAssignedTo] = useState('');
-  const [costUSD, setCostUSD] = useState(2499);
-  const [cpu, setCpu] = useState('Apple M3 Pro 12-core');
-  const [ram, setRam] = useState('36GB');
-  const [storage, setStorage] = useState('512GB SSD');
+  const [nombreEquipo, setNombreEquipo] = useState('');
+  const [categoria, setCategoria] = useState<CategoriaEquipo>('Portátil');
+  const [marca, setMarca] = useState('');
+  const [modelo, setModelo] = useState('');
+  const [serial, setSerial] = useState('');
+  const [etiqueta, setEtiqueta] = useState('');
+  const [sedeId, setSedeId] = useState('');
+  const [empleadoId, setEmpleadoId] = useState('');
+  const [costo, setCosto] = useState('');
+  const [procesador, setProcesador] = useState('');
+  const [ram, setRam] = useState('');
+  const [disco, setDisco] = useState('');
 
   if (!isOpen) return null;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
-    const newDevice: Device = {
-      id: `dev-${Date.now().toString().slice(-4)}`,
-      assetTag,
-      name,
-      category,
-      brand,
-      model,
-      serialNumber,
-      status,
-      condition: 'Brand New',
-      location: 'CDMX Hub (México)',
-      department: 'Engineering',
-      assignedTo: assignedTo || null,
-      assignedDate: assignedTo ? new Date().toISOString().slice(0, 10) : null,
-      purchaseDate: new Date().toISOString().slice(0, 10),
-      warrantyExpiry: '2028-12-31',
-      costUSD: Number(costUSD) || 1999,
-      specs: {
-        cpu,
-        ram,
-        storage,
-        os: category === 'Laptop' ? 'macOS Sequoia 15.2' : 'N/A',
-      },
-      mdmEnrolled: true,
-      mdmProvider: 'Jamf Pro Enterprise',
-      encrypted: true,
-      healthScore: 100,
-      batteryHealth: 100,
-      imageUrl: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&q=80&w=800',
+    const ahora = new Date().toISOString();
+    // El invariante del §2: 'Asignado' si y solo si hay responsable.
+    const estado = empleadoId ? 'Asignado' : 'Disponible';
+
+    const nuevo: Equipo = {
+      id: `nuevo-${Date.now().toString().slice(-6)}`,
+      categoria,
+      etiqueta: etiqueta || null,
+      nombre_equipo: nombreEquipo || null,
+      marca: marca || null,
+      modelo: modelo || null,
+      serial: serial || null,
+      serial_cargador: null,
+      propiedad: 'Empresa',
+      sistema_operativo: null,
+      licencia_tipo: null,
+      tamano_pantalla: null,
+      procesador: procesador || null,
+      disco: disco || null,
+      ram: ram || null,
+      estado,
+      condicion: 'Nuevo',
+      sede_id: sedeId || null,
+      empleado_id: empleadoId || null,
+      empleado_mencionado_id: null,
+      importacion_id: null,
+      sesion_usuario: null,
+      fecha_compra: ahora.slice(0, 10),
+      garantia_vence: null,
+      costo: costo || null,
+      notas: null,
+      // Un alta manual la escribe una persona que tiene el equipo delante: no
+      // nace en la bandeja de revisión, a diferencia de las 83 del Excel.
+      requiere_revision: false,
+      created_at: ahora,
+      updated_at: ahora,
     };
 
-    onAddDevice(newDevice);
+    onAddEquipo(nuevo);
     confetti({ particleCount: 50, spread: 60, origin: { y: 0.7 } });
     onClose();
   };
@@ -100,22 +113,21 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <input
                 type="text"
                 required
-                value={name}
-                onChange={(e) => setName(e.target.value)}
+                value={nombreEquipo}
+                onChange={(e) => setNombreEquipo(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
             <div>
               <label className="block text-slate-700 font-semibold mb-1">Categoría</label>
               <select
-                value={category}
-                onChange={(e: any) => setCategory(e.target.value)}
+                value={categoria}
+                onChange={(e) => setCategoria(e.target.value as CategoriaEquipo)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               >
-                <option value="Laptop">Laptop</option>
-                <option value="Monitor">Monitor</option>
-                <option value="Mobile">Móvil / Celular</option>
-                <option value="Peripherals">Periférico</option>
+                {CATEGORIAS_EQUIPO.map((c) => (
+                  <option key={c} value={c}>{c}</option>
+                ))}
               </select>
             </div>
           </div>
@@ -126,8 +138,8 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <input
                 type="text"
                 required
-                value={assetTag}
-                onChange={(e) => setAssetTag(e.target.value)}
+                value={etiqueta}
+                onChange={(e) => setEtiqueta(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 font-mono text-blue-600 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -136,8 +148,8 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <input
                 type="text"
                 required
-                value={brand}
-                onChange={(e) => setBrand(e.target.value)}
+                value={marca}
+                onChange={(e) => setMarca(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -146,8 +158,8 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <input
                 type="text"
                 required
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
+                value={modelo}
+                onChange={(e) => setModelo(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -159,17 +171,17 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <input
                 type="text"
                 required
-                value={serialNumber}
-                onChange={(e) => setSerialNumber(e.target.value)}
+                value={serial}
+                onChange={(e) => setSerial(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 font-mono text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Costo Adquisición (USD)</label>
+              <label className="block text-slate-700 font-semibold mb-1">Costo de adquisición (COP)</label>
               <input
                 type="number"
-                value={costUSD}
-                onChange={(e) => setCostUSD(Number(e.target.value))}
+                value={costo}
+                onChange={(e) => setCosto(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -177,11 +189,11 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
 
           <div className="grid grid-cols-3 gap-3">
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">CPU</label>
+              <label className="block text-slate-700 font-semibold mb-1">Procesador</label>
               <input
                 type="text"
-                value={cpu}
-                onChange={(e) => setCpu(e.target.value)}
+                value={procesador}
+                onChange={(e) => setProcesador(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -198,8 +210,8 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
               <label className="block text-slate-700 font-semibold mb-1">SSD</label>
               <input
                 type="text"
-                value={storage}
-                onChange={(e) => setStorage(e.target.value)}
+                value={disco}
+                onChange={(e) => setDisco(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
@@ -207,30 +219,29 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Ubicación / Hub Inicial</label>
+              <label className="block text-slate-700 font-semibold mb-1">Sede</label>
               <select
-                value={location}
-                onChange={(e) => setLocation(e.target.value)}
+                value={sedeId}
+                onChange={(e) => setSedeId(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               >
-                <option value="FirstPlug Hub Ciudad de México">Hub Ciudad de México 🇲🇽</option>
-                <option value="FirstPlug Hub Bogotá">Hub Bogotá 🇨🇴</option>
-                <option value="FirstPlug Hub Buenos Aires">Hub Buenos Aires 🇦🇷</option>
-                <option value="FirstPlug Hub North America">Hub Miami 🇺🇸</option>
-                <option value="FirstPlug Hub Europa">Hub Madrid 🇪🇸</option>
+                <option value="">Sin sede</option>
+                {sedes.map((s) => (
+                  <option key={s.id} value={s.id}>{s.nombre}</option>
+                ))}
               </select>
             </div>
 
             <div>
-              <label className="block text-slate-700 font-semibold mb-1">Asignar a Colaborador (Opcional)</label>
+              <label className="block text-slate-700 font-semibold mb-1">Asignar a colaborador (opcional)</label>
               <select
-                value={assignedTo}
-                onChange={(e) => setAssignedTo(e.target.value)}
+                value={empleadoId}
+                onChange={(e) => setEmpleadoId(e.target.value)}
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               >
-                <option value="">Sin Asignación (Guardar en Hub)</option>
-                {employees.map((e) => (
-                  <option key={e.id} value={e.id}>{e.name} ({e.role})</option>
+                <option value="">Sin asignar</option>
+                {empleados.map((e) => (
+                  <option key={e.id} value={e.id}>{e.nombre}{e.cargo ? ` (${e.cargo})` : ''}</option>
                 ))}
               </select>
             </div>

@@ -23,6 +23,41 @@ movimientos `Alta`.
 
 ## Etapa 5 — movimientos
 
+### Los traslados abiertos desaparecieron de la interfaz
+
+Es la única funcionalidad **visible** que se perdió al sustituir
+`LogisticsHubsView` por `SedesView` en la etapa 4a. Todo lo demás que se fue
+—capacidad de los hubs, transportadoras, números de guía— nunca tuvo datos
+detrás: ni en el Excel ni en el esquema.
+
+**Qué mostraba antes.** Una lista de envíos en curso, cada uno con:
+transportadora (DHL / FedEx / Estafeta), número de guía, fecha estimada de
+entrega, hub de origen y de destino, nombre del empleado y equipos incluidos.
+Todo ello inventado por el prototipo.
+
+**Qué tiene que mostrar cuando existan los movimientos.** Un traslado abierto
+es una fila de `movimientos` con `tipo = 'Traslado'` y
+`fecha_confirmacion IS NULL` (D1). El esquema ya tiene los campos, vacíos desde
+la migración 0000:
+
+| Columna | Qué es |
+|---|---|
+| `transportadora` | Quién lo lleva |
+| `guia` | Número de seguimiento |
+| `fecha_estimada` | Entrega prevista |
+| `sede_origen_id` / `sede_destino_id` | De dónde a dónde |
+| `equipo_id` | Qué se mueve |
+
+En `SedesView` va como lista bajo las tarjetas de sede: origen → destino,
+equipo, transportadora, guía y días en tránsito. Y el contador «en tránsito» de
+cada tarjeta, que hoy sale de `equipos.estado`, debe cuadrar con el número de
+traslados abiertos de esa sede — es el invariante de D1 y son las dos caras del
+mismo hecho.
+
+El sitio en el código está marcado con `TODO(5)` al final de
+`src/components/SedesView.tsx`, pero **el TODO no es el recordatorio**: esta
+entrada lo es.
+
 ### El invariante de D1 no lo impone nadie
 
 «Un equipo está `En tránsito` ⟺ existe un movimiento `Traslado` con

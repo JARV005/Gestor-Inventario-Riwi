@@ -1,22 +1,16 @@
-import React, { useState } from 'react';
-import { 
-  Device, 
-  Employee, 
-  Hub, 
-  LogisticsTicket
-} from './types';
-import { 
-  INITIAL_DEVICES, 
-  INITIAL_EMPLOYEES, 
-  INITIAL_HUBS, 
-  INITIAL_LOGISTICS_TICKETS 
-} from './data/mockData';
+import React, { useEffect, useState } from 'react';
+
+import type { Empleado, Equipo, Sede, UsuarioSesion } from './types';
+import { EMPLEADOS_DEMO, EQUIPOS_DEMO, SEDES_DEMO } from './data/mockData';
+import { construirContextoIA } from './lib/contextoIA';
+import { api } from './lib/api';
+import { Login } from './components/Login';
 
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { DashboardView } from './components/DashboardView';
 import { InventoryView } from './components/InventoryView';
-import { LogisticsHubsView } from './components/LogisticsHubsView';
+import { SedesView } from './components/SedesView';
 import { EmployeesView } from './components/EmployeesView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
@@ -26,67 +20,64 @@ import { OnboardingModal } from './components/OnboardingModal';
 import { NewDeviceModal } from './components/NewDeviceModal';
 
 export function App() {
-  // Main State
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
-  // TODO(4a): eliminar. El selector de organizacion del Header es multi-tenant
-  // y hay una sola empresa. Hoy este estado solo alimenta el contexto de la IA;
-  // el Header muestra un nombre distinto hardcodeado. Ver docs/deuda-tipos.md.
-  const [selectedOrg, setSelectedOrg] = useState<string>('Acme LatAm Tech');
+  const [activeTab, setActiveTab] = useState<string>('inventory');
   const [searchTerm, setSearchTerm] = useState<string>('');
 
-  // Domain Datasets
-  const [devices, setDevices] = useState<Device[]>(INITIAL_DEVICES);
-  const [employees, setEmployees] = useState<Employee[]>(INITIAL_EMPLOYEES);
-  const [hubs, setHubs] = useState<Hub[]>(INITIAL_HUBS);
-  const [logisticsTickets, setLogisticsTickets] = useState<LogisticsTicket[]>(INITIAL_LOGISTICS_TICKETS);
+  /**
+   * `undefined` mientras se pregunta quién soy. Sin ese tercer estado, la
+   * aplicación parpadearía enseñando el login a alguien que ya tiene sesión.
+   */
+  const [usuario, setUsuario] = useState<UsuarioSesion | null | undefined>(undefined);
 
-  // Modals state
+  useEffect(() => {
+    api.yo().then(
+      (r) => setUsuario(r.usuario),
+      () => setUsuario(null), // 401, o el servidor no responde: a la puerta
+    );
+  }, []);
+
+  /**
+   * TODO(4b): estas tres listas siguen viniendo de `mockData`. Solo
+   * `InventoryView` está conectada a la API, y lo hace por su cuenta: no lee de
+   * aquí. El resto de vistas las usa como relleno hasta que les toque.
+   */
+  const [equipos, setEquipos] = useState<Equipo[]>(EQUIPOS_DEMO);
+  const [empleados, setEmpleados] = useState<Empleado[]>(EMPLEADOS_DEMO);
+  const [sedes] = useState<Sede[]>(SEDES_DEMO);
+
   const [isCopilotOpen, setIsCopilotOpen] = useState<boolean>(false);
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
   const [isNewDeviceModalOpen, setIsNewDeviceModalOpen] = useState<boolean>(false);
-  const [selectedDeviceForDoc, setSelectedDeviceForDoc] = useState<Device | null>(null);
+  const [equipoParaActa, setEquipoParaActa] = useState<Equipo | null>(null);
 
-  // Handlers
-  const handleAddDevice = (newDevice: Device) => {
-    setDevices((prev) => [newDevice, ...prev]);
-  };
+  const handleAddEquipo = (nuevo: Equipo) => setEquipos((prev) => [nuevo, ...prev]);
+  const handleAddEmpleado = (nuevo: Empleado) => setEmpleados((prev) => [nuevo, ...prev]);
 
-  const handleAddEmployee = (newEmp: Employee) => {
-    setEmployees((prev) => [newEmp, ...prev]);
-  };
-
-  const handleAddLogisticsTicket = (ticket: LogisticsTicket) => {
-    setLogisticsTickets((prev) => [ticket, ...prev]);
-  };
-
-  // Navigate to Handover Document view with pre-selected device
-  const handleGenerateHandoverDoc = (device: Device) => {
-    setSelectedDeviceForDoc(device);
+  const handleGenerarActa = (equipo: Equipo) => {
+    setEquipoParaActa(equipo);
     setActiveTab('documents');
   };
 
-  const handleRequestMaintenance = (device: Device) => {
-    setActiveTab('maintenance');
-  };
+  const handleSolicitarMantenimiento = () => setActiveTab('maintenance');
+  const handleReasignar = () => setIsOnboardingModalOpen(true);
 
-  const handleReassignDevice = (device: Device) => {
-    setIsOnboardingModalOpen(true);
-  };
+  /**
+   * D1: "en tránsito" ya no es un ticket de logística, es un estado del equipo.
+   * El contador del sidebar sale de ahí. El traslado en sí es un movimiento, y
+   * eso llega en la etapa 5.
+   */
+  const enTransito = equipos.filter((e) => e.estado === 'En tránsito').length;
+  const enMantenimiento = equipos.filter((e) => e.estado === 'En mantenimiento').length;
 
-  // Inventory context string for AI Copilot
-  const inventorySummaryContext = `
-    Organización: ${selectedOrg}
-    Total Equipos: ${devices.length} (${devices.filter(d => d.status === 'In Use').length} en uso, ${devices.filter(d => d.status === 'Available').length} disponibles en Hub, ${devices.filter(d => d.status === 'In Transit').length} en tránsito).
-    Valor Total Estimado: $${devices.reduce((acc, d) => acc + d.costUSD, 0).toLocaleString('en-US')} USD.
-    Hubs Activos: ${hubs.map(h => h.name).join(', ')}.
-    Colaboradores Totales: ${employees.length}.
-    Envíos Activos DHL/FedEx: ${logisticsTickets.filter(t => t.status === 'In Transit').length}.
-  `;
+  if (usuario === undefined) {
+    return <div className="min-h-screen bg-surface-alt" aria-busy="true" />;
+  }
+  if (usuario === null) {
+    return <Login onEntrar={setUsuario} />;
+  }
 
   return (
     <div className="min-h-screen bg-surface-alt text-ink flex flex-col font-sans antialiased selection:bg-brand selection:text-white">
-      
-      {/* Top Header */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -97,25 +88,20 @@ export function App() {
         onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
       />
 
-      {/* Main Body with Left Sidebar & Content View */}
       <div className="flex-1 flex overflow-hidden max-w-[1920px] w-full mx-auto">
-        
-        {/* Navigation Sidebar */}
         <Sidebar
           activeTab={activeTab}
           setActiveTab={setActiveTab}
-          pendingLogisticsCount={logisticsTickets.filter((t) => t.status === 'In Transit').length}
-          maintenanceCount={devices.filter((d) => d.status === 'In Maintenance').length}
+          enTransitoCount={enTransito}
+          maintenanceCount={enMantenimiento}
         />
 
-        {/* Dynamic View Area */}
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-surface-alt space-y-8">
           {activeTab === 'dashboard' && (
             <DashboardView
-              devices={devices}
-              employees={employees}
-              hubs={hubs}
-              logisticsTickets={logisticsTickets}
+              equipos={equipos}
+              empleados={empleados}
+              sedes={sedes}
               setActiveTab={setActiveTab}
               onOpenAiCopilot={() => setIsCopilotOpen(true)}
               onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
@@ -123,77 +109,62 @@ export function App() {
             />
           )}
 
+          {/* La única conectada a Postgres. Se pide sus datos ella sola. */}
           {activeTab === 'inventory' && (
             <InventoryView
-              devices={devices}
-              employees={employees}
               searchTerm={searchTerm}
               setSearchTerm={setSearchTerm}
               onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
-              onGenerateHandoverDoc={handleGenerateHandoverDoc}
-              onRequestMaintenance={handleRequestMaintenance}
-              onReassignDevice={handleReassignDevice}
+              onGenerarActa={handleGenerarActa}
+              onSolicitarMantenimiento={handleSolicitarMantenimiento}
+              onReasignar={handleReasignar}
             />
           )}
 
-          {activeTab === 'logistics' && (
-            <LogisticsHubsView
-              hubs={hubs}
-              logisticsTickets={logisticsTickets}
-              devices={devices}
-              onAddLogisticsTicket={handleAddLogisticsTicket}
-            />
-          )}
+          {activeTab === 'logistics' && <SedesView sedes={sedes} equipos={equipos} />}
 
           {activeTab === 'employees' && (
             <EmployeesView
-              employees={employees}
-              devices={devices}
+              empleados={empleados}
+              equipos={equipos}
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
-              onOpenOffboardingModal={(emp) => setIsOnboardingModalOpen(true)}
-              onAddEmployee={handleAddEmployee}
+              onOpenOffboardingModal={() => setIsOnboardingModalOpen(true)}
+              onAddEmpleado={handleAddEmpleado}
             />
           )}
 
-          {activeTab === 'maintenance' && (
-            <MaintenanceView
-              devices={devices}
-            />
-          )}
+          {activeTab === 'maintenance' && <MaintenanceView equipos={equipos} />}
 
           {activeTab === 'documents' && (
             <HandoverDocumentView
-              devices={devices}
-              employees={employees}
-              selectedDeviceForDoc={selectedDeviceForDoc}
+              equipos={equipos}
+              empleados={empleados}
+              equipoSeleccionado={equipoParaActa}
             />
           )}
         </main>
-
       </div>
 
-      {/* Global Modals */}
       <AiCopilotModal
         isOpen={isCopilotOpen}
         onClose={() => setIsCopilotOpen(false)}
-        inventorySummaryContext={inventorySummaryContext}
+        inventorySummaryContext={construirContextoIA(equipos, sedes)}
       />
 
       <OnboardingModal
         isOpen={isOnboardingModalOpen}
         onClose={() => setIsOnboardingModalOpen(false)}
-        employees={employees}
-        devices={devices}
-        onAddLogisticsTicket={handleAddLogisticsTicket}
+        empleados={empleados}
+        equipos={equipos}
       />
 
       <NewDeviceModal
         isOpen={isNewDeviceModalOpen}
         onClose={() => setIsNewDeviceModalOpen(false)}
-        employees={employees}
-        onAddDevice={handleAddDevice}
+        empleados={empleados}
+        sedes={sedes}
+        onAddEquipo={handleAddEquipo}
       />
-
     </div>
   );
 }
