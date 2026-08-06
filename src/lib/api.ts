@@ -7,7 +7,25 @@
  * eso es exactamente lo que se buscaba al no usar JWT en `localStorage`.
  */
 
-import type { EquipoConMotivos, Pagina, Sede, UsuarioSesion } from '../types';
+import type {
+  EmpleadoConConteo,
+  EquipoConMotivos,
+  EquipoResumen,
+  MantenimientoConEquipo,
+  Pagina,
+  Sede,
+  UsuarioSesion,
+} from '../types';
+
+/** Serializa filtros a query string, saltándose los vacíos. */
+function consulta(f: Record<string, unknown>): string {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(f)) {
+    if (v !== undefined && v !== '' && v !== null) p.set(k, String(v));
+  }
+  const s = p.toString();
+  return s ? `?${s}` : '';
+}
 
 /** Error con el estado HTTP a la vista, para que la interfaz pueda distinguir. */
 export class ErrorApi extends Error {
@@ -116,4 +134,13 @@ export const api = {
   },
 
   equipo: (id: string) => pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${id}`),
+
+  empleados: (f: { q?: string; sede?: string; activo?: boolean; pagina?: number; porPagina?: number } = {}) =>
+    pedir<Pagina<EmpleadoConConteo>>(`/api/empleados${consulta(f)}`),
+
+  equiposDe: (id: string) =>
+    pedir<{ equipos: EquipoResumen[] }>(`/api/empleados/${id}/equipos`),
+
+  mantenimientos: (f: { equipo?: string; estado?: string; porPagina?: number } = {}) =>
+    pedir<Pagina<MantenimientoConEquipo>>(`/api/mantenimientos${consulta(f)}`),
 };

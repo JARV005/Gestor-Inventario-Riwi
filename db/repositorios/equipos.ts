@@ -83,9 +83,14 @@ export async function listar(f: FiltrosEquipos = {}, bd: BD = db) {
   if (f.motivo) {
     // EXISTS y no JOIN: un equipo con tres motivos aparecería tres veces, y el
     // total de la paginación contaría filas en vez de equipos.
+    //
+    // `equipos.id` escrito y calificado a mano: interpolado, drizzle lo emite
+    // como `"id"` a secas. Aquí funcionaba de milagro —la tabla puente no
+    // tiene columna `id`, así que resolvía hacia fuera— pero es suerte, no
+    // diseño. La misma forma sobre `empleados` devolvía 0 para todos.
     condiciones.push(
-      sql`EXISTS (SELECT 1 FROM ${equiposMotivosRevision} m
-                   WHERE m.equipo_id = ${equipos.id} AND m.motivo_codigo = ${f.motivo})`,
+      sql`EXISTS (SELECT 1 FROM equipos_motivos_revision m
+                   WHERE m.equipo_id = equipos.id AND m.motivo_codigo = ${f.motivo})`,
     );
   }
   if (f.q) {

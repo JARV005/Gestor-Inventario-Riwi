@@ -52,7 +52,30 @@ export async function listar(f: FiltrosEmpleados = {}, bd: BD = db) {
   const pagina = Math.max(f.pagina ?? 1, 1);
 
   const filas = await bd
-    .select(CAMPOS_PUBLICOS)
+    .select({
+      ...CAMPOS_PUBLICOS,
+      /**
+       * Lo que antes era `Employee.assignedDeviceIds.length` (D2).
+       *
+       * Se cuenta desde el lado de equipos, que es donde vive la relación
+       * ahora. Como subconsulta y no como JOIN + GROUP BY: con JOIN, un
+       * empleado sin equipos desaparecería o habría que arrastrar un LEFT JOIN
+       * y agrupar por las catorce columnas.
+       *
+       * Va en el listado y no como petición por tarjeta porque son 25 por
+       * página: 25 peticiones extra para pintar un número.
+       */
+      //
+      // Las columnas van escritas y calificadas a mano, sin interpolar.
+      // Interpolando, drizzle las emite SIN calificar —`WHERE "empleado_id" =
+      // "id"`— y dentro de la subconsulta `"id"` resuelve contra `equipos`, no
+      // contra `empleados`. La comparación pasa a ser
+      // `equipos.empleado_id = equipos.id`, que nunca es cierta: la consulta
+      // no falla, devuelve 0 para todo el mundo.
+      equipos_asignados: sql<number>`(
+        SELECT count(*)::int FROM equipos WHERE equipos.empleado_id = empleados.id
+      )`,
+    })
     .from(empleados)
     .where(donde)
     .orderBy(asc(empleados.nombre))

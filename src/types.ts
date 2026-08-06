@@ -101,6 +101,28 @@ export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
 export type Mantenimiento = Serializado<typeof mantenimientos.$inferSelect>;
 
+/**
+ * Un parte con lo justo del equipo para identificarlo.
+ *
+ * El parte guarda `equipo_id`; el servidor resuelve el resto en el mismo
+ * SELECT. Nunca los campos cifrados: la lista de columnas del repositorio es
+ * cerrada, y aquí solo pueden estar las que salen de ahí.
+ */
+export type MantenimientoConEquipo = Mantenimiento & {
+  equipo_etiqueta: string | null;
+  equipo_nombre: string | null;
+  equipo_serial: string | null;
+  equipo_marca: string | null;
+  equipo_modelo: string | null;
+};
+
+/**
+ * Lo que sustituye a `Employee.assignedDeviceIds.length` (D2): un conteo que
+ * el servidor calcula desde el lado de equipos, que es donde vive la relación.
+ * La lista completa se pide aparte con `GET /api/empleados/:id/equipos`.
+ */
+export type EmpleadoConConteo = Empleado & { equipos_asignados: number };
+
 /** Solo de `GET /api/equipos/:id/bios`, rol admin y con fila en `auditoria`. */
 export interface SecretosEquipo {
   bios_password: string | null;

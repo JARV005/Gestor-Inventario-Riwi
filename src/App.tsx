@@ -123,13 +123,11 @@ export function App() {
 
           {activeTab === 'logistics' && <SedesView sedes={sedes} equipos={equipos} />}
 
+          {/* Conectada: se pide sus datos ella sola. */}
           {activeTab === 'employees' && (
             <EmployeesView
-              empleados={empleados}
-              equipos={equipos}
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
               onOpenOffboardingModal={() => setIsOnboardingModalOpen(true)}
-              onAddEmpleado={handleAddEmpleado}
             />
           )}
 
