@@ -519,6 +519,13 @@ async function main() {
   let empleadosSinEquipo: string[] = [];
 
   await db.transaction(async (tx) => {
+    // El pool trae statement_timeout de 15 s, pensado para peticiones de la
+    // API. Esta transacción inserta 186 equipos, 113 empleados y 186
+    // movimientos de una vez: se le quita el límite, y solo a ella —SET LOCAL
+    // muere con la transacción.
+    await tx.execute(sql`SET LOCAL statement_timeout = 0`);
+    await tx.execute(sql`SET LOCAL lock_timeout = 0`);
+
     const sedesBd = await tx.select({ id: sedes.id, nombre: sedes.nombre }).from(sedes);
     const sedePorNombre = new Map(sedesBd.map((s) => [norm(s.nombre), s.id]));
 

@@ -11,6 +11,8 @@
 
 import type { NextFunction, Request, RequestHandler, Response } from 'express';
 
+import { traducirErrorPostgres } from './errores-postgres.js';
+
 export class ErrorHttp extends Error {
   constructor(
     readonly estado: number,
@@ -48,9 +50,21 @@ export function manejadorErrores(
     return;
   }
 
-  // Cualquier otra cosa es un fallo nuestro. Al log va todo; al cliente, nada
-  // más que el código. Un error de Postgres lleva dentro la consulta y a veces
-  // los valores, así que serializarlo es una fuga con otro nombre.
+  // Las violaciones de integridad no son fallos nuestros: son la base
+  // rechazando algo que la persona puede corregir. Se traducen aquí, una vez,
+  // y no en cada formulario — si no, reaparecen en cada uno.
+  const traducido = traducirErrorPostgres(err);
+  if (traducido) {
+    res.status(traducido.estado).json({
+      error: traducido.mensajePublico,
+      ...(traducido.detalles ?? {}),
+    });
+    return;
+  }
+
+  // Cualquier otra cosa sí es un fallo nuestro. Al log va todo; al cliente,
+  // nada más que el código. Un error de Postgres lleva dentro la consulta y a
+  // veces los valores, así que serializarlo es una fuga con otro nombre.
   console.error('Error no controlado:', err);
   res.status(500).json({ error: 'Error interno' });
 }

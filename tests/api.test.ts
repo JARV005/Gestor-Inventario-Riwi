@@ -113,10 +113,20 @@ describe('campos cifrados: no salen por ningún listado', () => {
     assert.equal(noHay.estado, 404);
     assert.deepEqual(buscarFugas(noHay.cuerpo, PROHIBIDO_EN_RESPUESTAS), []);
 
-    // 500 de verdad: una FK que no existe hace que Postgres lance, y el error
-    // de pg lleva dentro la consulta y a veces los valores.
-    const revienta = await cAdmin.patch(`/api/equipos/${equipoId}`, {
+    // 409: una FK inexistente. Desde que existe el traductor de errores de
+    // Postgres esto ya no es un 500 — es un error que la persona puede
+    // corregir— pero sigue siendo una respuesta de error y no puede filtrar.
+    const fk = await cAdmin.patch(`/api/equipos/${equipoId}`, {
       sede_id: '11111111-1111-1111-1111-111111111111',
+    });
+    assert.equal(fk.estado, 409);
+    assert.deepEqual(buscarFugas(fk.cuerpo, PROHIBIDO_EN_RESPUESTAS), []);
+
+    // 500 de verdad: una fecha imposible es un fallo nuestro, no de la persona,
+    // así que no se traduce. El error de pg lleva dentro la consulta y a veces
+    // los valores.
+    const revienta = await cAdmin.patch(`/api/equipos/${equipoId}`, {
+      fecha_compra: '9999-99-99',
     });
     assert.equal(revienta.estado, 500);
     assert.deepEqual(buscarFugas(revienta.cuerpo, PROHIBIDO_EN_RESPUESTAS), []);
@@ -233,6 +243,97 @@ describe('roles: lo que tecnico no puede', () => {
     assert.equal((await c.get('/api/equipos')).estado, 200);
     assert.equal((await c.get('/api/empleados')).estado, 200);
     assert.equal((await c.get('/api/sedes')).estado, 200);
+  });
+});
+
+describe('violaciones de integridad: 409 con qué corregir, no 500', () => {
+  // Teclear un serial repetido es uso normal, y crear un equipo Asignado sin
+  // responsable choca contra la constraint que el proyecto lleva cuatro etapas
+  // protegiendo. Las dos respondían "Error interno": la constraint funcionaba,
+  // el traductor no existía.
+  const suite = ambito('integridad');
+  let admin: UsuarioDePrueba;
+  let c: Cliente;
+  let equipoId: string;
+  const creados: string[] = [];
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    equipoId = await crearEquipoConSecretos(`${suite.prefijo}EQ-INT`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos([...creados, equipoId]);
+    await suite.limpiar();
+  });
+
+  it('control: un alta válida devuelve 201', async () => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      estado: 'Disponible',
+      serial: `${suite.prefijo}SERIAL-LIBRE`,
+    });
+    assert.equal(r.estado, 201);
+    creados.push((r.cuerpo as { equipo: { id: string } }).equipo.id);
+  });
+
+  it('UNIQUE: dice qué campo y qué valor colisiona', async () => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      estado: 'Disponible',
+      serial: `SN-${suite.prefijo}EQ-INT`, // el que creó crearEquipoConSecretos
+    });
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as { error: string; campo?: string; valor?: string };
+    assert.equal(cuerpo.campo, 'serial');
+    assert.ok(cuerpo.error.includes('serial'), `mensaje sin el campo: ${cuerpo.error}`);
+    assert.ok(cuerpo.error.includes(`SN-${suite.prefijo}EQ-INT`), 'el mensaje no dice qué valor');
+    // Dice qué corregir, no qué falló.
+    assert.ok(!/constraint|unique|violat/i.test(cuerpo.error), `jerga en: ${cuerpo.error}`);
+  });
+
+  it('CHECK: explica la regla en lengua humana', async () => {
+    const r = await c.post('/api/equipos', { categoria: 'Portátil', estado: 'Asignado' });
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as { error: string; regla?: string };
+    assert.equal(cuerpo.regla, 'equipos_asignado_implica_empleado');
+    assert.ok(cuerpo.error.includes('Asignado'), cuerpo.error);
+    assert.ok(cuerpo.error.includes('responsable'), cuerpo.error);
+    assert.ok(!/constraint|check|violat/i.test(cuerpo.error), `jerga en: ${cuerpo.error}`);
+  });
+
+  it('FK: dice qué referencia no existe', async () => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      estado: 'Disponible',
+      sede_id: '11111111-1111-1111-1111-111111111111',
+    });
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as { error: string; campo?: string };
+    assert.equal(cuerpo.campo, 'sede_id');
+    assert.ok(cuerpo.error.includes('sede'), cuerpo.error);
+    assert.ok(!/foreign|key|constraint/i.test(cuerpo.error), `jerga en: ${cuerpo.error}`);
+  });
+
+  it('lo que no sabemos explicar sigue siendo 500, no un 409 inventado', async () => {
+    // Un tipo de dato imposible no es una violación de integridad: es un fallo
+    // nuestro, y disfrazarlo de error de la persona sería mentir.
+    const r = await c.patch(`/api/equipos/${equipoId}`, { fecha_compra: 'no-es-una-fecha' });
+    assert.ok(r.estado === 400 || r.estado === 500, `devolvió ${r.estado}`);
+    assert.notEqual(r.estado, 409);
+  });
+
+  it('ningún 409 filtra los campos cifrados', async () => {
+    for (const cuerpo of [
+      { categoria: 'Portátil', estado: 'Disponible', serial: `SN-${suite.prefijo}EQ-INT` },
+      { categoria: 'Portátil', estado: 'Asignado' },
+      { categoria: 'Portátil', estado: 'Disponible', sede_id: '11111111-1111-1111-1111-111111111111' },
+    ]) {
+      const r = await c.post('/api/equipos', cuerpo);
+      assert.deepEqual(buscarFugas(r.cuerpo, PROHIBIDO_EN_RESPUESTAS), []);
+    }
   });
 });
 

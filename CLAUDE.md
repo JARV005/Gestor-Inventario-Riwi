@@ -69,6 +69,13 @@ Ahora gana `docs/decisiones-01.md`
   deferidas: se vuelven invisibles justo en los tests.
 - Un test cuyo resultado depende de que el corpus esté cargado debe fallar
   si no lo está, no pasar de vacío.
+- Un componente correcto puede ser inalcanzable. El estado de error de
+  `InventoryView` distinguía sus tres causas y tenía botón de reintentar, y
+  aun así el usuario nunca lo veía: el proceso moría dos capas más abajo,
+  en un `EventEmitter` de una dependencia. Ninguna revisión del componente
+  lo habría encontrado, porque el componente no tenía nada malo. Los
+  caminos de fallo se prueban provocando la falla real sobre el sistema
+  completo, no leyendo el código que los maneja.
 
 ## Eficiencia
 

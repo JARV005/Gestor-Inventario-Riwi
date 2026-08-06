@@ -70,7 +70,22 @@ export async function comprobarClaveDeCifrado(bd: BD = db): Promise<ResultadoCom
   return { estado: 'ok', filasCifradas };
 }
 
-/** Envoltorio para los puntos de arranque: informa y aborta si procede. */
+/**
+ * Envoltorio para los puntos de arranque.
+ *
+ * Distingue dos cosas que la primera versión confundía: **«la clave está mal»
+ * no es lo mismo que «no pude comprobarlo»**.
+ *
+ * La primera versión relanzaba cualquier error que no fuera
+ * `ClaveDeCifradoInvalida`, así que una tabla bloqueada por otra sesión —o la
+ * base apagada— mataba el arranque con una traza. Se descubrió provocando un
+ * `LOCK TABLE equipos` para otra prueba: el servidor dejó de arrancar por una
+ * condición transitoria que se resuelve sola en segundos.
+ *
+ * Es el mismo error que ya cometió el pool: convertir un problema pasajero de
+ * la base en la muerte del proceso. Solo se aborta cuando sabemos que la clave
+ * no sirve.
+ */
 export async function exigirClaveDeCifradoValida(): Promise<void> {
   try {
     const r = await comprobarClaveDeCifrado();
@@ -84,6 +99,14 @@ export async function exigirClaveDeCifradoValida(): Promise<void> {
       console.error(`\n${e.message}\n`);
       process.exit(1);
     }
-    throw e;
+    // No se pudo llegar a la base, o estaba ocupada. No sabemos si la clave
+    // sirve, y no saberlo no es motivo para no arrancar: las peticiones
+    // fallarán solas mientras dure, y esto se vuelve a comprobar al reiniciar.
+    const motivo = e instanceof Error ? e.message : String(e);
+    console.warn(
+      `[cifrado] NO SE PUDO COMPROBAR la clave: ${motivo}\n` +
+        '[cifrado] El servidor arranca igual. Si la base estaba caída u ocupada, reiniciar\n' +
+        '[cifrado] cuando se recupere para que la comprobación llegue a hacerse.',
+    );
   }
 }

@@ -13,11 +13,39 @@ if (!process.env.DATABASE_URL) {
   throw new Error('Falta DATABASE_URL. Copiar .env.example a .env y rellenarla.');
 }
 
+/**
+ * Los tiempos máximos, y por qué son estos tres y no otros.
+ *
+ * `connectionTimeoutMillis` cubre **conectar**. Es lo que salva el caso de la
+ * base apagada. No cubre nada de lo que pase después: con la base viva pero
+ * bloqueada —un `VACUUM FULL`, una migración larga, un `LOCK TABLE` olvidado—
+ * la conexión se establece sin problema y la consulta se queda esperando.
+ *
+ * Para eso van los otros dos, y van **en Postgres**, no en el cliente.
+ *
+ * `pg` ofrece un `query_timeout` propio, pero solo deja de esperar: **la
+ * consulta sigue corriendo en el servidor**, con su bloqueo y su CPU. Bajo un
+ * `LOCK TABLE` eso libera al navegador y no libera la base, así que las
+ * conexiones del pool se van apilando en espera hasta agotarlo, y la
+ * aplicación acaba caída igual — solo que con otro síntoma y sin nada en los
+ * registros de Postgres. Un timeout que no cancela el trabajo no es un
+ * timeout, es mirar hacia otro lado.
+ *
+ * `statement_timeout` sí lo cancela: Postgres aborta la consulta, devuelve
+ * error 57014 y la conexión queda libre para la siguiente petición.
+ *
+ * Y `lock_timeout` aparte, más corto, porque son cosas distintas. Esperar por
+ * un bloqueo no avanza nunca: o lo consigues pronto o el que lo tiene va para
+ * largo. Con solo `statement_timeout`, cada petición contra una tabla
+ * bloqueada tardaría los 15 s completos en rendirse.
+ */
 export const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
-  // Sin esto, una petición contra una BD apagada se queda esperando hasta el
-  // timeout del sistema operativo: la persona ve el spinner y no un error.
   connectionTimeoutMillis: 5_000,
+  // Se aplican al abrir cada conexión del pool, así que valen para todo el que
+  // pase por aquí. Los trabajos largos —importador, migraciones— los levantan
+  // con SET LOCAL dentro de su propia transacción.
+  options: '-c statement_timeout=15000 -c lock_timeout=3000',
 });
 
 /**
