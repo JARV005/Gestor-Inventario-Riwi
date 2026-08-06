@@ -17,7 +17,9 @@ Ahora gana `docs/decisiones-01.md`
 - Front: React 19, Vite, Tailwind 4, lucide-react, recharts, motion
 - Back: Express (`server.ts`), TypeScript, `tsx` en desarrollo
 - BD: PostgreSQL propio (no Supabase, no ORM impuesto — proponer antes de instalar)
-- IA: Gemini vía `@google/genai`, solo para el copiloto y las actas
+- IA: **ninguna**. Se eliminó entera en la etapa 4b (`docs/decisiones-03.md`
+  §D6). La aplicación no hace ninguna llamada a servicios externos: no añadir
+  una sin proponerlo antes.
 
 ## Reglas del proyecto
 
@@ -29,7 +31,7 @@ Ahora gana `docs/decisiones-01.md`
    rechazos con `requiere_revision = true`. No adivinar seriales, licencias ni
    responsables.
 4. **`bios_password` y `licencia_serial` van cifrados** (AES-256-GCM), nunca
-   aparecen en listados, logs, exportaciones ni en payloads hacia Gemini.
+   aparecen en listados, logs ni exportaciones.
 5. **Las mutaciones de estado escriben en `equipos` y `movimientos` en la misma
    transacción.** Nunca por separado.
 6. **`data/origen/` está en `.gitignore`** y no debe salir de ahí. Contiene

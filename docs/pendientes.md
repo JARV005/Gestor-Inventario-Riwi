@@ -21,7 +21,74 @@ movimientos `Alta`.
 
 ---
 
-## Etapa 5 — movimientos
+## Etapa 5 — movimientos y actas
+
+### El cuerpo del acta quedó en TODO(5)
+
+Sin IA (`decisiones-03.md` §D6), el acta pasa a plantilla fija. Construirla es
+trabajo de la etapa 5; lo que la 4b dejó hecho es la mitad de lectura:
+`HandoverDocumentView` saca de la base los datos del colaborador (nombre,
+puesto, área, cédula, sede) y del equipo (modelo, etiqueta, serial, licencia,
+sede, estado, especificaciones).
+
+Falta el cuerpo: razón social, número de acta, cláusulas de custodia y uso,
+protocolo de devolución y los dos bloques de firma. Está marcado con `TODO(5)`
+en la vista, y **el hueco se ve en pantalla a propósito**: el documento dice que
+sirve para consultar y no para firmarse. Un acta que se imprime con aspecto de
+completa y sin cláusulas es la que alguien firma sin mirar.
+
+**Punto de partida — NO revisado por legal.** Es la plantilla del `fallback` del
+endpoint de Gemini, la que salía cuando no había clave de API. Se transcribe
+aquí entera porque el endpoint se borró y esto es lo único aprovechable que
+tenía dentro. Hay que pasarla por alguien de legal antes de imprimir nada:
+
+```markdown
+# ACTA DE ENTREGA Y RESPONSABILIDAD DE EQUIPO DE COMPUTO
+**Organización:** <razón social>
+**Fecha:** <fecha de entrega>
+**Lugar / Sede:** <sede>
+
+---
+
+### DATOS DEL COLABORADOR
+- **Nombre Completo:** <nombre>
+- **Puesto / Rol:** <cargo>
+- **Documento / ID:** <cédula>
+
+### DETALLE DEL EQUIPO ASIGNADO
+- **Equipo / Modelo:** <marca y modelo>
+- **Número de Serie:** <serial>
+- **Especificaciones:** <procesador, RAM, disco, SO>
+- **Estado Físico:** <condición>
+
+---
+
+### COMPROMISO Y CONDICIONES DE USO
+1. El colaborador declara haber recibido el equipo descrito arriba en perfectas
+   condiciones operativas y físicas.
+2. El equipo está destinado exclusivamente para el desempeño de las labores
+   asignadas por la empresa.
+3. El colaborador se compromete a cuidar el bien y notificar de inmediato
+   cualquier falla, extravío o daño a TI.
+4. En caso de desvinculación (Offboarding), el colaborador deberá devolver el
+   equipo.
+
+---
+**Firma del Colaborador:** _______________________
+**Firma de Entrega TI:** _______________________
+```
+
+Tres cosas que hay que corregir al montarla, y que en el original estaban mal:
+
+- **«Estado Físico: Excelente / Como Nuevo (Certificado FirstPlug)» iba fijo**,
+  sin mirar el equipo. Va `equipos.condicion`, y si es NULL va vacío: es
+  precisamente el campo que `verificar-datos.sql` §D prohíbe rellenar en
+  equipos de cómputo, así que en un portátil quedará en blanco.
+- **La cláusula 4 mandaba usar «el kit de recolección FirstPlug»**, que no
+  existe. El protocolo de devolución hay que escribirlo.
+- **El original llevaba número de acta inventado** (`FP-2026-9041`) y una
+  firmante que no existe. Si el acta lleva número, tiene que salir de una
+  secuencia real; el firmante, de la sesión.
 
 ### Los traslados abiertos desaparecieron de la interfaz
 

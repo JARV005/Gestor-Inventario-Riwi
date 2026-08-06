@@ -13,8 +13,12 @@ Las vistas grandes siguen con los colores crudos de Tailwind (`blue-600`,
 posteriores:
 
 `InventoryView` · `DashboardView` · `EmployeesView` · `MaintenanceView`
-`HandoverDocumentView` · `LogisticsHubsView` · `AiCopilotModal`
+`HandoverDocumentView` · `LogisticsHubsView`
 `OnboardingModal` · `NewDeviceModal`
+
+*(`AiCopilotModal` estaba en esta lista y ya no existe: el copiloto se eliminó
+en la 4b, `decisiones-03.md` §D6. `LogisticsHubsView` lo sustituyó `SedesView`
+en la 4a.)*
 
 **La app se ve despareja a propósito.** No es un defecto pendiente de arreglar:
 pintar componentes que se van a reescribir en la 4a sería trabajo tirado.

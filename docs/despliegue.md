@@ -50,6 +50,31 @@ En `.env`, a partir de `.env.example`. `.env` está en `.gitignore`.
 `POSTGRES_PASSWORD` no tiene valor por defecto a propósito: docker compose falla
 si no está definida, en vez de arrancar con una contraseña adivinable.
 
+## La aplicación es completamente interna
+
+**No hace ninguna llamada a servicios externos.** Ni una. Todo lo que necesita
+está dentro: Postgres, la sesión en Postgres, los ficheros estáticos que sirve
+ella misma.
+
+Hasta la etapa 4b no era así. El copiloto mandaba datos del inventario a la API
+de Google (`generativelanguage.googleapis.com`) y eso obligaba a que la máquina
+tuviera salida a internet y a que alguien custodiara una clave de API. El módulo
+se eliminó entero — `docs/decisiones-03.md` §D6 — y con él la única salida.
+
+Lo que esto permite, y conviene aprovechar:
+
+- **La máquina puede vivir sin salida a internet.** Un cortafuegos que bloquee
+  todo el tráfico saliente no rompe nada de la aplicación. Solo hace falta
+  alcanzarla desde la red interna, y que ella alcance a Postgres.
+- **No hay ninguna clave de proveedor externo que custodiar.** La única clave
+  sensible sigue siendo `ENCRYPTION_KEY`, que no sale de la máquina; su
+  procedimiento está más abajo.
+- **Ningún dato del inventario cruza la frontera de la empresa.** Antes sí lo
+  hacía, con una lista blanca de seis campos como única salvaguarda.
+
+Si alguien vuelve a añadir una llamada saliente, esta sección deja de ser cierta
+y hay que actualizarla en el mismo cambio.
+
 ## El puerto es 5433, no 5432
 
 Si hay un Postgres instalado en la máquina, se queda con el 5432 y las

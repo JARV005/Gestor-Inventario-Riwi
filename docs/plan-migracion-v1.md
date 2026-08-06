@@ -8,7 +8,7 @@
 ## 0. Contexto
 
 - **Base actual:** prototipo React 19 + Vite + Tailwind 4 generado en Google AI Studio. Estado 100% en memoria (`useState` sobre `src/data/mockData.ts`). Sin persistencia, sin auth, sin BD.
-- **Backend existente:** `server.ts` (Express) con 3 endpoints proxy a Gemini: `/api/gemini/chat`, `/api/gemini/handover-act`, `/api/gemini/recommend-kit`.
+- **Backend existente:** `server.ts` (Express) con 3 endpoints proxy a Gemini: `/api/gemini/chat`, `/api/gemini/handover-act`, `/api/gemini/recommend-kit`. *(Los tres se han eliminado: `recommend-kit` en la etapa 1 con el catálogo, los otros dos en la 4b — `decisiones-03.md` §D6. La línea se conserva porque describe el punto de partida.)*
 - **Datos reales:** `inventario_muestra_johan.xlsx` — 126 equipos, 61 periféricos, 3 sedes (Medellín, Barranquilla, Cartagena).
 
 ### Decisiones tomadas
@@ -30,7 +30,6 @@
 - Mantenimiento
 - Actas de entrega / devolución
 - Modales: Onboarding, Nuevo Equipo
-- Copiloto IA (ver §6 — restricciones)
 
 ### Se eliminan
 - `src/components/ProcurementCatalogView.tsx`
@@ -39,6 +38,9 @@
 - `CATALOG_ITEMS` e `INITIAL_SOFTWARE_LICENSES` en `mockData.ts`
 - Endpoint `/api/gemini/recommend-kit` (dependía del catálogo)
 - Entradas correspondientes en `Sidebar.tsx`
+- **El copiloto IA entero** (etapa 4b): `AiCopilotModal.tsx`, `src/lib/contextoIA.ts`,
+  `/api/gemini/chat`, `/api/gemini/handover-act` y la dependencia `@google/genai`.
+  Ver `decisiones-03.md` §D6
 
 > La licencia de Windows **por equipo** (`TIPO DE LICENCIA`, `SERIAL WINDOWS`) NO se elimina: es campo del equipo, no un módulo.
 
@@ -205,11 +207,10 @@ Esto es el argumento central del proyecto: hoy las claves BIOS y los seriales de
 
 ## 6. Copiloto IA — restricción
 
-`AiCopilotModal` envía datos del inventario a la API de Google. Con la BD on-premise, hay que ser explícito:
-
-- El payload enviado a Gemini se construye con una **lista blanca** de campos: categoría, marca, modelo, estado, sede, antigüedad.
-- Prohibido enviar: `bios_password_cifrado`, `licencia_serial_cifrado`, `serial`, `sesion_usuario`, `cedula`, `email_corporativo`, direcciones.
-- Si esa salida a internet no es aceptable para la empresa, el módulo se desactiva con un flag `ENABLE_AI_COPILOT=false` y la app funciona igual.
+> **Sin efecto desde la etapa 4b.** El proyecto no lleva IA: no hay copiloto,
+> no hay endpoints hacia Gemini y no sale nada de la red de la empresa. Esta
+> sección entera existía para hacer aceptable esa salida; sin salida, no tiene
+> objeto. Ver `docs/decisiones-03.md` §D6.
 
 ---
 
