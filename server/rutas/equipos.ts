@@ -49,6 +49,22 @@ const camposEquipo = z.object({
   empleado_id: uuid.nullable().optional(),
   sesion_usuario: z.string().trim().max(200).nullable().optional(),
   notas: z.string().trim().max(2000).nullable().optional(),
+  /**
+   * Pesos colombianos, como cadena: `numeric(14,2)` no cabe en un `number` de
+   * JavaScript sin perder precisión, y `pg` lo devuelve como texto por lo
+   * mismo. Se valida la forma aquí para que un «12.345,67» no llegue a
+   * Postgres como error de sintaxis.
+   *
+   * Estaba fuera del esquema mientras nadie escribía equipos. Al conectar
+   * `NewDeviceModal` resultó que el formulario ya pedía el costo y la API lo
+   * descartaba sin decir nada: se tecleaba un número y no llegaba a la base.
+   */
+  costo: z
+    .string()
+    .trim()
+    .regex(/^\d{1,12}(\.\d{1,2})?$/, { message: 'importe inválido; usar punto decimal' })
+    .nullable()
+    .optional(),
 });
 
 const esquemaCrear = camposEquipo;
@@ -190,7 +206,12 @@ export function registrarRutasEquipos(app: Express): void {
     guardian,
     asincrono(async (req, res) => {
       const datos = validar(esquemaCrear, req.body);
-      res.status(201).json({ equipo: await repoEquipos.crear(datos) });
+      // `guardian` ya rechazó la petición sin sesión, pero el tipo no lo sabe.
+      // Si alguna vez dejara de hacerlo, esto falla aquí y no escribe un
+      // movimiento sin autor.
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+      res.status(201).json({ equipo: await repoEquipos.crear(datos, usuarioId) });
     }),
   );
 

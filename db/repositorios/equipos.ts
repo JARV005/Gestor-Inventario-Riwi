@@ -211,9 +211,46 @@ export async function porId(id: string, bd: BD = db) {
   return { ...fila, motivos_revision: motivos.map((m) => m.codigo) };
 }
 
-export async function crear(datos: typeof equipos.$inferInsert, bd: BD = db) {
-  const [fila] = await bd.insert(equipos).values(datos).returning(CAMPOS_PUBLICOS);
-  return fila;
+/**
+ * Alta de un equipo: la fila **y su movimiento `Alta`**, en una transacción.
+ *
+ * Las dos escrituras juntas no son una preferencia de estilo, son un
+ * invariante comprobado: `verificar-datos.sql` §F exige que todo equipo tenga
+ * exactamente un `Alta` y que sea su movimiento más antiguo. La versión
+ * anterior de esta función insertaba solo en `equipos`, así que el primer alta
+ * hecha desde la interfaz habría dejado el verificador en rojo — no al
+ * crearla, sino la próxima vez que alguien lo corriera, que es cuando ya no se
+ * sabe quién la metió.
+ *
+ * Se descubrió al conectar `NewDeviceModal`: mientras nadie escribía equipos,
+ * el hueco no tenía forma de notarse. Los 186 del Excel sí traen su `Alta`,
+ * porque el importador lo escribía a mano.
+ *
+ * `usuarioId` es obligatorio y no tiene valor por defecto: `movimientos`
+ * existe para saber quién hizo qué, y un alta sin autor es justo lo que la
+ * columna `NOT NULL` está impidiendo.
+ */
+export async function crear(
+  datos: typeof equipos.$inferInsert,
+  usuarioId: string,
+  bd: BD = db,
+) {
+  return bd.transaction(async (tx) => {
+    const [fila] = await tx.insert(equipos).values(datos).returning(CAMPOS_PUBLICOS);
+
+    await tx.insert(movimientos).values({
+      equipo_id: fila.id,
+      tipo: 'Alta',
+      // Destino y no origen: antes del alta el equipo no estaba en ningún
+      // sitio ni con nadie. Origen se queda NULL a propósito.
+      sede_destino_id: fila.sede_id,
+      empleado_destino_id: fila.empleado_id,
+      usuario_app_id: usuarioId,
+      observaciones: 'Alta manual desde la aplicación',
+    });
+
+    return fila;
+  });
 }
 
 export async function actualizar(
