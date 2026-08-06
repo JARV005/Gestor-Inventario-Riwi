@@ -1,8 +1,6 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 
-import type { Empleado, Equipo, Sede, UsuarioSesion } from './types';
-import { EMPLEADOS_DEMO, EQUIPOS_DEMO, SEDES_DEMO } from './data/mockData';
-import { construirContextoIA } from './lib/contextoIA';
+import type { EquipoConMotivos, EstadoEquipo, ResumenEquipos, UsuarioSesion } from './types';
 import { api } from './lib/api';
 import { Login } from './components/Login';
 
@@ -15,7 +13,6 @@ import { EmployeesView } from './components/EmployeesView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
 
-import { AiCopilotModal } from './components/AiCopilotModal';
 import { OnboardingModal } from './components/OnboardingModal';
 import { NewDeviceModal } from './components/NewDeviceModal';
 
@@ -37,23 +34,28 @@ export function App() {
   }, []);
 
   /**
-   * TODO(4b): estas tres listas siguen viniendo de `mockData`. Solo
-   * `InventoryView` está conectada a la API, y lo hace por su cuenta: no lee de
-   * aquí. El resto de vistas las usa como relleno hasta que les toque.
+   * Los dos contadores del sidebar, y nada más.
+   *
+   * Cada vista pide sus propios datos; lo único que `App` necesita saber es lo
+   * que se pinta fuera de la vista activa. `null` mientras no se sepa: si la
+   * consulta falla, el badge no aparece, que no es lo mismo que enseñar un
+   * cero que nadie contó.
    */
-  const [equipos, setEquipos] = useState<Equipo[]>(EQUIPOS_DEMO);
-  const [empleados, setEmpleados] = useState<Empleado[]>(EMPLEADOS_DEMO);
-  const [sedes] = useState<Sede[]>(SEDES_DEMO);
+  const [resumen, setResumen] = useState<ResumenEquipos | null>(null);
 
-  const [isCopilotOpen, setIsCopilotOpen] = useState<boolean>(false);
+  const recargarResumen = useCallback(() => {
+    api.resumenEquipos().then(setResumen, () => setResumen(null));
+  }, []);
+
+  useEffect(() => {
+    if (usuario) recargarResumen();
+  }, [usuario, recargarResumen]);
+
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
   const [isNewDeviceModalOpen, setIsNewDeviceModalOpen] = useState<boolean>(false);
-  const [equipoParaActa, setEquipoParaActa] = useState<Equipo | null>(null);
+  const [equipoParaActa, setEquipoParaActa] = useState<EquipoConMotivos | null>(null);
 
-  const handleAddEquipo = (nuevo: Equipo) => setEquipos((prev) => [nuevo, ...prev]);
-  const handleAddEmpleado = (nuevo: Empleado) => setEmpleados((prev) => [nuevo, ...prev]);
-
-  const handleGenerarActa = (equipo: Equipo) => {
+  const handleGenerarActa = (equipo: EquipoConMotivos) => {
     setEquipoParaActa(equipo);
     setActiveTab('documents');
   };
@@ -65,9 +67,17 @@ export function App() {
    * D1: "en tránsito" ya no es un ticket de logística, es un estado del equipo.
    * El contador del sidebar sale de ahí. El traslado en sí es un movimiento, y
    * eso llega en la etapa 5.
+   *
+   * Un estado sin filas no viene en `por_estado` —`GROUP BY` no devuelve grupos
+   * vacíos—, y hoy es el caso de los dos: cero equipos en tránsito y cero en
+   * mantenimiento. La ausencia se lee como cero; el `null` de `resumen` es
+   * «no se sabe» y se propaga tal cual.
    */
-  const enTransito = equipos.filter((e) => e.estado === 'En tránsito').length;
-  const enMantenimiento = equipos.filter((e) => e.estado === 'En mantenimiento').length;
+  const conteoDe = (estado: EstadoEquipo): number | null =>
+    resumen ? (resumen.por_estado.find((e) => e.estado === estado)?.equipos ?? 0) : null;
+
+  const enTransito = conteoDe('En tránsito');
+  const enMantenimiento = conteoDe('En mantenimiento');
 
   if (usuario === undefined) {
     return <div className="min-h-screen bg-surface-alt" aria-busy="true" />;
@@ -83,7 +93,6 @@ export function App() {
         setActiveTab={setActiveTab}
         searchTerm={searchTerm}
         setSearchTerm={setSearchTerm}
-        onOpenAiCopilot={() => setIsCopilotOpen(true)}
         onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
         onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
       />
@@ -97,13 +106,10 @@ export function App() {
         />
 
         <main className="flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8 bg-surface-alt space-y-8">
+          {/* Conectada: pide su resumen agregado por su cuenta. */}
           {activeTab === 'dashboard' && (
             <DashboardView
-              equipos={equipos}
-              empleados={empleados}
-              sedes={sedes}
               setActiveTab={setActiveTab}
-              onOpenAiCopilot={() => setIsCopilotOpen(true)}
               onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
             />
@@ -133,35 +139,22 @@ export function App() {
 
           {activeTab === 'maintenance' && <MaintenanceView />}
 
+          {/* Conectada: lee equipos, empleados y sedes por su cuenta. */}
           {activeTab === 'documents' && (
-            <HandoverDocumentView
-              equipos={equipos}
-              empleados={empleados}
-              equipoSeleccionado={equipoParaActa}
-            />
+            <HandoverDocumentView equipoSeleccionado={equipoParaActa} />
           )}
         </main>
       </div>
 
-      <AiCopilotModal
-        isOpen={isCopilotOpen}
-        onClose={() => setIsCopilotOpen(false)}
-        inventorySummaryContext={construirContextoIA(equipos, sedes)}
-      />
-
       <OnboardingModal
         isOpen={isOnboardingModalOpen}
         onClose={() => setIsOnboardingModalOpen(false)}
-        empleados={empleados}
-        equipos={equipos}
       />
 
       <NewDeviceModal
         isOpen={isNewDeviceModalOpen}
         onClose={() => setIsNewDeviceModalOpen(false)}
-        empleados={empleados}
-        sedes={sedes}
-        onAddEquipo={handleAddEquipo}
+        onCreado={recargarResumen}
       />
     </div>
   );

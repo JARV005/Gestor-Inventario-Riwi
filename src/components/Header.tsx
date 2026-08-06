@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import {
   Search,
   Bell,
-  Sparkles,
   Building2,
   ChevronDown,
   Plus,
@@ -11,7 +10,6 @@ import {
 } from 'lucide-react';
 
 interface HeaderProps {
-  onOpenAiCopilot: () => void;
   onOpenNewDeviceModal: () => void;
   onOpenOnboardingModal: () => void;
   activeTab: string;
@@ -21,7 +19,6 @@ interface HeaderProps {
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  onOpenAiCopilot,
   onOpenNewDeviceModal,
   onOpenOnboardingModal,
   activeTab,
@@ -111,17 +108,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Quick Actions & Copilot Button */}
+          {/* Quick Actions */}
           <div className="flex items-center gap-2.5">
-            {/* AI Copilot Button */}
-            <button
-              onClick={onOpenAiCopilot}
-              className="flex items-center gap-2 px-3.5 py-1.5 bg-brand hover:bg-brand-hover text-white text-xs font-medium rounded-lg shadow-sm transition-all"
-            >
-              <Sparkles className="w-3.5 h-3.5 text-brand-subtle animate-pulse" />
-              <span className="hidden md:inline">Copilot IA</span>
-            </button>
-
             {/* Quick Action: Send Onboarding Kit */}
             <button
               onClick={onOpenOnboardingModal}

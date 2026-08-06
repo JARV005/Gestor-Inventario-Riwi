@@ -20,7 +20,7 @@
  * un `.select()` sin argumentos. El comentario avisa; el test es lo que impide.
  */
 
-import { and, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
 
 import { db, type BD } from '../cliente.js';
 import { descifrar } from '../cifrado.js';
@@ -146,6 +146,46 @@ export async function listar(f: FiltrosEquipos = {}, bd: BD = db) {
     total,
     pagina,
     porPagina,
+  };
+}
+
+/**
+ * Los agregados del dashboard y del contador del sidebar.
+ *
+ * Se agrupa **en Postgres**. La alternativa era pedir el listado entero y
+ * contar en el navegador, que es lo que hacía `mockData`, y tiene dos
+ * problemas: se rompe en cuanto la paginación recorta —el número saldría de
+ * las 200 filas traídas, no de las que hay— y sobre todo deja de ser
+ * comprobable. Un `GROUP BY` se contrasta con el mismo `GROUP BY` en psql; un
+ * `Array.filter` sobre una página solo se puede contrastar contra sí mismo.
+ *
+ * Helpers tipados (`count`, `groupBy`) y no ``sql`` `` crudo: aquí no hay
+ * subconsulta correlacionada que pueda resolver contra la tabla equivocada,
+ * porque no hay cadena que abra un ámbito que drizzle no vea.
+ *
+ * Un estado sin ninguna fila **no sale** en `por_estado`: `GROUP BY` no
+ * inventa grupos vacíos. Quien lo pinte debe tratar la ausencia como cero, no
+ * suponer que están los seis.
+ */
+export async function resumen(bd: BD = db) {
+  const [porEstado, porCategoria, totales] = await Promise.all([
+    bd
+      .select({ estado: equipos.estado, equipos: count() })
+      .from(equipos)
+      .groupBy(equipos.estado)
+      .orderBy(asc(equipos.estado)),
+    bd
+      .select({ categoria: equipos.categoria, equipos: count() })
+      .from(equipos)
+      .groupBy(equipos.categoria)
+      .orderBy(asc(equipos.categoria)),
+    bd.select({ total: count() }).from(equipos),
+  ]);
+
+  return {
+    por_estado: porEstado,
+    por_categoria: porCategoria,
+    total: totales[0]?.total ?? 0,
   };
 }
 

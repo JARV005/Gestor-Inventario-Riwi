@@ -12,7 +12,9 @@ import type {
   EquipoConMotivos,
   EquipoResumen,
   MantenimientoConEquipo,
+  NuevoEquipo,
   Pagina,
+  ResumenEquipos,
   Sede,
   SedeConConteos,
   UsuarioSesion,
@@ -138,6 +140,19 @@ export const api = {
   },
 
   equipo: (id: string) => pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${id}`),
+
+  /** Los agregados del dashboard, contados en Postgres y no aquí. */
+  resumenEquipos: () => pedir<ResumenEquipos>('/api/equipos/resumen'),
+
+  /**
+   * Alta de un equipo. El servidor escribe la fila y su movimiento `Alta` en
+   * la misma transacción; aquí solo se manda lo que el formulario recogió.
+   */
+  crearEquipo: (datos: NuevoEquipo) =>
+    pedir<{ equipo: EquipoConMotivos }>('/api/equipos', {
+      method: 'POST',
+      body: JSON.stringify(datos),
+    }),
 
   empleados: (f: { q?: string; sede?: string; activo?: boolean; pagina?: number; porPagina?: number } = {}) =>
     pedir<Pagina<EmpleadoConConteo>>(`/api/empleados${consulta(f)}`),

@@ -1,262 +1,292 @@
-import React, { useState } from 'react';
-import type { Empleado, Equipo } from '../types';
-import { FileText, Printer, Sparkles, CheckCircle2, User, Laptop, MapPin, Download, PenTool, X } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { CircleDashed, Printer, User, Laptop } from 'lucide-react';
+
+import type { EmpleadoConConteo, EquipoConMotivos, Sede } from '../types';
+import { api, ErrorApi } from '../lib/api';
+import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
+
+/**
+ * El acta de entrega, en modo lectura.
+ *
+ * Hasta la etapa 4b el cuerpo lo redactaba Gemini contra
+ * `POST /api/gemini/handover-act`, y cuando no había clave de API caía a una
+ * plantilla fija. Ya no hay IA en el proyecto (`docs/decisiones-03.md`), así
+ * que el acta pasa a plantilla fija siempre — que es lo que debió ser desde el
+ * principio: un documento legal tiene formato estable, y una redacción distinta
+ * cada vez es un defecto, no una función.
+ *
+ * **Esa plantilla es trabajo de la etapa 5.** Lo que hace esta vista hoy es
+ * leer de la base los datos que el acta necesita, que es la mitad que sí
+ * pertenece a la 4b. El cuerpo —cláusulas, número de acta, firmante de la
+ * empresa— queda como hueco declarado: ver `docs/pendientes.md`.
+ *
+ * Lo que traía el prototipo en su lugar no era un borrador, era relleno:
+ * razón social de otra empresa, un número de acta inventado, una firmante que
+ * no existe y una cláusula sobre el agente MDM, que D3 retiró del proyecto. Un
+ * acta con datos inventados es peor que un acta a medias, porque la de a medias
+ * no se puede firmar por error.
+ */
 
 interface HandoverDocumentViewProps {
-  equipos: Equipo[];
-  empleados: Empleado[];
-  equipoSeleccionado?: Equipo | null;
+  /** Llega desde `InventoryView` al pulsar «generar acta» en una fila. */
+  equipoSeleccionado?: EquipoConMotivos | null;
 }
 
+/** El tope que acepta la API. Ver `porPagina` en `server/rutas/equipos.ts`. */
+const TOPE = 200;
+
 export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
-  equipos,
-  empleados,
   equipoSeleccionado,
 }) => {
-  const [selectedEmpId, setSelectedEmpId] = useState<string>(
-    equipoSeleccionado?.empleado_id || empleados[0]?.id || ''
-  );
-  const [selectedDevId, setSelectedDevId] = useState<string>(
-    equipoSeleccionado?.id || equipos[0]?.id || ''
-  );
+  const [empleados, setEmpleados] = useState<EmpleadoConConteo[]>([]);
+  const [equipos, setEquipos] = useState<EquipoConMotivos[]>([]);
+  const [sedes, setSedes] = useState<Sede[]>([]);
+  const [totales, setTotales] = useState({ empleados: 0, equipos: 0 });
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<ErrorApi | null>(null);
 
-  const [loadingAi, setLoadingAi] = useState(false);
-  const [generatedMarkdown, setGeneratedMarkdown] = useState<string | null>(null);
-  const [signed, setSigned] = useState(false);
-  const [showSignatureModal, setShowSignatureModal] = useState(false);
+  const [empleadoId, setEmpleadoId] = useState<string>('');
+  const [equipoId, setEquipoId] = useState<string>('');
 
-  const currentEmp = empleados.find((e) => e.id === selectedEmpId) || empleados[0];
-  const currentDev = equipos.find((d) => d.id === selectedDevId) || equipos[0];
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError(null);
+    try {
+      // En paralelo: son tres lecturas independientes y encadenarlas solo
+      // triplicaría la espera.
+      const [e, q, s] = await Promise.all([
+        api.empleados({ porPagina: TOPE, activo: true }),
+        api.equipos({ porPagina: TOPE }),
+        api.sedes(),
+      ]);
+      setEmpleados(e.filas);
+      setEquipos(q.filas);
+      setSedes(s.sedes);
+      setTotales({ empleados: e.total, equipos: q.total });
+    } catch (e) {
+      setError(e instanceof ErrorApi ? e : new ErrorApi(0, String(e)));
+    } finally {
+      setCargando(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  /**
+   * La preselección se aplica **cuando llegan los datos**, no en el
+   * `useState`: en el primer render las listas están vacías y cualquier valor
+   * por defecto calculado ahí sería el de una lista de cero elementos.
+   */
+  useEffect(() => {
+    if (!equipos.length) return;
+    setEquipoId((actual) => actual || equipoSeleccionado?.id || equipos[0].id);
+  }, [equipos, equipoSeleccionado]);
+
+  useEffect(() => {
+    if (!empleados.length) return;
+    setEmpleadoId((actual) => actual || equipoSeleccionado?.empleado_id || empleados[0].id);
+  }, [empleados, equipoSeleccionado]);
+
+  if (cargando) return <Cargando que="los datos del acta" />;
+  if (error) return <ErrorDeCarga error={error} que="los datos del acta" onReintentar={cargar} />;
+  if (!equipos.length) {
+    return (
+      <Vacio
+        titulo="No hay equipos que entregar"
+        detalle="Un acta necesita un equipo y un colaborador. Cuando haya inventario, esta vista se llena sola."
+      />
+    );
+  }
+
+  const empleado = empleados.find((e) => e.id === empleadoId) ?? null;
+  const equipo = equipos.find((e) => e.id === equipoId) ?? null;
 
   /** Ya no hay `name` ni `specs`: el nombre se compone y las specs son columnas. */
-  const nombreEquipo = (e: Equipo) =>
+  const nombreEquipo = (e: EquipoConMotivos) =>
     e.nombre_equipo ?? e.etiqueta ?? ([e.marca, e.modelo].filter(Boolean).join(' ') || 'Equipo');
 
-  const especificaciones = (e: Equipo) =>
+  const especificaciones = (e: EquipoConMotivos) =>
     [e.procesador, e.ram, e.disco, e.sistema_operativo].filter(Boolean).join(', ') || '—';
 
-  const handleGenerateActWithAi = async () => {
-    if (!currentEmp || !currentDev) return;
-    setLoadingAi(true);
+  /** Resuelve el `sede_id` a nombre. Cierra el TODO(4b) que había aquí. */
+  const nombreSede = (id: string | null) =>
+    (id && sedes.find((s) => s.id === id)?.nombre) || '—';
 
-    try {
-      const response = await fetch('/api/gemini/handover-act', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeName: currentEmp.nombre,
-          employeeRole: currentEmp.cargo ?? '',
-          employeeDocId: `ID-${currentEmp.id.toUpperCase()}`,
-          deviceName: nombreEquipo(currentDev),
-          serialNumber: currentDev.serial ?? '',
-          specs: especificaciones(currentDev),
-          location: currentDev.sede_id ?? null,
-          handoverDate: new Date().toLocaleDateString('es-ES', { year: 'numeric', month: 'long', day: 'numeric' }),
-        }),
-      });
-
-      const data = await response.json();
-      if (data.documentMarkdown) {
-        setGeneratedMarkdown(data.documentMarkdown);
-      }
-    } catch (err) {
-      console.error('Error generating handover document:', err);
-    } finally {
-      setLoadingAi(false);
-    }
-  };
-
-  const handlePrint = () => {
-    window.print();
-  };
+  // Las listas van topadas a 200. Si algún día no caben, hay que decirlo: un
+  // desplegable recortado en silencio es la forma más limpia de firmar el acta
+  // del equipo equivocado.
+  const recortado =
+    totales.equipos > equipos.length || totales.empleados > empleados.length;
 
   return (
     <div className="space-y-6">
-      
-      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+          <h1 className="text-2xl font-bold text-ink tracking-tight">
             Generador de Actas de Entrega de Equipo
-            <span className="text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2.5 py-0.5 rounded-full font-semibold">
-              Legal Compliance
-            </span>
           </h1>
-          <p className="text-xs text-slate-500">
-            Confecciona actas oficiales de responsabilidad de activos informáticos con firma digital.
+          <p className="text-xs text-ink-muted">
+            Datos leídos del inventario. La redacción del acta llega en la etapa 5.
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
-          <button
-            onClick={handleGenerateActWithAi}
-            disabled={loadingAi}
-            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-lg shadow-sm transition-all"
-          >
-            <Sparkles className="w-4 h-4 text-blue-200" />
-            <span>{loadingAi ? 'Redactando Acta...' : 'Redactar Acta con IA'}</span>
-          </button>
-
-          <button
-            onClick={handlePrint}
-            className="flex items-center gap-1.5 px-3 py-2 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-lg border border-slate-200 shadow-xs transition-colors"
-          >
-            <Printer className="w-4 h-4 text-slate-500" />
-            <span>Imprimir / PDF</span>
-          </button>
-        </div>
+        <button
+          onClick={() => window.print()}
+          className="flex items-center gap-1.5 px-3 py-2 bg-surface hover:bg-surface-alt text-ink-muted text-xs font-semibold rounded-lg border border-line transition-colors"
+        >
+          <Printer className="w-4 h-4 text-ink-muted" />
+          <span>Imprimir / PDF</span>
+        </button>
       </div>
 
-      {/* Selectors Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 shadow-sm">
+      {recortado && (
+        <p className="text-xs text-ink bg-warn/25 border border-warn rounded-lg px-3 py-2">
+          Los desplegables muestran los primeros {TOPE}. Hay {totales.equipos} equipos y{' '}
+          {totales.empleados} colaboradores activos: falta buscador, y hasta entonces puede no
+          estar el que busca.
+        </p>
+      )}
+
+      {/* Selectores */}
+      <div className="bg-surface border border-line rounded-xl p-4 grid grid-cols-1 sm:grid-cols-2 gap-4 shadow-sm">
         <div>
-          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Colaborador Receptor</label>
+          <label
+            htmlFor="acta-empleado"
+            className="block text-xs font-bold text-ink-muted uppercase mb-1"
+          >
+            Colaborador receptor
+          </label>
           <select
-            value={selectedEmpId}
-            onChange={(e) => setSelectedEmpId(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+            id="acta-empleado"
+            value={empleadoId}
+            onChange={(e) => setEmpleadoId(e.target.value)}
+            className="w-full bg-surface-alt border border-line rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-brand"
           >
             {empleados.map((e) => (
               <option key={e.id} value={e.id}>
-                {e.nombre}{e.cargo ? ` (${e.cargo})` : ''}
+                {e.nombre}
+                {e.cargo ? ` (${e.cargo})` : ''}
               </option>
             ))}
           </select>
         </div>
 
         <div>
-          <label className="block text-xs font-bold text-slate-700 uppercase mb-1">Equipo a Entregar</label>
+          <label
+            htmlFor="acta-equipo"
+            className="block text-xs font-bold text-ink-muted uppercase mb-1"
+          >
+            Equipo a entregar
+          </label>
           <select
-            value={selectedDevId}
-            onChange={(e) => setSelectedDevId(e.target.value)}
-            className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:border-blue-600"
+            id="acta-equipo"
+            value={equipoId}
+            onChange={(e) => setEquipoId(e.target.value)}
+            className="w-full bg-surface-alt border border-line rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-brand"
           >
             {equipos.map((d) => (
               <option key={d.id} value={d.id}>
-                {nombreEquipo(d)} [{d.etiqueta ?? '—'} - {d.serial ?? '—'}]
+                {nombreEquipo(d)} [{d.etiqueta ?? '—'} · {d.serial ?? '—'}]
               </option>
             ))}
           </select>
         </div>
       </div>
 
-      {/* Printable Document Preview Paper */}
+      {/* El documento */}
       <div className="bg-white text-slate-900 rounded-2xl p-8 shadow-2xl border border-slate-300 max-w-3xl mx-auto space-y-6 print:m-0 print:p-0 print:shadow-none print:border-none">
-        
-        {/* Document Header */}
-        <div className="flex justify-between items-start border-b-2 border-slate-900 pb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-900 text-cyan-400 flex items-center justify-center font-black text-xl">
-              FP
+        <div className="text-center font-bold text-lg tracking-wide uppercase border-b-2 border-slate-900 pb-3">
+          Acta de entrega y responsabilidad de equipo tecnológico
+        </div>
+
+        {/* Datos del colaborador — reales, de `empleados` */}
+        <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
+          <div className="font-bold uppercase text-[10px] text-slate-500 flex items-center gap-1.5">
+            <User className="w-3 h-3" />
+            Datos del colaborador receptor
+          </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              Nombre: <strong>{empleado?.nombre ?? '—'}</strong>
             </div>
             <div>
-              <h2 className="font-black text-xl tracking-tight text-slate-900 uppercase">FirstPlug ITAM</h2>
-              <p className="text-xs text-slate-600 font-medium">Plataforma de Gestión de Activos Informáticos</p>
+              Puesto: <strong>{empleado?.cargo ?? '—'}</strong>
             </div>
-          </div>
-          <div className="text-right text-xs text-slate-600">
-            <p className="font-bold text-slate-900">ACTA DE ENTREGA Nº FP-2026-9041</p>
-            <p>Fecha: {new Date().toLocaleDateString('es-ES')}</p>
+            <div>
+              Área: <strong>{empleado?.area ?? '—'}</strong>
+            </div>
+            <div>
+              Cédula: <strong>{empleado?.cedula ?? '—'}</strong>
+            </div>
+            <div className="col-span-2">
+              Sede: <strong>{nombreSede(empleado?.sede_id ?? null)}</strong>
+            </div>
           </div>
         </div>
 
-        <div className="text-center font-bold text-lg text-slate-900 tracking-wide uppercase border-b pb-2">
-          ACTA DE ENTREGA Y RESPONSABILIDAD DE EQUIPO TECNOLÓGICO
-        </div>
-
-        {/* Formatted Markdown Content or Standard Template */}
-        {generatedMarkdown ? (
-          <div className="text-xs leading-relaxed space-y-3 whitespace-pre-wrap text-slate-800 font-sans">
-            {generatedMarkdown}
+        {/* Datos del equipo — reales, de `equipos` */}
+        <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
+          <div className="font-bold uppercase text-[10px] text-slate-500 flex items-center gap-1.5">
+            <Laptop className="w-3 h-3" />
+            Detalles del equipo tecnológico
           </div>
-        ) : (
-          <div className="space-y-5 text-xs text-slate-800 leading-relaxed">
-            <p>
-              Por medio del presente documento, la empresa <strong>FirstPlug Managed Operations / TechCorp Global Inc.</strong> hace entrega formal en calidad de resguardo y custodia del equipo de cómputo descrito a continuación:
-            </p>
-
-            {/* Employee Box */}
-            <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
-              <div className="font-bold uppercase text-[10px] text-slate-500">Datos del Colaborador Receptor</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>Nombre: <strong>{currentEmp?.nombre}</strong></div>
-                <div>Puesto: <strong>{currentEmp?.cargo ?? '—'}</strong></div>
-                <div>Área: <strong>{currentEmp?.area ?? '—'}</strong></div>
-                {/* TODO(4b): la sede se resuelve con GET /api/sedes; aquí solo hay el id. */}
-                <div>Cédula: <strong>{currentEmp?.cedula ?? '—'}</strong></div>
-              </div>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div>
+              Equipo / modelo: <strong>{equipo ? nombreEquipo(equipo) : '—'}</strong>
             </div>
-
-            {/* Device Box */}
-            <div className="bg-slate-100 p-3 rounded-lg border border-slate-300 space-y-1">
-              <div className="font-bold uppercase text-[10px] text-slate-500">Detalles del Equipo Tecnológico</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>Equipo / Modelo: <strong>{currentDev ? nombreEquipo(currentDev) : '—'}</strong></div>
-                <div>Etiqueta Activo: <strong>{currentDev?.etiqueta ?? '—'}</strong></div>
-                <div>Número de Serie: <strong>{currentDev?.serial ?? '—'}</strong></div>
-                {/* El enrolamiento MDM se fue con D3: no hay MDM, y el acta no
-                    puede afirmar algo que nadie comprobó. La licencia de
-                    Windows sí es un dato real del equipo. */}
-                <div>Licencia: <strong>{currentDev?.licencia_tipo ?? '—'}</strong></div>
-                <div className="col-span-2">Especificaciones: <strong>{currentDev ? especificaciones(currentDev) : '—'}</strong></div>
-              </div>
+            <div>
+              Etiqueta de activo: <strong>{equipo?.etiqueta ?? '—'}</strong>
             </div>
-
-            <div className="space-y-2">
-              <div className="font-bold text-slate-900 uppercase text-xs">Cláusulas de Custodia y Uso:</div>
-              <ol className="list-decimal pl-5 space-y-1 text-slate-700">
-                <li>El colaborador declara haber recibido el bien en perfecto estado funcional y cosmético.</li>
-                <li>El equipo es de uso estrictamente profesional para el desempeño de las labores asignadas.</li>
-                <li>Queda prohibida la instalación de software no autorizado o desactivar el agente MDM / FileVault.</li>
-                <li>En caso de cese de relación laboral (Offboarding), el colaborador devolverá el activo utilizando el kit de recolección FirstPlug.</li>
-              </ol>
+            <div>
+              Número de serie: <strong>{equipo?.serial ?? '—'}</strong>
             </div>
-          </div>
-        )}
-
-        {/* Signature Area */}
-        <div className="pt-8 grid grid-cols-2 gap-8 text-center text-xs">
-          <div className="space-y-2">
-            {signed ? (
-              <div className="bg-emerald-50 border border-emerald-300 p-2 rounded text-emerald-800 font-semibold text-[11px] flex items-center justify-center gap-1">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                Firmado Digitalmente por {currentEmp?.nombre}
-              </div>
-            ) : (
-              <div className="h-16 border-b border-dashed border-slate-400 flex items-center justify-center text-slate-400">
-                Firma del Colaborador
-              </div>
-            )}
-            <p className="font-bold text-slate-900">{currentEmp?.nombre}</p>
-            <p className="text-[10px] text-slate-500">Colaborador Receptor</p>
-          </div>
-
-          <div className="space-y-2">
-            <div className="h-16 border-b border-dashed border-slate-400 flex items-center justify-center font-serif text-slate-700 italic">
-              Mariana Ríos • FirstPlug IT Ops
+            {/* El enrolamiento MDM se fue con D3: no hay MDM, y el acta no puede
+                afirmar algo que nadie comprobó. La licencia de Windows sí es un
+                dato real del equipo. */}
+            <div>
+              Licencia: <strong>{equipo?.licencia_tipo ?? '—'}</strong>
             </div>
-            <p className="font-bold text-slate-900">FirstPlug IT Operations</p>
-            <p className="text-[10px] text-slate-500">Entregado por Sede Oficial</p>
+            <div>
+              Sede del equipo: <strong>{nombreSede(equipo?.sede_id ?? null)}</strong>
+            </div>
+            <div>
+              Estado: <strong>{equipo?.estado ?? '—'}</strong>
+            </div>
+            <div className="col-span-2">
+              Especificaciones: <strong>{equipo ? especificaciones(equipo) : '—'}</strong>
+            </div>
           </div>
         </div>
 
-        {/* Digital Signature Action Button */}
-        {!signed && (
-          <div className="pt-4 border-t flex justify-center print:hidden">
-            <button
-              onClick={() => {
-                setSigned(true);
-              }}
-              className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-lg shadow-sm flex items-center gap-2"
-            >
-              <PenTool className="w-4 h-4 text-white" />
-              <span>Añadir Firma Digital de Conformidad</span>
-            </button>
-          </div>
-        )}
+        {/*
+          TODO(5): el cuerpo del acta.
 
+          Va aquí: razón social, número de acta, cláusulas de custodia y uso,
+          protocolo de devolución y los dos bloques de firma. El punto de
+          partida está transcrito en `docs/pendientes.md`, y tiene que pasar por
+          alguien de legal antes de imprimirse.
+
+          El hueco se ve a propósito, igual que en el dashboard: un acta que se
+          imprime con aspecto de completa y sin cláusulas es la que alguien
+          firma sin mirar.
+        */}
+        <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 space-y-2">
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-500">
+            <CircleDashed className="w-4 h-4" />
+            Cuerpo del acta — pendiente (etapa 5)
+          </p>
+          <p className="text-xs leading-relaxed text-slate-500">
+            Las cláusulas de custodia y uso, el número de acta y los bloques de firma se redactan
+            en la etapa 5, a partir de una plantilla fija revisada por legal. Hasta entonces este
+            documento sirve para consultar los datos, <strong>no para firmarse</strong>.
+          </p>
+          <p className="text-xs text-slate-500">
+            Ver <span className="font-mono">docs/pendientes.md</span>, etapa 5.
+          </p>
+        </div>
       </div>
-
     </div>
   );
 };

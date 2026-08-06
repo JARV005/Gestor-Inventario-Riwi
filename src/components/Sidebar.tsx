@@ -13,9 +13,15 @@ import {
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
-  /** D1: equipos en estado 'En transito'. Ya no hay tickets de logistica. */
-  enTransitoCount: number;
-  maintenanceCount: number;
+  /**
+   * D1: equipos en estado 'En transito'. Ya no hay tickets de logistica.
+   *
+   * `null` es «todavia no se sabe» —o no se pudo consultar—, y es distinto de
+   * cero. Los dos ocultan el badge, pero un `0` puesto por defecto cuando la
+   * consulta falla es un numero afirmado sin haberlo contado.
+   */
+  enTransitoCount: number | null;
+  maintenanceCount: number | null;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -47,14 +53,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'logistics',
       label: 'Sedes',
       icon: Truck,
-      badge: enTransitoCount > 0 ? `${enTransitoCount} en tránsito` : null,
+      badge: enTransitoCount && enTransitoCount > 0 ? `${enTransitoCount} en tránsito` : null,
       badgeColor: 'bg-info text-ink border-transparent',
     },
     {
       id: 'maintenance',
       label: 'Mantenimiento',
       icon: Wrench,
-      badge: maintenanceCount > 0 ? `${maintenanceCount}` : null,
+      badge: maintenanceCount && maintenanceCount > 0 ? `${maintenanceCount}` : null,
       badgeColor: 'bg-warn text-ink border-transparent',
     },
     {

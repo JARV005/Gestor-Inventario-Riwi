@@ -111,6 +111,19 @@ export function registrarRutasEquipos(app: Express): void {
     }),
   );
 
+  // Igual que '/revision': antes de '/api/equipos/:id' o "resumen" se validaría
+  // como uuid y devolvería un 400 en vez del resumen.
+  ruta(
+    app,
+    'get',
+    '/api/equipos/resumen',
+    'autenticado',
+    guardian,
+    asincrono(async (_req, res) => {
+      res.json(await repoEquipos.resumen());
+    }),
+  );
+
   ruta(
     app,
     'get',

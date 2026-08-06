@@ -107,6 +107,47 @@ export interface EquipoResumen {
   estado: EstadoEquipo;
 }
 
+/**
+ * El cuerpo de `POST /api/equipos`, tal como lo acepta `camposEquipo` en
+ * `server/rutas/equipos.ts`.
+ *
+ * No es `Partial<Equipo>`: `Equipo` trae `id`, `created_at`, `importacion_id`
+ * y `requiere_revision`, que los pone el servidor y que un cliente no debe
+ * poder mandar. Enumerar aquí lo que sí se acepta es lo que hace que añadir un
+ * campo al formulario obligue a tocar también el esquema del servidor.
+ */
+export interface NuevoEquipo {
+  categoria: CategoriaEquipo;
+  etiqueta?: string | null;
+  nombre_equipo?: string | null;
+  marca?: string | null;
+  modelo?: string | null;
+  serial?: string | null;
+  procesador?: string | null;
+  disco?: string | null;
+  ram?: string | null;
+  estado: EstadoEquipo;
+  sede_id?: string | null;
+  empleado_id?: string | null;
+  /** Cadena, no `number`: `numeric(14,2)` no cabe en un `number` sin perder precisión. */
+  costo?: string | null;
+}
+
+/**
+ * Lo que devuelve `GET /api/equipos/resumen`: los agregados que alimentan el
+ * dashboard y el contador del sidebar.
+ *
+ * **Los grupos vacíos no vienen.** Un `GROUP BY` sobre una tabla sin ningún
+ * equipo `Reservado` no devuelve una fila `Reservado: 0`, no devuelve nada. La
+ * interfaz tiene que resolver la ausencia como cero y no dar por hecho que
+ * están los seis estados — de ahí `conteoDe()` en `DashboardView`.
+ */
+export interface ResumenEquipos {
+  por_estado: { estado: EstadoEquipo; equipos: number }[];
+  por_categoria: { categoria: CategoriaEquipo; equipos: number }[];
+  total: number;
+}
+
 export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
 export type Mantenimiento = Serializado<typeof mantenimientos.$inferSelect>;

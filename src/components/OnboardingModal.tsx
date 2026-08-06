@@ -1,50 +1,78 @@
-import React, { useState } from 'react';
-import type { Empleado, Equipo } from '../types';
+import React, { useEffect, useState } from 'react';
+import type { EmpleadoConConteo, EquipoConMotivos } from '../types';
 import { PackageCheck, Truck, CheckCircle2, ChevronRight, X, Sparkles, Building, UserCheck, ShieldCheck } from 'lucide-react';
 import confetti from 'canvas-confetti';
+
+import { api } from '../lib/api';
 
 interface OnboardingModalProps {
   isOpen: boolean;
   onClose: () => void;
-  empleados: Empleado[];
-  equipos: Equipo[];
 }
 
 /**
- * TODO(5): sin conectar, y su salida cambió de naturaleza.
+ * Lee de la base (4b); **no escribe** (etapa 5).
  *
  * Antes creaba un `LogisticsTicket` con transportadora y número de guía
  * inventados. Según D1 lo que tiene que producir es un **movimiento**: de tipo
  * `Asignación`, o `Traslado` si además cambia de sede. Eso escribe en `equipos`
  * y `movimientos` en la misma transacción y no existe hasta la etapa 5.
  *
- * Hasta entonces el asistente recorre sus tres pasos y no persiste nada. El
- * paso de transportadora y guía se queda porque esos campos SÍ existen en
- * `movimientos` desde la 0000; lo que no hay es a dónde mandarlos.
+ * Lo que sí cambió en la 4b: los desplegables ya no salen de `mockData`, salen
+ * de la API. El asistente recorre sus tres pasos sobre datos reales y sigue sin
+ * persistir nada. El paso de transportadora y guía se queda porque esos campos
+ * SÍ existen en `movimientos` desde la 0000; lo que no hay es a dónde mandarlos.
  */
-export const OnboardingModal: React.FC<OnboardingModalProps> = ({
-  isOpen,
-  onClose,
-  empleados,
-  equipos,
-}) => {
+const TOPE = 200;
+
+export const OnboardingModal: React.FC<OnboardingModalProps> = ({ isOpen, onClose }) => {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [selectedEmpId, setSelectedEmpId] = useState(empleados[0]?.id || '');
-  const [selectedLaptopId, setSelectedLaptopId] = useState(
-    equipos.find((d) => d.categoria === 'Portátil' && d.estado === 'Disponible')?.id ||
-      equipos[0]?.id ||
-      '',
-  );
+  const [empleados, setEmpleados] = useState<EmpleadoConConteo[]>([]);
+  const [equipos, setEquipos] = useState<EquipoConMotivos[]>([]);
+  const [selectedEmpId, setSelectedEmpId] = useState('');
+  const [selectedLaptopId, setSelectedLaptopId] = useState('');
   const [includeMonitor, setIncludeMonitor] = useState(true);
   const [includePeripherals, setIncludePeripherals] = useState(true);
   const [courier, setCourier] = useState('Servientrega');
+
+  useEffect(() => {
+    if (!isOpen) return;
+    let vigente = true;
+    Promise.all([
+      api.empleados({ porPagina: TOPE, activo: true }),
+      api.equipos({ porPagina: TOPE }),
+    ]).then(
+      ([e, q]) => {
+        if (!vigente) return;
+        setEmpleados(e.filas);
+        setEquipos(q.filas);
+        // La preselección se hace aquí y no en el `useState`: en el primer
+        // render las listas están vacías.
+        setSelectedEmpId((a) => a || e.filas[0]?.id || '');
+        setSelectedLaptopId(
+          (a) =>
+            a ||
+            q.filas.find((d) => d.categoria === 'Portátil' && d.estado === 'Disponible')?.id ||
+            q.filas[0]?.id ||
+            '',
+        );
+      },
+      () => {
+        // Este asistente no persiste nada todavía: si la carga falla, los
+        // desplegables quedan vacíos y no hay nada que se pueda perder.
+      },
+    );
+    return () => {
+      vigente = false;
+    };
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
   const selectedEmp = empleados.find((e) => e.id === selectedEmpId) ?? empleados[0];
   const selectedLaptop = equipos.find((d) => d.id === selectedLaptopId) ?? equipos[0];
 
-  const nombreEquipo = (e: Equipo | undefined) =>
+  const nombreEquipo = (e: EquipoConMotivos | undefined) =>
     e?.nombre_equipo ?? e?.etiqueta ?? ([e?.marca, e?.modelo].filter(Boolean).join(' ') || 'equipo');
 
   const handleFinishOnboardingKit = () => {

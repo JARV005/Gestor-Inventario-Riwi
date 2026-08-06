@@ -1,5 +1,7 @@
-import React from 'react';
-import type { Empleado, Equipo, Sede } from '../types';
+import React, { useCallback, useEffect, useState } from 'react';
+import type { CategoriaEquipo, EstadoEquipo, ResumenEquipos } from '../types';
+import { api, ErrorApi } from '../lib/api';
+import { Cargando, ErrorDeCarga } from './EstadoCarga';
 import { PendienteEtapa6 } from './PendienteEtapa6';
 import { 
   Laptop, 
@@ -32,47 +34,69 @@ import {
 } from 'recharts';
 
 interface DashboardViewProps {
-  equipos: Equipo[];
-  empleados: Empleado[];
-  sedes: Sede[];
   onOpenNewDeviceModal: () => void;
   onOpenOnboardingModal: () => void;
-  onOpenAiCopilot: () => void;
   setActiveTab: (tab: string) => void;
 }
 
 const COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#8b5cf6'];
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
-  equipos,
-  empleados,
-  sedes,
   onOpenNewDeviceModal,
   onOpenOnboardingModal,
-  onOpenAiCopilot,
   setActiveTab,
 }) => {
+  const [resumen, setResumen] = useState<ResumenEquipos | null>(null);
+  const [cargando, setCargando] = useState(true);
+  const [error, setError] = useState<ErrorApi | null>(null);
+
+  const cargar = useCallback(async () => {
+    setCargando(true);
+    setError(null);
+    try {
+      setResumen(await api.resumenEquipos());
+    } catch (e) {
+      setError(e instanceof ErrorApi ? e : new ErrorApi(0, String(e)));
+    } finally {
+      setCargando(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void cargar();
+  }, [cargar]);
+
+  if (cargando) return <Cargando que="el resumen del inventario" />;
+  if (error) {
+    return <ErrorDeCarga error={error} que="el resumen del inventario" onReintentar={cargar} />;
+  }
+  if (!resumen) return null;
+
+  /**
+   * Un estado sin ninguna fila **no viene** en la respuesta: `GROUP BY` no
+   * devuelve grupos vacíos. Hoy es el caso de 'En tránsito' y 'En
+   * mantenimiento', las dos a cero. Leerlo con un `.find()?.equipos` a secas
+   * daría `undefined`, que en la barra de progreso sale como `NaN%` y en el
+   * texto como «undefined equipos».
+   */
+  const conteoDe = (estado: EstadoEquipo) =>
+    resumen.por_estado.find((e) => e.estado === estado)?.equipos ?? 0;
+
   // TODO(6): sustituir estas cuentas por los 7 widgets de D3.
-  const totalCount = equipos.length;
-  const inUseCount = equipos.filter((d) => d.estado === 'Asignado').length;
-  const availableInHubs = equipos.filter((d) => d.estado === 'Disponible').length;
-  const inTransitCount = equipos.filter((d) => d.estado === 'En tránsito').length;
-  const inMaintenanceCount = equipos.filter((d) => d.estado === 'En mantenimiento').length;
-  const pendingReturnCount = equipos.filter((d) => d.estado === 'Reservado').length;
+  const totalCount = resumen.total;
+  const inUseCount = conteoDe('Asignado');
+  const availableInHubs = conteoDe('Disponible');
+  const inTransitCount = conteoDe('En tránsito');
+  const inMaintenanceCount = conteoDe('En mantenimiento');
+  const pendingReturnCount = conteoDe('Reservado');
 
-
-  // Category chart data
-  const categoryMap: Record<string, number> = {};
-  equipos.forEach((d) => {
-    categoryMap[d.categoria] = (categoryMap[d.categoria] || 0) + 1;
-  });
-  const categoryChartData = Object.keys(categoryMap).map((cat) => ({
-    name: cat,
-    value: categoryMap[cat],
+  const categoryChartData = resumen.por_categoria.map((c: { categoria: CategoriaEquipo; equipos: number }) => ({
+    name: c.categoria,
+    value: c.equipos,
   }));
 
-
-  // Status breakdown data
+  // Los estados a cero se filtran: una barra de longitud cero con su etiqueta
+  // ocupa sitio para decir nada. El total de arriba ya los incluye.
   const statusChartData = [
     { name: 'En Uso', value: inUseCount, color: '#10b981' },
     { name: 'Disponible Hub', value: availableInHubs, color: '#06b6d4' },
@@ -107,13 +131,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             >
               <PackageCheck className="w-4 h-4" />
               <span>Enviar Kit Onboarding</span>
-            </button>
-            <button
-              onClick={onOpenAiCopilot}
-              className="px-4 py-2 bg-white hover:bg-slate-50 text-slate-700 font-medium text-xs rounded-lg border border-slate-200 transition-colors flex items-center gap-2"
-            >
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              <span>Consultar Copilot IA</span>
             </button>
           </div>
         </div>
