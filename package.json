@@ -20,6 +20,8 @@
     "migrate:generate": "drizzle-kit generate",
     "seed": "tsx db/semillas.ts",
     "import": "tsx db/importar.ts",
+    "usuario": "tsx db/crear-usuario.ts",
+    "api": "tsx server/arrancar.ts",
     "test:preparar": "tsx db/preparar-test.ts",
     "test": "node --import tsx --test tests/todos.test.ts"
   },

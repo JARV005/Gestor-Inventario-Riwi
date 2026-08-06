@@ -25,3 +25,14 @@ process.env.DATABASE_URL = process.env.DATABASE_URL_TEST;
 process.env.LOGIN_LIMITE ??= '1000';
 
 await import('./auth.test.js');
+await import('./api.test.js');
+
+// El pool se cierra UNA vez y aquí, después de importar todas las suites.
+//
+// Estaba en el `after` de cada fichero, y con dos ficheros eso se rompe: el
+// primero que termina cierra el pool —que es un módulo compartido— y las
+// limpiezas de los demás fallan con "Failed query". El hook se registra el
+// último a propósito, para que corra el último.
+const { after } = await import('node:test');
+const { cerrarPool } = await import('./ayuda.js');
+after(() => cerrarPool());

@@ -8,24 +8,15 @@ aquí es porque ya sabemos que hay que hacerlo.
 
 ## Etapa 3 — auth y API núcleo
 
-### `POLIZA DE SEGURO` y `z No asignar` están en `empleados`
+### Nadie escribe en `auditoria` salvo el desciframiento de BIOS
 
-Son dos artefactos de hoja de cálculo importados como personas. Se dejaron
-deliberadamente para que el recuento del Excel y el de la BD coincidieran
-(`decisiones-02.md` D10 punto 4).
+La etapa 3 la llena solo en `GET /api/equipos/:id/bios`. El §5 la exige también
+para **toda escritura sobre `equipos`**, y eso todavía no ocurre: un `POST` o un
+`PATCH` no dejan rastro.
 
-**Son el primer caso de prueba de la gestión de empleados**: la corrección es
-marcarlos `activo = false` desde la aplicación, no un `UPDATE` a mano ni una
-reimportación. Si la etapa 3 no permite hacerlo, no está terminada.
-
-Riesgo mientras tanto: en la etapa 5 aparecerán en el desplegable de «a quién se
-le entrega un equipo» y pueden acabar en un acta.
-
-### Nadie escribe en `auditoria`
-
-La tabla existe desde la 0000 y sigue vacía. El §5 la exige para toda escritura
-sobre `equipos` y todo desciframiento de BIOS. La importación de la etapa 2 no
-escribió ni una fila; su rastro equivalente son `importaciones` y los 186
+Encaja mejor con la etapa 5, cuando existan las mutaciones de estado y haya un
+`antes`/`despues` que valga la pena guardar. La importación de la etapa 2
+tampoco escribió aquí; su rastro equivalente son `importaciones` y los 186
 movimientos `Alta`.
 
 ---
@@ -92,6 +83,17 @@ para poder convivir con dos claves durante la migración.
 ---
 
 ## Resueltos
+
+### ~~`POLIZA DE SEGURO` y `z No asignar` están en `empleados`~~
+
+Cerrado en la etapa 3, **desde la aplicación** y no con un `UPDATE`: los dos
+quedaron `activo = false` vía `PATCH /api/empleados/:id` con sesión de admin.
+La transcripción de las peticiones está en `api.md`.
+
+Resolverlos por SQL habría cerrado el síntoma sin demostrar lo que importaba:
+que la aplicación es capaz de hacerlo. De paso quedó el bloqueo que impide
+desactivar a alguien con equipos a su nombre, comprobado contra un empleado real
+del inventario.
 
 ### ~~`verificar-datos.sql` es vacuamente verde en una BD vacía~~
 

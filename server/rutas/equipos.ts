@@ -1,0 +1,187 @@
+/**
+ * `/api/equipos`.
+ *
+ * Las mutaciones de estado —asignar, devolver, trasladar, dar de baja— NO están
+ * aquí: son de la etapa 5, y escriben en `equipos` y `movimientos` en la misma
+ * transacción. Lo que hay es el CRUD y las lecturas.
+ */
+
+import type { Express } from 'express';
+import { z } from 'zod';
+
+import * as repoAuditoria from '../../db/repositorios/auditoria.js';
+import * as repoEquipos from '../../db/repositorios/equipos.js';
+import {
+  categoriaEquipo,
+  condicionEquipo,
+  estadoEquipo,
+  licenciaTipo,
+  propiedadEquipo,
+} from '../../db/esquema.js';
+import { guardian } from '../autenticar.js';
+import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
+import { ruta } from '../permisos.js';
+
+const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, {
+  message: 'identificador inválido',
+});
+
+/** Los valores válidos salen del propio enum de la BD, no de una copia. */
+const camposEquipo = z.object({
+  categoria: z.enum(categoriaEquipo.enumValues),
+  etiqueta: z.string().trim().min(1).max(60).nullable().optional(),
+  nombre_equipo: z.string().trim().max(120).nullable().optional(),
+  marca: z.string().trim().max(80).nullable().optional(),
+  modelo: z.string().trim().max(120).nullable().optional(),
+  serial: z.string().trim().max(120).nullable().optional(),
+  serial_cargador: z.string().trim().max(120).nullable().optional(),
+  propiedad: z.enum(propiedadEquipo.enumValues).optional(),
+  sistema_operativo: z.string().trim().max(120).nullable().optional(),
+  licencia_tipo: z.enum(licenciaTipo.enumValues).nullable().optional(),
+  tamano_pantalla: z.string().trim().max(40).nullable().optional(),
+  procesador: z.string().trim().max(120).nullable().optional(),
+  disco: z.string().trim().max(80).nullable().optional(),
+  ram: z.string().trim().max(40).nullable().optional(),
+  estado: z.enum(estadoEquipo.enumValues),
+  condicion: z.enum(condicionEquipo.enumValues).nullable().optional(),
+  sede_id: uuid.nullable().optional(),
+  empleado_id: uuid.nullable().optional(),
+  sesion_usuario: z.string().trim().max(200).nullable().optional(),
+  notas: z.string().trim().max(2000).nullable().optional(),
+});
+
+const esquemaCrear = camposEquipo;
+const esquemaActualizar = camposEquipo.partial();
+
+const esquemaFiltros = z.object({
+  estado: z.enum(estadoEquipo.enumValues).optional(),
+  categoria: z.enum(categoriaEquipo.enumValues).optional(),
+  sede: uuid.optional(),
+  q: z.string().trim().max(120).optional(),
+  pagina: z.coerce.number().int().min(1).optional(),
+  porPagina: z.coerce.number().int().min(1).max(200).optional(),
+});
+
+function validar<T>(esquema: z.ZodType<T>, entrada: unknown): T {
+  const r = esquema.safeParse(entrada);
+  if (!r.success) {
+    // Solo la ruta del campo y el mensaje: los `issues` de zod incluyen el
+    // valor recibido, y ese valor puede ser cualquier cosa que hayan mandado.
+    throw new ErrorHttp(400, 'Entrada inválida', {
+      campos: r.error.issues.map((i) => ({ campo: i.path.join('.'), problema: i.message })),
+    });
+  }
+  return r.data;
+}
+
+export function registrarRutasEquipos(app: Express): void {
+  ruta(
+    app,
+    'get',
+    '/api/equipos',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const f = validar(esquemaFiltros, req.query);
+      res.json(await repoEquipos.listar(f));
+    }),
+  );
+
+  // Antes de '/api/equipos/:id', o Express trataría "revision" como un id.
+  ruta(
+    app,
+    'get',
+    '/api/equipos/revision',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const f = validar(esquemaFiltros, req.query);
+      res.json(await repoEquipos.listar({ ...f, revision: true }));
+    }),
+  );
+
+  ruta(
+    app,
+    'get',
+    '/api/equipos/:id',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const equipo = await repoEquipos.porId(id);
+      if (!equipo) throw noEncontrado('Equipo');
+      res.json({ equipo });
+    }),
+  );
+
+  ruta(
+    app,
+    'get',
+    '/api/equipos/:id/historial',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const equipo = await repoEquipos.porId(id);
+      if (!equipo) throw noEncontrado('Equipo');
+      res.json({ movimientos: await repoEquipos.historial(id) });
+    }),
+  );
+
+  /**
+   * El único endpoint que devuelve los campos cifrados, de uno en uno y solo
+   * para admin (§5.2). Deja fila en `auditoria` ANTES de responder: si el
+   * registro falla, la respuesta no sale.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/equipos/:id/bios',
+    'admin',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const secretos = await repoEquipos.descifrarSecretos(id);
+      if (!secretos) throw noEncontrado('Equipo');
+
+      await repoAuditoria.registrar({
+        tabla: 'equipos',
+        registro_id: id,
+        accion: 'descifrar_bios',
+        usuario_app_id: req.usuario?.id ?? null,
+        ip: req.ip ?? null,
+        // Se registra QUE se leyó, nunca el valor leído.
+        despues: { campos: ['bios_password', 'licencia_serial'] },
+      });
+
+      res.json(secretos);
+    }),
+  );
+
+  ruta(
+    app,
+    'post',
+    '/api/equipos',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const datos = validar(esquemaCrear, req.body);
+      res.status(201).json({ equipo: await repoEquipos.crear(datos) });
+    }),
+  );
+
+  ruta(
+    app,
+    'patch',
+    '/api/equipos/:id',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const datos = validar(esquemaActualizar, req.body);
+      const equipo = await repoEquipos.actualizar(id, datos);
+      if (!equipo) throw noEncontrado('Equipo');
+      res.json({ equipo });
+    }),
+  );
+}

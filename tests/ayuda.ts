@@ -12,8 +12,9 @@ import { AddressInfo } from 'node:net';
 import bcrypt from 'bcryptjs';
 import { eq, like, sql } from 'drizzle-orm';
 
+import { cifrar } from '../db/cifrado.js';
 import { db, pool } from '../db/cliente.js';
-import { usuariosApp } from '../db/esquema.js';
+import { empleados, equipos, usuariosApp } from '../db/esquema.js';
 import { crearApp } from '../server/app.js';
 
 /** Prefijo de todo lo que los tests crean, para poder barrerlo después. */
@@ -133,14 +134,41 @@ export interface UsuarioDePrueba {
   rol: 'admin' | 'tecnico';
 }
 
-export async function crearUsuario(opciones: {
-  sufijo: string;
+/**
+ * Ámbito de una suite: su propio prefijo de correo y su propia limpieza.
+ *
+ * Sin esto, las suites comparten los usuarios que crea un `before` de fichero y
+ * el orden de ejecución empieza a importar — que es exactamente cómo se rompió
+ * la primera versión de esta batería. `node:test` ejecuta los `describe` de un
+ * mismo fichero en serie, así que hoy es determinista, pero paraleliza
+ * ficheros: en cuanto haya un segundo, un `DELETE ... LIKE 'test-%'` de una
+ * suite se lleva por delante los usuarios de otra.
+ *
+ * Cada suite pide el suyo, crea lo que necesita y borra solo lo suyo.
+ */
+export function ambito(nombre: string) {
+  const prefijo = `${PREFIJO}${nombre}-`;
+  return {
+    prefijo,
+    crearUsuario: (opciones: OpcionesUsuario & { sufijo: string }) =>
+      crearUsuario({ ...opciones, sufijo: `${nombre}-${opciones.sufijo}` }),
+    limpiar: async () => {
+      await db.delete(usuariosApp).where(like(usuariosApp.email, `${prefijo}%`));
+    },
+  };
+}
+
+export interface OpcionesUsuario {
   password?: string;
   rol?: 'admin' | 'tecnico';
   activo?: boolean;
   /** `true` deja `password_hash` en NULL, como el usuario de sistema. */
   sinHash?: boolean;
-}): Promise<UsuarioDePrueba> {
+}
+
+export async function crearUsuario(
+  opciones: OpcionesUsuario & { sufijo: string },
+): Promise<UsuarioDePrueba> {
   const email = `${PREFIJO}${opciones.sufijo}@bbl.local`;
   const password = opciones.password ?? 'contrasena-de-prueba-9876';
   const hash = opciones.sinHash ? null : await bcrypt.hash(password, 12);
@@ -178,28 +206,117 @@ export async function desactivar(id: string): Promise<void> {
   await db.update(usuariosApp).set({ activo: false }).where(eq(usuariosApp.id, id));
 }
 
-/** Envejece la fila del store para simular una sesión caducada. */
-export async function caducarSesiones(): Promise<void> {
-  await db.execute(sql`UPDATE session SET expire = now() - interval '1 day'`);
+/**
+ * Envejece las sesiones **de un usuario concreto**, no todas.
+ *
+ * `sess` guarda el JSON de la sesión, así que se puede filtrar por quién es sin
+ * tocar las de las demás suites.
+ */
+export async function caducarSesionesDe(usuarioId: string): Promise<void> {
+  await db.execute(
+    sql`UPDATE session SET expire = now() - interval '1 day'
+        WHERE sess->'usuario'->>'id' = ${usuarioId}`,
+  );
 }
 
-export async function contarSesiones(): Promise<number> {
-  const r = await db.execute<{ n: string }>(sql`SELECT count(*)::text AS n FROM session`);
+export async function contarSesionesDe(usuarioId: string): Promise<number> {
+  const r = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM session WHERE sess->'usuario'->>'id' = ${usuarioId}`,
+  );
   return Number(r.rows[0]?.n ?? 0);
-}
-
-/** Solo el store. Separado de `limpiar` porque un test que quiera contar
- *  sesiones desde cero no puede llevarse por delante los usuarios compartidos
- *  que creó el `before`. */
-export async function limpiarSesiones(): Promise<void> {
-  await db.execute(sql`DELETE FROM session`);
-}
-
-export async function limpiar(): Promise<void> {
-  await db.delete(usuariosApp).where(like(usuariosApp.email, `${PREFIJO}%`));
-  await limpiarSesiones();
 }
 
 export async function cerrarPool(): Promise<void> {
   await pool.end();
 }
+
+// ---------------------------------------------------------------------------
+// Equipos y empleados de prueba
+// ---------------------------------------------------------------------------
+
+/** Los valores en claro que se cifran. Los tests buscan estas cadenas en las
+ *  respuestas: si aparecen, algo las descifró donde no debía. */
+export const BIOS_EN_CLARO = 'CLAVE-BIOS-QUE-NO-DEBE-SALIR-8891';
+export const LICENCIA_EN_CLARO = 'WIN-LICENCIA-QUE-NO-DEBE-SALIR-4432';
+
+export async function crearEquipoConSecretos(etiqueta: string, empleadoId?: string) {
+  const [fila] = await db
+    .insert(equipos)
+    .values({
+      categoria: 'Portátil',
+      etiqueta,
+      marca: 'Dell',
+      modelo: 'Latitude 5420',
+      serial: `SN-${etiqueta}`,
+      estado: empleadoId ? 'Asignado' : 'Disponible',
+      empleado_id: empleadoId ?? null,
+      bios_password_cifrado: cifrar(BIOS_EN_CLARO),
+      licencia_serial_cifrado: cifrar(LICENCIA_EN_CLARO),
+    })
+    .returning({ id: equipos.id });
+  return fila.id;
+}
+
+export async function crearEmpleado(nombre: string) {
+  const [fila] = await db.insert(empleados).values({ nombre }).returning({ id: empleados.id });
+  return fila.id;
+}
+
+export async function borrarEquipos(ids: string[]): Promise<void> {
+  for (const id of ids) await db.delete(equipos).where(eq(equipos.id, id));
+}
+
+export async function borrarEmpleados(ids: string[]): Promise<void> {
+  for (const id of ids) await db.delete(empleados).where(eq(empleados.id, id));
+}
+
+export async function contarAuditoria(registroId: string, accion: string): Promise<number> {
+  const r = await db.execute<{ n: string }>(
+    sql`SELECT count(*)::text AS n FROM auditoria
+        WHERE registro_id = ${registroId} AND accion = ${accion}`,
+  );
+  return Number(r.rows[0]?.n ?? 0);
+}
+
+/**
+ * Recorre un valor JSON entero buscando claves prohibidas o cadenas que no
+ * deberían aparecer. Devuelve las rutas donde las encontró.
+ *
+ * A cualquier profundidad y a través de arrays: un endpoint que devuelva
+ * `{ equipos: [ { ... } ] }` esconde los campos dos niveles adentro, y una
+ * comprobación de primer nivel no los vería.
+ */
+export function buscarFugas(
+  valor: unknown,
+  prohibidas: string[],
+  ruta = '$',
+  encontradas: string[] = [],
+): string[] {
+  if (typeof valor === 'string') {
+    for (const p of prohibidas) {
+      if (valor.includes(p)) encontradas.push(`${ruta} contiene "${p}"`);
+    }
+    return encontradas;
+  }
+  if (Array.isArray(valor)) {
+    valor.forEach((v, i) => buscarFugas(v, prohibidas, `${ruta}[${i}]`, encontradas));
+    return encontradas;
+  }
+  if (valor && typeof valor === 'object') {
+    for (const [k, v] of Object.entries(valor)) {
+      for (const p of prohibidas) {
+        if (k.includes(p)) encontradas.push(`${ruta}.${k} es una clave prohibida`);
+      }
+      buscarFugas(v, prohibidas, `${ruta}.${k}`, encontradas);
+    }
+  }
+  return encontradas;
+}
+
+/** Claves y valores que no pueden salir por la API, en ninguna respuesta. */
+export const PROHIBIDO_EN_RESPUESTAS = [
+  'bios_password',
+  'licencia_serial',
+  BIOS_EN_CLARO,
+  LICENCIA_EN_CLARO,
+];

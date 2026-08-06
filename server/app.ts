@@ -13,6 +13,9 @@ import { manejadorErrores } from './errores.js';
 import { guardian } from './autenticar.js';
 import { limpiarRegistro, ruta } from './permisos.js';
 import { registrarRutasAuth } from './rutas/auth.js';
+import { registrarRutasEmpleados } from './rutas/empleados.js';
+import { registrarRutasEquipos } from './rutas/equipos.js';
+import { registrarRutasSedes } from './rutas/sedes.js';
 import { middlewareSesion } from './sesion.js';
 
 export function crearApp(): Express {
@@ -35,6 +38,9 @@ export function crearApp(): Express {
   });
 
   registrarRutasAuth(app);
+  registrarRutasEquipos(app);
+  registrarRutasEmpleados(app);
+  registrarRutasSedes(app);
 
   // Siempre el último: si se registra antes que las rutas, no las cubre.
   app.use(manejadorErrores);
