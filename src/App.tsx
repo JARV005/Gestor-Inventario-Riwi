@@ -121,7 +121,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'logistics' && <SedesView sedes={sedes} equipos={equipos} />}
+          {activeTab === 'logistics' && <SedesView />}
 
           {/* Conectada: se pide sus datos ella sola. */}
           {activeTab === 'employees' && (
@@ -131,7 +131,7 @@ export function App() {
             />
           )}
 
-          {activeTab === 'maintenance' && <MaintenanceView equipos={equipos} />}
+          {activeTab === 'maintenance' && <MaintenanceView />}
 
           {activeTab === 'documents' && (
             <HandoverDocumentView

@@ -39,7 +39,18 @@ export function registrarRutasSedes(app: Express): void {
     '/api/sedes',
     'autenticado',
     guardian,
-    asincrono(async (_req, res) => {
+    asincrono(async (req, res) => {
+      // `?conteos=1` añade el reparto de equipos por sede. Va como opción y no
+      // siempre porque los desplegables de otras vistas solo quieren la lista,
+      // y son seis subconsultas por fila.
+      if (req.query.conteos === '1') {
+        const [sedes, sinSede] = await Promise.all([
+          repoSedes.listarConConteos(),
+          repoSedes.equiposSinSede(),
+        ]);
+        res.json({ sedes, equipos_sin_sede: sinSede });
+        return;
+      }
       res.json({ sedes: await repoSedes.listar() });
     }),
   );

@@ -69,6 +69,21 @@ Ahora gana `docs/decisiones-01.md`
   deferidas: se vuelven invisibles justo en los tests.
 - Un test cuyo resultado depende de que el corpus esté cargado debe fallar
   si no lo está, no pasar de vacío.
+- La interpolación de columnas de Drizzle dentro de ``sql`` `` no es fiable:
+  ha fallado tres veces con tres síntomas distintos (calificando de más en
+  un CHECK y en un índice parcial, de menos en una subconsulta
+  correlacionada). El último caso devolvía ceros plausibles sin error. En
+  SQL crudo, calificar las tablas a mano y comprobar el SQL emitido, no el
+  TypeScript.
+- La causa: Drizzle califica las columnas en `.where()` y **no** las
+  califica en la lista de SELECT. Por eso el patrón falla donde nadie mira:
+  una lista de SELECT sobre una sola tabla siempre parece correcta, y se
+  rompe al añadir un JOIN o una subconsulta correlacionada. En SQL crudo,
+  calificar a mano siempre, aunque hoy solo haya una tabla. Mejor aún:
+  usar los helpers tipados (`eq`, `isNotNull`, …) en vez de SQL crudo.
+- Un conteo que la API devuelve se contrasta contra el mismo conteo hecho
+  en SQL. Comparar la API consigo misma no prueba nada: un número puede ser
+  correcto por accidente.
 - Un fallo pasajero de una dependencia no debe matar el proceso. Ha
   ocurrido dos veces: el pool de Postgres y la comprobación de la clave de
   cifrado, esta última escrita justo después de arreglar la primera.

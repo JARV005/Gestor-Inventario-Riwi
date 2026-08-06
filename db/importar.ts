@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 
 import ExcelJS from 'exceljs';
-import { sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 
 import { cifrar } from './cifrado.js';
 import { db, pool } from './cliente.js';
@@ -532,7 +532,7 @@ async function main() {
     const [sistema] = await tx
       .select({ id: usuariosApp.id })
       .from(usuariosApp)
-      .where(sql`${usuariosApp.email} = ${EMAIL_SISTEMA}`);
+      .where(eq(usuariosApp.email, EMAIL_SISTEMA));
     if (!sistema) {
       throw new Error(`Falta el usuario ${EMAIL_SISTEMA}. Correr npm run seed antes.`);
     }
@@ -670,7 +670,7 @@ async function main() {
         movimientos: sql<number>`(SELECT count(*)::int FROM movimientos m JOIN equipos e ON e.id = m.equipo_id WHERE e.importacion_id = ${corrida.id})`,
       })
       .from(importaciones)
-      .where(sql`${importaciones.id} = ${corrida.id}`);
+      .where(eq(importaciones.id, corrida.id));
 
     const descuadres: string[] = [];
     if (candidatas.length !== aImportar.length + rechazadasN) {

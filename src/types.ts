@@ -53,6 +53,16 @@ type Comprobar<T extends true> = T;
 
 export type Sede = Serializado<typeof sedes.$inferSelect>;
 
+/** Sede con el reparto de equipos, calculado por el servidor. */
+export type SedeConConteos = Sede & {
+  equipos_total: number;
+  equipos_asignados: number;
+  equipos_disponibles: number;
+  equipos_en_transito: number;
+  equipos_por_revisar: number;
+  empleados_total: number;
+};
+
 export type Empleado = Serializado<typeof empleados.$inferSelect>;
 
 /**

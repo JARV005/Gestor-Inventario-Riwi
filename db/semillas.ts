@@ -6,7 +6,7 @@
  * `sedes.nombre` y `usuarios_app.email`.
  */
 
-import { sql } from 'drizzle-orm';
+import { eq, isNotNull, sql } from 'drizzle-orm';
 
 import { db, pool } from './cliente.js';
 import { motivosRevision, sedes, usuariosApp } from './esquema.js';
@@ -91,10 +91,10 @@ async function main() {
   const [sistema] = await db
     .select({
       activo: usuariosApp.activo,
-      tiene_password: sql<boolean>`${usuariosApp.password_hash} IS NOT NULL`,
+      tiene_password: isNotNull(usuariosApp.password_hash),
     })
     .from(usuariosApp)
-    .where(sql`${usuariosApp.email} = ${USUARIO_SISTEMA.email}`);
+    .where(eq(usuariosApp.email, USUARIO_SISTEMA.email));
 
   if (!sistema || sistema.activo || sistema.tiene_password) {
     throw new Error(

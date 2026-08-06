@@ -14,6 +14,7 @@ import type {
   MantenimientoConEquipo,
   Pagina,
   Sede,
+  SedeConConteos,
   UsuarioSesion,
 } from '../types';
 
@@ -111,6 +112,9 @@ export const api = {
   salir: () => pedir<void>('/api/auth/logout', { method: 'POST' }),
 
   sedes: () => pedir<{ sedes: Sede[] }>('/api/sedes'),
+
+  sedesConConteos: () =>
+    pedir<{ sedes: SedeConConteos[]; equipos_sin_sede: number }>('/api/sedes?conteos=1'),
 
   /** La bandeja: además del listado, cuántos equipos tiene cada motivo. */
   revision: (f: FiltrosEquipos = {}) => {
