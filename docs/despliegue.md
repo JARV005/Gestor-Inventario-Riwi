@@ -91,6 +91,61 @@ Windows npm ejecuta los scripts con `cmd.exe`, que no respeta las comillas
 simples. Con las variables puestas, `npm run db:psql` es literalmente
 `docker compose exec postgres psql`.
 
+## Custodia de `ENCRYPTION_KEY`
+
+Es la única pieza del sistema cuya pérdida **no se puede reparar con trabajo**.
+
+`bios_password_cifrado` y `licencia_serial_cifrado` están cifrados con AES-256-GCM
+usando esa clave y ninguna otra. No hay copia dentro de la base, ni derivación a
+partir de nada, ni puerta trasera. Si la clave desaparece, esos 115 y 110 valores
+son ruido permanente: habría que ir equipo por equipo a releer la clave BIOS de
+cada máquina.
+
+Eso es una propiedad del diseño, no un defecto. Una clave recuperable desde la
+aplicación sería una clave que también recupera quien se lleve una copia de la
+base. **Pero significa que el cifrado protege los datos de su dueño con la misma
+eficacia con la que los protege de un atacante**, y por eso la custodia no es un
+detalle operativo: es parte del diseño.
+
+### Reglas
+
+1. **Se genera una vez.** No se rota sin un script de recifrado, que hoy no
+   existe (`pendientes.md`, etapa 7). Regenerarla «por si acaso» destruye los
+   datos.
+2. **No vive solo en `.env`.** Ese archivo está en `.gitignore`, en un único
+   disco, y ya se rellenó una vez con los valores de plantilla sin que nada
+   avisara. Un `.env` es un archivo de trabajo, no una copia de seguridad.
+3. **Se guarda fuera de la máquina de desarrollo**, en un sitio donde alguien
+   que no sea quien la generó pueda encontrarla. Dónde exactamente lo decide
+   quien dirige el proyecto; lo que no vale es que exista en un solo portátil.
+4. **Nunca en el repositorio, ni en un chat, ni en un correo.** Si acaba en
+   alguno de los tres, hay que recifrar con una clave nueva — que es
+   precisamente el procedimiento que todavía no existe.
+5. **Un backup de la base sin la clave no es un backup.** El §5 exige probar la
+   restauración; esa prueba tiene que incluir descifrar una fila.
+
+### El arranque la comprueba
+
+Desde la etapa 4a, el servidor intenta descifrar una fila real antes de aceptar
+peticiones. Si no lo consigue, **no arranca**:
+
+```
+ENCRYPTION_KEY incorrecta o cambiada; los datos cifrados no son legibles con esta clave.
+Hay 115 filas cifradas en la base y la primera no se pudo descifrar.
+No se toca nada: recuperar la clave original antes de volver a arrancar.
+```
+
+Existe porque el modo de fallo es silencioso. Con la clave equivocada, el
+servidor arrancaría igual y los listados funcionarían igual —los campos
+cifrados no salen en ninguno—, así que el problema no aparecería hasta que
+alguien pidiera una clave BIOS. Para entonces podría haber ocurrido una
+reimportación que recifrase las filas con la clave equivocada, y ahí sí no hay
+vuelta atrás.
+
+Vale más no arrancar que arrancar con los datos ilegibles y enterarse en tres
+meses. Si la base no tiene todavía ninguna fila cifrada, la comprobación lo dice
+y sigue: no hay nada que verificar.
+
 ## Migraciones
 
 Regla 7 de `CLAUDE.md`: nunca `ALTER TABLE` a mano. El flujo es siempre:

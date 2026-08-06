@@ -113,6 +113,18 @@ significa que todo lo cifrado con la anterior deja de descifrarse. Hace falta un
 script de recifrado, y probablemente un byte de versión al principio del `bytea`
 para poder convivir con dos claves durante la migración.
 
+Sube de prioridad desde la etapa 4a: el arranque ya se niega a funcionar con una
+clave que no descifra (`db/comprobar-cifrado.ts`), así que el fallo es visible.
+Lo que sigue sin existir es la salida — si la clave se filtra, hoy no hay forma
+de cambiarla sin perder los datos. Ver la sección de custodia en `despliegue.md`.
+
+### La restauración de un backup debe incluir descifrar
+
+El §5 exige probar la restauración al menos una vez. Esa prueba tiene que llegar
+hasta descifrar una fila con la clave que se guarda aparte: una base restaurada
+cuyos campos cifrados no se pueden leer está restaurada solo a medias, y el
+`pg_restore` termina en verde igualmente.
+
 ---
 
 ---

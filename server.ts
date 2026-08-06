@@ -8,6 +8,7 @@ import { createServer as createViteServer } from "vite";
 import { GoogleGenAI } from "@google/genai";
 
 import { crearApp } from "./server/app.js";
+import { exigirClaveDeCifradoValida } from "./db/comprobar-cifrado.js";
 
 const app = express();
 const PORT = 3000;
@@ -172,6 +173,9 @@ El documento debe ser completo, incluir cláusulas legales estándar de custodia
 });
 
 async function startServer() {
+  // Antes de aceptar una sola peticion: si la clave no descifra, no se arranca.
+  await exigirClaveDeCifradoValida();
+
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
       server: { middlewareMode: true },

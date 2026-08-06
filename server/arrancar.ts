@@ -7,9 +7,13 @@
 
 import 'dotenv/config';
 
+import { exigirClaveDeCifradoValida } from '../db/comprobar-cifrado.js';
 import { crearApp } from './app.js';
 
 const puerto = Number(process.env.PORT ?? 3001);
+
+// Antes de escuchar: si ENCRYPTION_KEY no descifra, no se arranca.
+await exigirClaveDeCifradoValida();
 
 crearApp().listen(puerto, () => {
   console.log(`API en http://localhost:${puerto}`);
