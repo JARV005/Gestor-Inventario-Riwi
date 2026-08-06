@@ -46,6 +46,23 @@ En `.env`, a partir de `.env.example`. `.env` está en `.gitignore`.
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credenciales con las que docker-compose crea el contenedor |
 | `POSTGRES_PORT` | Puerto en la máquina anfitriona. **5433 por defecto**, ver abajo |
 | `DATABASE_URL` | La usan el servidor, las migraciones y las semillas. Tiene que concordar con las cuatro de arriba |
+| `ADMIN_EMAIL` / `ADMIN_NOMBRE` / `ADMIN_PASSWORD` | La cuenta con la que entrar tras `npm run seed`. Las tres o ninguna |
+
+### El admin inicial
+
+`npm run db:reset` borra el volumen, y con él **todos los usuarios**. Sin estas
+tres variables la base queda migrada, sembrada y sin ninguna cuenta con la que
+entrar: `sistema@bbl.local` no puede iniciar sesión por diseño (D4). Ya dejó a
+alguien fuera de su propia aplicación una vez.
+
+Con las tres puestas, `npm run seed` crea el admin. **Sin ellas no se crea nada
+y la siembra lo dice**: un admin con contraseña por defecto es una puerta
+trasera que nadie recuerda haber abierto. Mismo criterio que
+`POSTGRES_PASSWORD`.
+
+Sembrar dos veces **no pisa la contraseña**. Si la cuenta ya existe se deja como
+está — la contraseña que vale es la que tenga puesta su dueño, no la que quedó
+en un `.env` de hace meses. Para cambiarla, `npm run usuario`.
 
 `POSTGRES_PASSWORD` no tiene valor por defecto a propósito: docker compose falla
 si no está definida, en vez de arrancar con una contraseña adivinable.
