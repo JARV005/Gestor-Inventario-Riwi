@@ -46,12 +46,12 @@ export const SedesView: React.FC = () => {
             <Building2 className="w-6 h-6 text-brand" />
             Sedes
           </h1>
-          <p className="text-sm text-ink-soft mt-1">Equipos y personas por sede.</p>
+          <p className="text-sm text-ink-muted mt-1">Equipos y personas por sede.</p>
         </div>
         <button
           onClick={cargar}
           disabled={cargando}
-          className="px-3 py-2 text-sm border border-line rounded-lg text-ink-soft hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
+          className="px-3 py-2 text-sm border border-line rounded-lg text-ink-muted hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
         >
           <RefreshCw className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`} />
           Actualizar
@@ -75,7 +75,7 @@ export const SedesView: React.FC = () => {
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="font-semibold text-ink">{sede.nombre}</h2>
-                    {sede.ciudad && <p className="text-xs text-ink-soft">{sede.ciudad}</p>}
+                    {sede.ciudad && <p className="text-xs text-ink-muted">{sede.ciudad}</p>}
                   </div>
                   <span className="text-2xl font-bold text-brand tabular-nums">
                     {sede.equipos_total}
@@ -84,28 +84,28 @@ export const SedesView: React.FC = () => {
 
                 <dl className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
                   <div className="flex items-center gap-1.5">
-                    <Laptop className="w-4 h-4 text-ink-soft shrink-0" />
-                    <dt className="text-ink-soft">Asignados</dt>
+                    <Laptop className="w-4 h-4 text-ink-muted shrink-0" />
+                    <dt className="text-ink-muted">Asignados</dt>
                     <dd className="font-medium text-ink tabular-nums ml-auto">
                       {sede.equipos_asignados}
                     </dd>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <dt className="text-ink-soft">Disponibles</dt>
+                    <dt className="text-ink-muted">Disponibles</dt>
                     <dd className="font-medium text-ink tabular-nums ml-auto">
                       {sede.equipos_disponibles}
                     </dd>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Truck className="w-4 h-4 text-ink-soft shrink-0" />
-                    <dt className="text-ink-soft">En tránsito</dt>
+                    <Truck className="w-4 h-4 text-ink-muted shrink-0" />
+                    <dt className="text-ink-muted">En tránsito</dt>
                     <dd className="font-medium text-ink tabular-nums ml-auto">
                       {sede.equipos_en_transito}
                     </dd>
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <Users className="w-4 h-4 text-ink-soft shrink-0" />
-                    <dt className="text-ink-soft">Personas</dt>
+                    <Users className="w-4 h-4 text-ink-muted shrink-0" />
+                    <dt className="text-ink-muted">Personas</dt>
                     <dd className="font-medium text-ink tabular-nums ml-auto">
                       {sede.empleados_total}
                     </dd>
@@ -113,7 +113,7 @@ export const SedesView: React.FC = () => {
                   {sede.equipos_por_revisar > 0 && (
                     <div className="flex items-center gap-1.5 col-span-2 pt-1 border-t border-line">
                       <AlertTriangle className="w-4 h-4 text-warn shrink-0" />
-                      <dt className="text-ink-soft">Pendientes de revisar</dt>
+                      <dt className="text-ink-muted">Pendientes de revisar</dt>
                       <dd className="font-medium text-ink tabular-nums ml-auto">
                         {sede.equipos_por_revisar}
                       </dd>
@@ -122,7 +122,7 @@ export const SedesView: React.FC = () => {
                 </dl>
 
                 {(sede.responsable || sede.contacto_email) && (
-                  <footer className="pt-3 border-t border-line text-xs text-ink-soft space-y-0.5">
+                  <footer className="pt-3 border-t border-line text-xs text-ink-muted space-y-0.5">
                     {sede.responsable && <p>{sede.responsable}</p>}
                     {sede.contacto_email && <p>{sede.contacto_email}</p>}
                   </footer>
@@ -138,7 +138,7 @@ export const SedesView: React.FC = () => {
                 <p className="font-medium text-ink">
                   {sinSede} equipo{sinSede === 1 ? '' : 's'} sin sede asignada
                 </p>
-                <p className="text-ink-soft">
+                <p className="text-ink-muted">
                   Vienen del Excel sin ubicación legible, o con una que no corresponde a ninguna
                   sede registrada. Están en la bandeja de revisión.
                 </p>

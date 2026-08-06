@@ -128,7 +128,7 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
 
   return (
     <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-lg p-6 space-y-5 shadow-xl relative animate-in fade-in text-slate-900">
+      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-lg p-6 space-y-5 shadow-xl relative animate-aparecer text-slate-900">
         
         <button
           onClick={onClose}

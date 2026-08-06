@@ -129,14 +129,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center justify-between text-xs">
             <span className="font-semibold text-nav-ink flex items-center gap-1.5">
               <Building className="w-3.5 h-3.5 text-brand-light" />
-              Hubs Regionales
+              Sedes
             </span>
             <span className="text-[10px] text-ink font-bold bg-ok px-1.5 py-0.5 rounded border border-transparent">
-              5 Operativos
+              5 sembradas
             </span>
           </div>
+          {/* Decía «México, Colombia, Argentina, EE.UU. y España», que no es
+              donde están: son las cinco sedes sembradas en `db/semillas.ts`. El
+              «5» acertaba por casualidad. */}
           <p className="text-[11px] text-nav-muted leading-relaxed">
-            México, Colombia, Argentina, EE.UU. y España.
+            Medellín, Barranquilla, Cartagena, Bogotá y Remoto.
           </p>
           <button
             onClick={() => setActiveTab('logistics')}

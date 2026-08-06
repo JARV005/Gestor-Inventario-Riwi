@@ -21,7 +21,7 @@ const colorEstado: Record<string, string> = {
   Pendiente: 'bg-info/20 text-ink border border-info/50',
   'En taller': 'bg-warn/20 text-ink border border-warn/50',
   Completado: 'bg-ok/15 text-ink border border-ok/40',
-  Devuelto: 'bg-surface-alt text-ink-soft border border-line',
+  Devuelto: 'bg-surface-alt text-ink-muted border border-line',
 };
 
 export const MaintenanceView: React.FC = () => {
@@ -63,7 +63,7 @@ export const MaintenanceView: React.FC = () => {
             <Wrench className="w-6 h-6 text-brand" />
             Mantenimiento
           </h1>
-          <p className="text-sm text-ink-soft mt-1">
+          <p className="text-sm text-ink-muted mt-1">
             {cargando && filas.length === 0
               ? 'Cargando…'
               : `${total} parte${total === 1 ? '' : 's'} registrado${total === 1 ? '' : 's'}`}
@@ -72,7 +72,7 @@ export const MaintenanceView: React.FC = () => {
         <button
           onClick={cargar}
           disabled={cargando}
-          className="px-3 py-2 text-sm border border-line rounded-lg text-ink-soft hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
+          className="px-3 py-2 text-sm border border-line rounded-lg text-ink-muted hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
         >
           <RefreshCw className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`} />
           Actualizar
@@ -94,7 +94,7 @@ export const MaintenanceView: React.FC = () => {
         <div className="border border-line rounded-xl bg-surface overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-surface-alt text-ink-soft text-xs uppercase tracking-wide">
+              <thead className="bg-surface-alt text-ink-muted text-xs uppercase tracking-wide">
                 <tr>
                   <th className="text-left font-semibold px-4 py-3">Equipo</th>
                   <th className="text-left font-semibold px-4 py-3">Tipo</th>
@@ -108,7 +108,7 @@ export const MaintenanceView: React.FC = () => {
                   <tr key={m.id} className="hover:bg-surface-alt">
                     <td className="px-4 py-3">
                       <div className="font-medium text-ink">{nombreEquipo(m)}</div>
-                      <div className="text-xs font-mono text-ink-soft">
+                      <div className="text-xs font-mono text-ink-muted">
                         {m.equipo_etiqueta ?? m.equipo_serial ?? '—'}
                       </div>
                     </td>
@@ -125,8 +125,8 @@ export const MaintenanceView: React.FC = () => {
                         {m.estado}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-ink-soft">{m.fecha_reporte.slice(0, 10)}</td>
-                    <td className="px-4 py-3 text-ink-soft">{m.responsable ?? '—'}</td>
+                    <td className="px-4 py-3 text-ink-muted">{m.fecha_reporte.slice(0, 10)}</td>
+                    <td className="px-4 py-3 text-ink-muted">{m.responsable ?? '—'}</td>
                   </tr>
                 ))}
               </tbody>

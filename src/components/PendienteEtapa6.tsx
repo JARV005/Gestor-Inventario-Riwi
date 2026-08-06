@@ -21,10 +21,10 @@ interface PendienteEtapa6Props {
 
 export const PendienteEtapa6: React.FC<PendienteEtapa6Props> = ({ clase, motivo }) => (
   <div className="space-y-1.5">
-    <p className="flex items-center gap-1.5 text-sm font-medium text-ink-soft">
+    <p className="flex items-center gap-1.5 text-sm font-medium text-ink-muted">
       <CircleDashed className="w-4 h-4" />
       {clase === 'pendiente' ? 'Pendiente' : 'Retirado'}
     </p>
-    <p className="text-[11px] leading-snug text-ink-soft">{motivo}</p>
+    <p className="text-[11px] leading-snug text-ink-muted">{motivo}</p>
   </div>
 );

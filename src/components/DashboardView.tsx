@@ -120,7 +120,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               Gestión de Inventario TI Global
             </h1>
             <p className="text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-              Monitorea activos de hardware, envíos de onboarding/offboarding, licencias MDM y almacenamiento en sedes de LatAm, EE.UU. y Europa.
+              Inventario de {totalCount} equipos repartidos entre Medellín, Barranquilla, Cartagena, Bogotá y remoto. (El texto anterior hablaba de licencias MDM y de sedes en EE.UU. y Europa: ninguna de las dos cosas existe.)
             </p>
           </div>
 
@@ -236,7 +236,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             {/* Pie Chart: Equipment by Category */}
             <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
               <h3 className="text-sm font-bold text-slate-900 mb-1">Equipos por Categoría</h3>
-              <p className="text-xs text-slate-500 mb-4">Laptops, Monitores, Celulares y Periféricos</p>
+              <p className="text-xs text-slate-500 mb-4">Reparto real de las {totalCount} filas del inventario</p>
 
               <div className="h-48 w-full flex items-center justify-center">
                 <ResponsiveContainer width="100%" height="100%">
@@ -326,7 +326,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                   <Truck className="w-4 h-4 text-blue-600" />
                   Actividad de Envíos
                 </h3>
-                <p className="text-xs text-slate-500">Rastreo DHL & FedEx en tiempo real</p>
+                <p className="text-xs text-slate-500">Traslados de equipos entre sedes</p>
               </div>
               <button 
                 onClick={() => setActiveTab('logistics')}

@@ -14,7 +14,7 @@ import { ErrorApi } from '../lib/api';
  */
 
 export const Cargando: React.FC<{ que: string }> = ({ que }) => (
-  <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-3 text-ink-soft">
+  <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-3 text-ink-muted">
     <Loader2 className="w-6 h-6 animate-spin text-brand" />
     <p className="text-sm">Cargando {que}…</p>
   </div>
@@ -29,9 +29,9 @@ export const Cargando: React.FC<{ que: string }> = ({ que }) => (
  */
 export const Vacio: React.FC<{ titulo: string; detalle?: string }> = ({ titulo, detalle }) => (
   <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-2 text-center">
-    <Inbox className="w-6 h-6 text-ink-soft" />
+    <Inbox className="w-6 h-6 text-ink-muted" />
     <p className="text-sm font-medium text-ink">{titulo}</p>
-    {detalle && <p className="text-xs text-ink-soft max-w-sm">{detalle}</p>}
+    {detalle && <p className="text-xs text-ink-muted max-w-sm">{detalle}</p>}
   </div>
 );
 
@@ -73,7 +73,7 @@ export const ErrorDeCarga: React.FC<{
                   ? `El servidor no pudo consultar ${que}`
                   : `No se pudo cargar ${que}`}
         </p>
-        <p className="text-sm text-ink-soft max-w-md">
+        <p className="text-sm text-ink-muted max-w-md">
           {sinConexion
             ? 'No se ha perdido nada: los datos están en el servidor y volverán a verse en cuanto responda.'
             : caducada
@@ -85,7 +85,7 @@ export const ErrorDeCarga: React.FC<{
                   : error.message}
         </p>
         {!sinConexion && !caducada && (
-          <p className="text-xs text-ink-soft font-mono pt-1">Código {error.estado}</p>
+          <p className="text-xs text-ink-muted font-mono pt-1">Código {error.estado}</p>
         )}
       </div>
 

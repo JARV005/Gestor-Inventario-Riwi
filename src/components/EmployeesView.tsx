@@ -47,7 +47,7 @@ const colorEstado: Record<string, string> = {
   Activo: 'bg-ok/15 text-ink border border-ok/40',
   Onboarding: 'bg-info/20 text-ink border border-info/50',
   Offboarding: 'bg-warn/20 text-ink border border-warn/50',
-  Inactivo: 'bg-surface-alt text-ink-soft border border-line',
+  Inactivo: 'bg-surface-alt text-ink-muted border border-line',
 };
 
 export const EmployeesView: React.FC<EmployeesViewProps> = ({
@@ -141,7 +141,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
             <Users className="w-6 h-6 text-brand" />
             Colaboradores
           </h1>
-          <p className="text-sm text-ink-soft mt-1">
+          <p className="text-sm text-ink-muted mt-1">
             {cargando && filas.length === 0
               ? 'Cargando…'
               : `${total} persona${total === 1 ? '' : 's'}`}
@@ -151,7 +151,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
           <button
             onClick={cargar}
             disabled={cargando}
-            className="px-3 py-2 text-sm border border-line rounded-lg text-ink-soft hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
+            className="px-3 py-2 text-sm border border-line rounded-lg text-ink-muted hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
           >
             <RefreshCw className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`} />
             Actualizar
@@ -168,7 +168,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[220px]">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-soft" />
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
@@ -242,7 +242,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                       </div>
                       <div className="min-w-0">
                         <h3 className="font-semibold text-ink text-sm truncate">{emp.nombre}</h3>
-                        <p className="text-xs text-ink-soft truncate">{emp.cargo ?? '—'}</p>
+                        <p className="text-xs text-ink-muted truncate">{emp.cargo ?? '—'}</p>
                       </div>
                     </div>
                     <span
@@ -255,13 +255,13 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                   {/* Los dos artefactos del Excel que la etapa 3 desactivó desde
                       la API caen aquí, y tienen que verse. */}
                   {!emp.activo && (
-                    <p className="text-[11px] text-ink-soft bg-surface-alt border border-line rounded px-2 py-1 flex items-center gap-1.5">
+                    <p className="text-[11px] text-ink-muted bg-surface-alt border border-line rounded px-2 py-1 flex items-center gap-1.5">
                       <UserX className="w-3.5 h-3.5 shrink-0" />
                       Inactivo: no aparece en asignaciones nuevas
                     </p>
                   )}
 
-                  <dl className="text-xs text-ink-soft space-y-1">
+                  <dl className="text-xs text-ink-muted space-y-1">
                     <div className="flex items-center gap-1.5">
                       <Building className="w-3.5 h-3.5 shrink-0" />
                       <dd className="truncate">{nombreSede(emp.sede_id)}</dd>
@@ -293,13 +293,13 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
 
                   {abierto && (
                     <div className="text-xs space-y-1">
-                      {equipos === 'cargando' && <p className="text-ink-soft">Cargando…</p>}
+                      {equipos === 'cargando' && <p className="text-ink-muted">Cargando…</p>}
                       {equipos === 'error' && (
                         <p className="text-danger">No se pudieron cargar sus equipos.</p>
                       )}
                       {Array.isArray(equipos) &&
                         (equipos.length === 0 ? (
-                          <p className="text-ink-soft">Sin equipos asignados.</p>
+                          <p className="text-ink-muted">Sin equipos asignados.</p>
                         ) : (
                           equipos.map((eq) => (
                             <div
@@ -321,7 +321,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                   {emp.activo && (
                     <button
                       onClick={() => onOpenOffboardingModal(emp)}
-                      className="w-full text-xs text-ink-soft hover:text-ink border border-line rounded-lg py-1.5"
+                      className="w-full text-xs text-ink-muted hover:text-ink border border-line rounded-lg py-1.5"
                     >
                       Offboarding
                     </button>
@@ -331,7 +331,7 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
             })}
           </div>
 
-          <div className="flex items-center justify-between text-xs text-ink-soft">
+          <div className="flex items-center justify-between text-xs text-ink-muted">
             <span>
               {(pagina - 1) * porPagina + 1}–{Math.min(pagina * porPagina, total)} de {total}
             </span>

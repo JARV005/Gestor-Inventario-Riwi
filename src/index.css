@@ -26,6 +26,13 @@
   --color-danger:       #F4593F;
   --color-info:         #DDA5F2;
 
+  /* Entrada de los modales.
+     Antes se pedia con `animate-in fade-in`, de `tailwindcss-animate`, que
+     nunca estuvo instalado: las dos clases no emitian ninguna regla y los
+     modales aparecian de golpe. Un nombre de clase inexistente no da error en
+     Tailwind, simplemente no pinta. Mismo modo de fallo que `text-ink-soft`. */
+  --animate-aparecer:   aparecer 140ms ease-out;
+
   /* Superficie oscura: solo el sidebar de navegacion */
   --color-nav:          #1D1C4A;
   --color-nav-deep:     #15143A;
@@ -33,4 +40,17 @@
   --color-nav-muted:    rgba(237, 236, 245, 0.64);
   --color-nav-line:     rgba(237, 236, 245, 0.17);
   --color-nav-hover:    rgba(237, 236, 245, 0.08);
+}
+
+@keyframes aparecer {
+  from { opacity: 0; transform: translateY(4px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* Quien haya pedido menos movimiento no lo recibe. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes aparecer {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
 }

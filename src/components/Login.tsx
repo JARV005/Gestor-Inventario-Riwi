@@ -54,12 +54,12 @@ export const Login: React.FC<LoginProps> = ({ onEntrar }) => {
       >
         <div className="space-y-1">
           <h1 className="text-xl font-bold text-ink">Inventario TI</h1>
-          <p className="text-sm text-ink-soft">Acceso restringido al equipo de TI.</p>
+          <p className="text-sm text-ink-muted">Acceso restringido al equipo de TI.</p>
         </div>
 
         <div className="space-y-3">
           <div>
-            <label htmlFor="email" className="block text-xs font-medium text-ink-soft mb-1">
+            <label htmlFor="email" className="block text-xs font-medium text-ink-muted mb-1">
               Correo
             </label>
             <input
@@ -73,7 +73,7 @@ export const Login: React.FC<LoginProps> = ({ onEntrar }) => {
             />
           </div>
           <div>
-            <label htmlFor="password" className="block text-xs font-medium text-ink-soft mb-1">
+            <label htmlFor="password" className="block text-xs font-medium text-ink-muted mb-1">
               Contraseña
             </label>
             <input

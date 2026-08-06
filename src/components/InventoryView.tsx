@@ -45,7 +45,7 @@ const colorEstado: Record<EstadoEquipo, string> = {
   Disponible: 'bg-ok/15 text-ink border border-ok/40',
   'En mantenimiento': 'bg-warn/20 text-ink border border-warn/50',
   'En tránsito': 'bg-info/20 text-ink border border-info/50',
-  Reservado: 'bg-surface-alt text-ink-soft border border-line',
+  Reservado: 'bg-surface-alt text-ink-muted border border-line',
   'De baja': 'bg-danger/15 text-ink border border-danger/40',
 };
 
@@ -128,7 +128,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             <Laptop className="w-6 h-6 text-brand" />
             Inventario
           </h1>
-          <p className="text-sm text-ink-soft mt-1">
+          <p className="text-sm text-ink-muted mt-1">
             {cargando && filas.length === 0
               ? 'Cargando…'
               : `${total} equipo${total === 1 ? '' : 's'}${pestana === 'revision' ? ' por revisar' : ''}`}
@@ -138,7 +138,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           <button
             onClick={cargar}
             disabled={cargando}
-            className="px-3 py-2 text-sm border border-line rounded-lg text-ink-soft hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
+            className="px-3 py-2 text-sm border border-line rounded-lg text-ink-muted hover:bg-surface-alt disabled:opacity-50 flex items-center gap-1.5"
           >
             <RefreshCw className={`w-4 h-4 ${cargando ? 'animate-spin' : ''}`} />
             Actualizar
@@ -164,7 +164,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             className={`px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors ${
               pestana === p
                 ? 'border-brand text-brand'
-                : 'border-transparent text-ink-soft hover:text-ink'
+                : 'border-transparent text-ink-muted hover:text-ink'
             }`}
           >
             {p === 'todos' ? 'Todos' : 'Bandeja de revisión'}
@@ -187,7 +187,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
               motivo === ''
                 ? 'bg-brand text-white border-brand'
-                : 'border-line text-ink-soft hover:bg-surface-alt'
+                : 'border-line text-ink-muted hover:bg-surface-alt'
             }`}
           >
             Todos los motivos
@@ -200,7 +200,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               className={`px-3 py-1.5 text-xs rounded-lg border transition-colors ${
                 motivo === c.codigo
                   ? 'bg-brand text-white border-brand'
-                  : 'border-line text-ink-soft hover:bg-surface-alt'
+                  : 'border-line text-ink-muted hover:bg-surface-alt'
               }`}
             >
               {c.codigo}
@@ -212,7 +212,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
       <div className="flex flex-wrap items-center gap-2">
         <div className="relative flex-1 min-w-[220px]">
-          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-soft" />
+          <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
           <input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
@@ -265,7 +265,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               setMotivo('');
               setSearchTerm('');
             }}
-            className="px-3 py-2 text-sm text-ink-soft hover:text-ink flex items-center gap-1"
+            className="px-3 py-2 text-sm text-ink-muted hover:text-ink flex items-center gap-1"
           >
             <X className="w-4 h-4" />
             Limpiar
@@ -281,12 +281,12 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       {error ? (
         <ErrorDeCarga error={error} onReintentar={cargar} />
       ) : cargando && filas.length === 0 ? (
-        <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-3 text-ink-soft">
+        <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-3 text-ink-muted">
           <Loader2 className="w-6 h-6 animate-spin text-brand" />
           <p className="text-sm">Cargando el inventario…</p>
         </div>
       ) : filas.length === 0 ? (
-        <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-2 text-ink-soft">
+        <div className="border border-line rounded-xl bg-surface p-12 flex flex-col items-center gap-2 text-ink-muted">
           <Filter className="w-6 h-6" />
           <p className="text-sm font-medium text-ink">Ningún equipo coincide</p>
           <p className="text-xs">Probar con menos filtros, o limpiarlos todos.</p>
@@ -297,7 +297,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
         >
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead className="bg-surface-alt text-ink-soft text-xs uppercase tracking-wide">
+              <thead className="bg-surface-alt text-ink-muted text-xs uppercase tracking-wide">
                 <tr>
                   <th className="text-left font-semibold px-4 py-3">Etiqueta</th>
                   <th className="text-left font-semibold px-4 py-3">Equipo</th>
@@ -317,17 +317,17 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                     <td className="px-4 py-3 font-mono text-xs text-brand">{e.etiqueta ?? '—'}</td>
                     <td className="px-4 py-3">
                       <div className="font-medium text-ink">{nombreDe(e)}</div>
-                      <div className="text-xs text-ink-soft">
+                      <div className="text-xs text-ink-muted">
                         {[e.marca, e.modelo].filter(Boolean).join(' ') || e.categoria}
                       </div>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-ink-soft">{e.serial ?? '—'}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-ink-muted">{e.serial ?? '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-0.5 rounded-full ${colorEstado[e.estado]}`}>
                         {e.estado}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-ink-soft">{nombreSede(e.sede_id)}</td>
+                    <td className="px-4 py-3 text-ink-muted">{nombreSede(e.sede_id)}</td>
                     <td className="px-4 py-3">
                       {e.motivos_revision.length > 0 ? (
                         <span className="inline-flex items-center gap-1 text-xs text-ink">
@@ -335,7 +335,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                           {e.motivos_revision.length}
                         </span>
                       ) : (
-                        <span className="text-xs text-ink-soft">—</span>
+                        <span className="text-xs text-ink-muted">—</span>
                       )}
                     </td>
                   </tr>
@@ -344,7 +344,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
             </table>
           </div>
 
-          <div className="flex items-center justify-between px-4 py-3 border-t border-line text-xs text-ink-soft">
+          <div className="flex items-center justify-between px-4 py-3 border-t border-line text-xs text-ink-muted">
             <span>
               {(pagina - 1) * porPagina + 1}–{Math.min(pagina * porPagina, total)} de {total}
             </span>
@@ -416,7 +416,7 @@ const ErrorDeCarga: React.FC<{ error: ErrorApi; onReintentar: () => void }> = ({
                 ? 'El servidor no pudo consultar el inventario'
                 : 'No se pudo cargar el inventario'}
         </p>
-        <p className="text-sm text-ink-soft max-w-md">
+        <p className="text-sm text-ink-muted max-w-md">
           {sinConexion
             ? 'El inventario no está disponible ahora mismo. No se ha perdido nada: los datos están en el servidor y volverán a verse en cuanto responda.'
             : caducada
@@ -426,7 +426,7 @@ const ErrorDeCarga: React.FC<{ error: ErrorApi; onReintentar: () => void }> = ({
                 : error.message}
         </p>
         {!sinConexion && !caducada && (
-          <p className="text-xs text-ink-soft font-mono pt-1">
+          <p className="text-xs text-ink-muted font-mono pt-1">
             Código {error.estado}
             {falloServidor ? '' : ` · ${error.message}`}
           </p>
@@ -469,9 +469,9 @@ const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () =
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-lg font-bold text-ink">{nombreDe(equipo)}</h2>
-          <p className="text-sm text-ink-soft font-mono">{equipo.etiqueta ?? 'sin etiqueta'}</p>
+          <p className="text-sm text-ink-muted font-mono">{equipo.etiqueta ?? 'sin etiqueta'}</p>
         </div>
-        <button onClick={onCerrar} className="p-2 text-ink-soft hover:text-ink">
+        <button onClick={onCerrar} className="p-2 text-ink-muted hover:text-ink">
           <X className="w-4 h-4" />
         </button>
       </div>
@@ -484,7 +484,7 @@ const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () =
           </p>
           <ul className="space-y-1.5">
             {equipo.motivos_revision.map((m) => (
-              <li key={m} className="text-xs text-ink-soft">
+              <li key={m} className="text-xs text-ink-muted">
                 <span className="font-mono text-ink">{m}</span>
                 {' — '}
                 {MOTIVOS[m as keyof typeof MOTIVOS]?.descripcion ?? 'sin descripción'}
@@ -514,7 +514,7 @@ const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () =
           ] as const
         ).map(([etiqueta, valor]) => (
           <div key={etiqueta}>
-            <dt className="text-xs text-ink-soft">{etiqueta}</dt>
+            <dt className="text-xs text-ink-muted">{etiqueta}</dt>
             <dd className="text-ink">{valor ?? '—'}</dd>
           </div>
         ))}
@@ -522,7 +522,7 @@ const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () =
 
       {equipo.notas && (
         <div>
-          <p className="text-xs text-ink-soft">Notas</p>
+          <p className="text-xs text-ink-muted">Notas</p>
           <p className="text-sm text-ink">{equipo.notas}</p>
         </div>
       )}
