@@ -12,11 +12,13 @@ import type {
   EquipoConMotivos,
   EquipoResumen,
   MantenimientoConEquipo,
+  Movimiento,
   NuevoEquipo,
   Pagina,
   ResumenEquipos,
   Sede,
   SedeConConteos,
+  TrasladoAbierto,
   UsuarioSesion,
 } from '../types';
 
@@ -162,4 +164,17 @@ export const api = {
 
   mantenimientos: (f: { equipo?: string; estado?: string; porPagina?: number } = {}) =>
     pedir<Pagina<MantenimientoConEquipo>>(`/api/mantenimientos${consulta(f)}`),
+
+  /** Los traslados en curso. La otra cara del badge del sidebar. */
+  trasladosAbiertos: () => pedir<{ traslados: TrasladoAbierto[] }>('/api/traslados'),
+
+  /**
+   * Confirmar la llegada. El servidor cierra el movimiento y mueve el equipo a
+   * la sede destino en la misma transacción; aquí solo se manda el id.
+   */
+  confirmarTraslado: (movimientoId: string) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/movimientos/${movimientoId}/confirmar`,
+      { method: 'POST', body: '{}' },
+    ),
 };

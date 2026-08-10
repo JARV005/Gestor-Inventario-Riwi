@@ -157,6 +157,40 @@ export interface ResumenEquipos {
 
 export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
+/**
+ * Una fila de `GET /api/traslados`: un equipo que está viajando ahora mismo.
+ *
+ * Los nombres vienen resueltos por el servidor. Es lo que devuelve a
+ * `SedesView` la lista que perdió al sustituir a `LogisticsHubsView` (D1), con
+ * la diferencia de que estos datos existen: los inventaba el prototipo.
+ *
+ * `dias_en_transito` lo calcula Postgres. El reloj del navegador puede estar en
+ * otra zona, y «lleva 9 días» es el número por el que se llama a la
+ * transportadora.
+ */
+export interface TrasladoAbierto {
+  id: string;
+  fecha: string;
+  equipo_id: string;
+  etiqueta: string | null;
+  marca: string | null;
+  modelo: string | null;
+  categoria: CategoriaEquipo;
+  estado: EstadoEquipo;
+  /** Quién lo tiene asignado, si está asignado. Un traslado no cambia eso. */
+  responsable: string | null;
+  sede_origen_id: string | null;
+  sede_origen: string | null;
+  sede_destino_id: string | null;
+  sede_destino: string | null;
+  transportadora: string | null;
+  guia: string | null;
+  fecha_estimada: string | null;
+  observaciones: string | null;
+  usuario: string | null;
+  dias_en_transito: number;
+}
+
 export type Mantenimiento = Serializado<typeof mantenimientos.$inferSelect>;
 
 /**
