@@ -71,4 +71,17 @@ pool.on('error', (err) => {
 export const db = drizzle(pool, { schema: esquema });
 
 export type BD = typeof db;
+
+/**
+ * La base **o** una transacción abierta sobre ella.
+ *
+ * `BD` a secas no vale para un repositorio que quiera correr dentro de una
+ * transacción ajena: el objeto que drizzle pasa al callback de `transaction()`
+ * no tiene `$client`, así que no es asignable a `typeof db`. Sin este tipo, la
+ * única forma de reusar un repositorio desde dentro de una transacción es
+ * copiar su cuerpo, y una copia de un INSERT de auditoría es una copia que se
+ * queda sin actualizar.
+ */
+export type Ejecutor = BD | Parameters<Parameters<BD['transaction']>[0]>[0];
+
 export { esquema };

@@ -1,9 +1,11 @@
 /**
  * `/api/equipos`.
  *
- * Las mutaciones de estado —asignar, devolver, trasladar, dar de baja— NO están
- * aquí: son de la etapa 5, y escriben en `equipos` y `movimientos` en la misma
- * transacción. Lo que hay es el CRUD y las lecturas.
+ * Las mutaciones de estado —asignar, devolver, reservar, liberar, trasladar y
+ * dar de baja— NO están aquí: viven en `rutas/movimientos.ts`, porque escriben
+ * en `equipos`, `movimientos` y `auditoria` en la misma transacción y porque
+ * qué transición es legal se decide en un solo sitio
+ * (`db/transiciones.ts`). Aquí quedan el CRUD y las lecturas.
  */
 
 import type { Express } from 'express';
@@ -154,19 +156,8 @@ export function registrarRutasEquipos(app: Express): void {
     }),
   );
 
-  ruta(
-    app,
-    'get',
-    '/api/equipos/:id/historial',
-    'autenticado',
-    guardian,
-    asincrono(async (req, res) => {
-      const id = validar(uuid, req.params.id);
-      const equipo = await repoEquipos.porId(id);
-      if (!equipo) throw noEncontrado('Equipo');
-      res.json({ movimientos: await repoEquipos.historial(id) });
-    }),
-  );
+  // `GET /api/equipos/:id/historial` vive en `rutas/movimientos.ts` desde la
+  // etapa 5. El de aquí devolvía los UUID a pelo, sin resolver nombres.
 
   /**
    * El único endpoint que devuelve los campos cifrados, de uno en uno y solo

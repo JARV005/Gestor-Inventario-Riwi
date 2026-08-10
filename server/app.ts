@@ -16,6 +16,7 @@ import { registrarRutasAuth } from './rutas/auth.js';
 import { registrarRutasEmpleados } from './rutas/empleados.js';
 import { registrarRutasEquipos } from './rutas/equipos.js';
 import { registrarRutasMantenimientos } from './rutas/mantenimientos.js';
+import { registrarRutasMovimientos } from './rutas/movimientos.js';
 import { registrarRutasSedes } from './rutas/sedes.js';
 import { middlewareSesion } from './sesion.js';
 
@@ -43,6 +44,9 @@ export function crearApp(): Express {
   registrarRutasEmpleados(app);
   registrarRutasSedes(app);
   registrarRutasMantenimientos(app);
+  // Después de las de equipos: sus rutas son '/api/equipos/:id/algo' y no
+  // chocan con '/api/equipos/:id', que ya está registrada arriba.
+  registrarRutasMovimientos(app);
 
   // Siempre el último: si se registra antes que las rutas, no las cubre.
   app.use(manejadorErrores);

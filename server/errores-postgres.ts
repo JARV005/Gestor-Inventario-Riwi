@@ -89,6 +89,11 @@ const REGLAS: Record<string, string> = {
     'Las filas leídas de una importación tienen que ser las insertadas más las rechazadas.',
   importaciones_marcadas_caben:
     'Una importación no puede tener más filas marcadas que insertadas.',
+  idx_movimientos_traslado_abierto:
+    'Este equipo ya tiene un traslado en curso. Hay que confirmar el que está abierto antes de abrir otro; si el equipo no llegó a moverse, el traslado abierto es el que hay que revisar.',
+  actas_pdf_con_hash:
+    'Un acta guarda su PDF y el hash que lo verifica juntos, o ninguno de los dos.',
+  actas_equipos_pk: 'Ese equipo ya está incluido en esta acta.',
 };
 
 /** `Key (serial)=(776B494) already exists.` → `{ columna, valor }` */
@@ -142,6 +147,13 @@ export function traducirErrorPostgres(err: unknown): ErrorHttp | null {
   }
 
   if (e.code === UNIQUE) {
+    // Los índices únicos PARCIALES no explican por qué chocan. El detalle de
+    // Postgres dice `Key (equipo_id)=(…) already exists`, que sin el predicado
+    // del índice suena a «ese equipo ya tiene un movimiento» — y tiene 186.
+    // Lo que en realidad falló es que ya está viajando.
+    const regla = e.constraint ? REGLAS[e.constraint] : undefined;
+    if (regla) return new ErrorHttp(409, regla, { regla: e.constraint });
+
     const partes = partirDetalle(e.detail);
     if (!partes || COLUMNAS_MUDAS.has(partes.columna)) {
       return new ErrorHttp(409, `Ya existe otro ${articulo(e.table)} con ese valor.`);

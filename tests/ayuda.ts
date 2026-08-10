@@ -10,6 +10,7 @@ import { createServer, type Server } from 'node:http';
 import { AddressInfo } from 'node:net';
 
 import bcrypt from 'bcryptjs';
+import { Client } from 'pg';
 import { eq, like, sql } from 'drizzle-orm';
 
 import { cifrar } from '../db/cifrado.js';
@@ -319,6 +320,102 @@ export async function borrarEmpleados(ids: string[]): Promise<void> {
   for (const id of ids) await db.delete(empleados).where(eq(empleados.id, id));
 }
 
+/** El estado actual de un equipo, leído de la base y no de la respuesta. */
+export async function estadoDe(equipoId: string): Promise<string | null> {
+  const r = await db.execute<{ estado: string }>(
+    sql`SELECT equipos.estado FROM equipos WHERE equipos.id = ${equipoId}`,
+  );
+  return r.rows[0]?.estado ?? null;
+}
+
+export async function auditoriaDe(
+  registroId: string,
+  accion: string,
+): Promise<{ filas: { antes: unknown; despues: unknown; usuario_app_id: string | null }[] }> {
+  const r = await db.execute<{ antes: unknown; despues: unknown; usuario_app_id: string | null }>(
+    sql`SELECT auditoria.antes, auditoria.despues, auditoria.usuario_app_id
+          FROM auditoria
+         WHERE auditoria.registro_id = ${registroId} AND auditoria.accion = ${accion}
+         ORDER BY auditoria.fecha`,
+  );
+  return { filas: r.rows };
+}
+
+/**
+ * Abre una transacción, hace el `UPDATE` de `equipos` y **mata la conexión**
+ * antes de insertar el movimiento.
+ *
+ * Es el fallo a mitad de transacción, provocado de verdad: se termina el
+ * proceso servidor de Postgres desde otra sesión con `pg_terminate_backend`.
+ * No hay mock por medio — un mock demostraría que el mock se llamó en el orden
+ * previsto, y lo que hay que demostrar es que la base deshace lo ya escrito.
+ *
+ * El `on('error')` del cliente no es decorativo: `pg` emite un evento `error`
+ * cuando la conexión se cae, y un `error` de EventEmitter sin escuchar es una
+ * excepción no capturada que mata el proceso de Node. Es exactamente lo que le
+ * pasó al pool en la etapa 4a.
+ */
+export async function matarConexionEnMedioDeAsignar(
+  equipoId: string,
+  empleadoId: string,
+): Promise<string> {
+  const cliente = new Client({ connectionString: process.env.DATABASE_URL });
+  cliente.on('error', () => {
+    /* la vamos a matar a propósito: su muerte no es un fallo del proceso */
+  });
+  await cliente.connect();
+
+  try {
+    const { rows } = await cliente.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const pid = rows[0].pid;
+
+    await cliente.query('BEGIN');
+    await cliente.query(
+      `UPDATE equipos SET estado = 'Asignado', empleado_id = $1 WHERE id = $2`,
+      [empleadoId, equipoId],
+    );
+
+    // La fila ya está cambiada DENTRO de la transacción. Comprobarlo desde
+    // aquí es lo que hace que el test no pase por vacío: si el UPDATE no
+    // hubiera hecho nada, matar la conexión no demostraría nada.
+    const dentro = await cliente.query<{ estado: string }>(
+      'SELECT estado FROM equipos WHERE id = $1',
+      [equipoId],
+    );
+    if (dentro.rows[0]?.estado !== 'Asignado') {
+      throw new Error('el UPDATE no llegó a aplicarse dentro de la transacción');
+    }
+
+    // Desde OTRA conexión —la del pool—, matar esta.
+    await db.execute(sql`SELECT pg_terminate_backend(${pid})`);
+
+    // Y ahora el INSERT que nunca llegará. Tiene que fallar.
+    try {
+      await cliente.query(
+        `INSERT INTO movimientos (equipo_id, tipo, usuario_app_id)
+         VALUES ($1, 'Asignación', (SELECT id FROM usuarios_app LIMIT 1))`,
+        [equipoId],
+      );
+      return 'el INSERT pasó: la conexión no murió';
+    } catch {
+      return 'conexión terminada';
+    }
+  } finally {
+    // `end()` sobre una conexión ya muerta puede rechazar; no importa.
+    await cliente.end().catch(() => {});
+  }
+}
+
+/** La segunda sede sembrada. Para probar traslados de A a B. */
+export async function segundaSede(): Promise<string> {
+  const r = await db.execute<{ id: string }>(
+    sql`SELECT sedes.id FROM sedes ORDER BY sedes.nombre OFFSET 1 LIMIT 1`,
+  );
+  const id = r.rows[0]?.id;
+  if (!id) throw new Error("Hacen falta al menos dos sedes. Correr: npm run test:preparar");
+  return id;
+}
+
 /** La primera sede sembrada. Las altas necesitan una que exista de verdad. */
 export async function primeraSede(): Promise<string> {
   const r = await db.execute<{ id: string }>(
@@ -337,19 +434,26 @@ export async function contarEquiposConEtiqueta(etiqueta: string): Promise<number
 }
 
 /** Los movimientos de un equipo, del más antiguo al más nuevo. */
-export async function movimientosDe(
-  equipoId: string,
-): Promise<{ tipo: string; sede_destino_id: string | null; empleado_destino_id: string | null; usuario_app_id: string }[]> {
-  const r = await db.execute<{
-    tipo: string;
-    sede_destino_id: string | null;
-    empleado_destino_id: string | null;
-    usuario_app_id: string;
-  }>(
+/** `drizzle.execute<T>` exige que `T` tenga índice de cadena. */
+export type MovimientoDePrueba = {
+  tipo: string;
+  sede_origen_id: string | null;
+  sede_destino_id: string | null;
+  empleado_origen_id: string | null;
+  empleado_destino_id: string | null;
+  usuario_app_id: string;
+  fecha_confirmacion: Date | null;
+} & Record<string, unknown>;
+
+export async function movimientosDe(equipoId: string): Promise<MovimientoDePrueba[]> {
+  const r = await db.execute<MovimientoDePrueba>(
     sql`SELECT movimientos.tipo,
+               movimientos.sede_origen_id,
                movimientos.sede_destino_id,
+               movimientos.empleado_origen_id,
                movimientos.empleado_destino_id,
-               movimientos.usuario_app_id
+               movimientos.usuario_app_id,
+               movimientos.fecha_confirmacion
           FROM movimientos
          WHERE movimientos.equipo_id = ${equipoId}
          ORDER BY movimientos.fecha, movimientos.created_at`,

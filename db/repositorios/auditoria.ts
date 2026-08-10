@@ -8,7 +8,7 @@
  * vigilar.
  */
 
-import { db, type BD } from '../cliente.js';
+import { db, type Ejecutor } from '../cliente.js';
 import { auditoria } from '../esquema.js';
 
 export async function registrar(
@@ -21,7 +21,7 @@ export async function registrar(
     antes?: unknown;
     despues?: unknown;
   },
-  bd: BD = db,
+  bd: Ejecutor = db,
 ): Promise<void> {
   await bd.insert(auditoria).values({
     tabla: entrada.tabla,
