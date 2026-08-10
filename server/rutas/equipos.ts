@@ -70,7 +70,31 @@ const camposEquipo = z.object({
 });
 
 const esquemaCrear = camposEquipo;
-const esquemaActualizar = camposEquipo.partial();
+
+/**
+ * El `PATCH` edita la **ficha**, no la situación del equipo.
+ *
+ * `estado`, `empleado_id` y `sede_id` quedan fuera desde la etapa 5, y no es
+ * una restricción de forma: cambiarlos por aquí escribiría en `equipos` sin
+ * escribir en `movimientos`, que es exactamente lo que prohíbe la regla 5 del
+ * proyecto. Un equipo que cambia de dueño con un `PATCH` no deja rastro de
+ * quién lo tenía antes, y el historial —lo único que justifica el proyecto—
+ * pasa a tener agujeros que nadie ve.
+ *
+ * Los tres tienen su endpoint, y el 409 dice cuál.
+ */
+const esquemaActualizar = camposEquipo
+  .omit({ estado: true, empleado_id: true, sede_id: true })
+  .partial();
+
+const POR_SU_ENDPOINT: Record<string, string> = {
+  estado:
+    'El estado no se edita a mano: sale de una operación. POST /api/equipos/:id/{asignar|devolver|reservar|liberar|baja}.',
+  empleado_id:
+    'El responsable no se edita a mano: se asigna o se devuelve. POST /api/equipos/:id/asignar o /devolver.',
+  sede_id:
+    'La sede no se edita a mano: se traslada. POST /api/equipos/:id/trasladar, y la sede cambia al confirmar la llegada.',
+};
 
 const esquemaFiltros = z.object({
   estado: z.enum(estadoEquipo.enumValues).optional(),
@@ -214,7 +238,19 @@ export function registrarRutasEquipos(app: Express): void {
     guardian,
     asincrono(async (req, res) => {
       const id = validar(uuid, req.params.id);
-      const datos = validar(esquemaActualizar, req.body);
+
+      // Antes de validar: un campo prohibido tiene que decir por dónde va, no
+      // desaparecer en silencio. `.omit()` a secas lo descartaría y la
+      // respuesta sería un 200 que no hizo lo que le pidieron — el mismo modo
+      // de fallo que tenía `costo` en el POST.
+      const cuerpo = (req.body ?? {}) as Record<string, unknown>;
+      for (const campo of Object.keys(POR_SU_ENDPOINT)) {
+        if (campo in cuerpo) {
+          throw new ErrorHttp(409, POR_SU_ENDPOINT[campo], { campo });
+        }
+      }
+
+      const datos = validar(esquemaActualizar, cuerpo);
       const equipo = await repoEquipos.actualizar(id, datos);
       if (!equipo) throw noEncontrado('Equipo');
       res.json({ equipo });

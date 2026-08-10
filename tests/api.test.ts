@@ -79,6 +79,9 @@ describe('campos cifrados: no salen por ningún listado', () => {
     `/api/empleados/${empleadoId}/equipos`,
     '/api/empleados',
     '/api/sedes',
+    // Devuelve marca, modelo y etiqueta del equipo que viaja: es un listado de
+    // equipos con otro nombre, y los listados son de donde se escapan.
+    '/api/traslados',
   ];
 
   it('ningún GET los devuelve, tampoco para admin', async () => {
@@ -116,7 +119,14 @@ describe('campos cifrados: no salen por ningún listado', () => {
     // 409: una FK inexistente. Desde que existe el traductor de errores de
     // Postgres esto ya no es un 500 — es un error que la persona puede
     // corregir— pero sigue siendo una respuesta de error y no puede filtrar.
-    const fk = await cAdmin.patch(`/api/equipos/${equipoId}`, {
+    //
+    // Va por el POST y no por el PATCH: desde la etapa 5 el PATCH rechaza
+    // `sede_id` antes de llegar a la base (se traslada, no se edita), así que
+    // por ahí ya no se puede provocar una violación de FK.
+    const fk = await cAdmin.post('/api/equipos', {
+      categoria: 'Portátil',
+      estado: 'Disponible',
+      etiqueta: `${suite.prefijo}FK`,
       sede_id: '11111111-1111-1111-1111-111111111111',
     });
     assert.equal(fk.estado, 409);

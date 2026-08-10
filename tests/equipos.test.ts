@@ -24,6 +24,7 @@ import {
   comprobarBaseDeTest,
   contarEquiposConEtiqueta,
   crearEmpleado,
+  estadoDe,
   movimientosDe,
   primeraSede,
   type Servidor,
@@ -127,6 +128,50 @@ describe('equipos: el alta escribe también su movimiento', () => {
     });
     assert.equal(r.estado, 409);
     assert.equal(await contarEquiposConEtiqueta(etiqueta), 0, 'no quedó el equipo a medias');
+  });
+
+  /**
+   * La regla 5 del proyecto por su otra cara: si el `PATCH` pudiera mover el
+   * estado, existiría una forma de cambiar un equipo sin escribir su
+   * movimiento, y el historial tendría agujeros que nadie ve.
+   *
+   * El 409 y no un descarte silencioso: `.omit()` a secas devolvería 200 sin
+   * hacer lo que le pidieron, que es el mismo fallo que tenía `costo`.
+   */
+  it('el PATCH no puede mover estado, responsable ni sede', async () => {
+    const id = creados[0];
+    const antes = await movimientosDe(id);
+
+    for (const [campo, valor] of [
+      ['estado', 'De baja'],
+      ['empleado_id', empleado],
+      ['sede_id', sede],
+    ] as const) {
+      const r = await c.patch(`/api/equipos/${id}`, { [campo]: valor });
+      assert.equal(r.estado, 409, `${campo} debería rechazarse`);
+      const cuerpo = r.cuerpo as { error: string; campo: string };
+      assert.equal(cuerpo.campo, campo);
+      // El mensaje tiene que decir por dónde va, no solo que no.
+      assert.match(cuerpo.error, /POST \/api\/equipos/, cuerpo.error);
+    }
+
+    assert.deepEqual(
+      (await movimientosDe(id)).length,
+      antes.length,
+      'ninguno de los tres intentos escribió nada',
+    );
+    assert.equal(await estadoDe(id), 'Disponible', 'y el estado sigue donde estaba');
+  });
+
+  it('lo que el PATCH sí edita sigue funcionando', async () => {
+    // Que el bloqueo de arriba no se haya llevado por delante la edición de la
+    // ficha: sin esto, un `.omit()` de más pasaría los dos tests.
+    const id = creados[0];
+    const r = await c.patch(`/api/equipos/${id}`, { notas: 'teclado ES', ram: '32 GB' });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    const { equipo } = r.cuerpo as { equipo: { notas: string; ram: string } };
+    assert.equal(equipo.notas, 'teclado ES');
+    assert.equal(equipo.ram, '32 GB');
   });
 
   it('el costo que manda el formulario llega a la base', async () => {
