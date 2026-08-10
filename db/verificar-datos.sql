@@ -18,7 +18,7 @@
 
 -- Lo primero: negarse si no hay corpus.
 --
--- Las 32 comprobaciones de abajo cuentan filas que incumplen, así que sobre una
+-- Las comprobaciones de abajo cuentan filas que incumplen, así que sobre una
 -- BD vacía todas dan cero y el fichero saldría verde sin haber mirado nada. Y
 -- `npm run db:reset` deja la BD exactamente así, de modo que correr esto justo
 -- después es el camino natural, no un descuido raro.
@@ -251,6 +251,113 @@ WHERE (SELECT count(*) FROM movimientos x WHERE x.equipo_id = e.id) = 1
   AND (m.sede_destino_id IS DISTINCT FROM e.sede_id
        OR m.empleado_destino_id IS DISTINCT FROM e.empleado_id);
 
+-- ---------------------------------------------------------------------------
+-- F2. Los movimientos de la etapa 5: cada tipo dice lo que su nombre promete
+-- ---------------------------------------------------------------------------
+--
+-- Hasta la etapa 5 el único movimiento era el `Alta` del importador y estas
+-- comprobaciones habrían sido vacías. Desde que hay seis mutaciones, un
+-- movimiento mal rellenado es un historial que miente: una `Asignación` sin
+-- destinatario no dice a quién se le dio el equipo, y eso es justo lo que se le
+-- va a preguntar dentro de un año.
+
+INSERT INTO hallazgo
+SELECT 'F2', 'Asignacion sin empleado destino', count(*)
+FROM movimientos m WHERE m.tipo = 'Asignación' AND m.empleado_destino_id IS NULL;
+
+INSERT INTO hallazgo
+SELECT 'F2', 'Devolucion sin empleado origen', count(*)
+FROM movimientos m WHERE m.tipo = 'Devolución' AND m.empleado_origen_id IS NULL;
+
+INSERT INTO hallazgo
+SELECT 'F2', 'Traslado sin sede destino', count(*)
+FROM movimientos m WHERE m.tipo = 'Traslado' AND m.sede_destino_id IS NULL;
+
+-- Un traslado de una sede a sí misma no mueve nada y ocuparía la única ranura
+-- de traslado abierto que tiene el equipo.
+INSERT INTO hallazgo
+SELECT 'F2', 'Traslado cuyo origen y destino son la misma sede', count(*)
+FROM movimientos m WHERE m.tipo = 'Traslado' AND m.sede_origen_id = m.sede_destino_id;
+
+-- `fecha_confirmacion` solo la usa el traslado. En cualquier otro tipo es una
+-- confirmación de algo que nunca estuvo pendiente.
+INSERT INTO hallazgo
+SELECT 'F2', 'movimiento confirmado que no es un Traslado', count(*)
+FROM movimientos m WHERE m.fecha_confirmacion IS NOT NULL AND m.tipo <> 'Traslado';
+
+INSERT INTO hallazgo
+SELECT 'F2', 'traslado confirmado antes de salir', count(*)
+FROM movimientos m WHERE m.fecha_confirmacion IS NOT NULL AND m.fecha_confirmacion < m.fecha;
+
+-- El índice único parcial ya lo impide. Se comprueba igual porque un índice
+-- puede caerse en una restauración parcial, y este es el dato que diría dónde
+-- está un equipo: con dos abiertos, en dos sitios.
+INSERT INTO hallazgo
+SELECT 'F2', 'equipos con mas de un traslado abierto', count(*)
+FROM (SELECT m.equipo_id FROM movimientos m
+       WHERE m.tipo = 'Traslado' AND m.fecha_confirmacion IS NULL
+       GROUP BY m.equipo_id HAVING count(*) > 1) x;
+
+-- ---------------------------------------------------------------------------
+-- El invariante que la etapa 5 hace comprobable: el estado del equipo es el
+-- que dejó su último movimiento de estado.
+--
+-- Los traslados quedan fuera del cálculo a propósito: no cambian el estado
+-- (D13), así que un equipo asignado que viaja sigue `Asignado` y su último
+-- movimiento es el `Traslado`. Mirar «el último movimiento» a secas lo pondría
+-- rojo sin que nada esté mal.
+--
+-- Se sostiene porque el `PATCH` dejó de poder tocar `estado` y `empleado_id`
+-- en la etapa 5. Si alguien reabre esa puerta, esta comprobación es la que se
+-- pone roja, y por eso está aquí y no en un comentario.
+-- ---------------------------------------------------------------------------
+
+INSERT INTO hallazgo
+SELECT 'F2', 'equipos cuyo estado no concuerda con su ultimo movimiento', count(*)
+FROM equipos e
+JOIN LATERAL (
+  SELECT m.tipo
+    FROM movimientos m
+   WHERE m.equipo_id = e.id
+     AND m.tipo IN ('Asignación', 'Devolución', 'Reserva', 'Liberación', 'Baja')
+   ORDER BY m.fecha DESC, m.created_at DESC
+   LIMIT 1
+) ult ON true
+WHERE e.estado <> CASE ult.tipo
+                    WHEN 'Asignación' THEN 'Asignado'
+                    WHEN 'Devolución' THEN 'Disponible'
+                    WHEN 'Reserva'    THEN 'Reservado'
+                    WHEN 'Liberación' THEN 'Disponible'
+                    WHEN 'Baja'       THEN 'De baja'
+                  END::estado_equipo;
+
+-- La otra cara: el responsable tiene que ser el de la última asignación.
+INSERT INTO hallazgo
+SELECT 'F2', 'equipos asignados a alguien distinto del de su ultima Asignacion', count(*)
+FROM equipos e
+JOIN LATERAL (
+  SELECT m.empleado_destino_id
+    FROM movimientos m
+   WHERE m.equipo_id = e.id AND m.tipo = 'Asignación'
+   ORDER BY m.fecha DESC, m.created_at DESC
+   LIMIT 1
+) ult ON true
+WHERE e.estado = 'Asignado' AND e.empleado_id IS DISTINCT FROM ult.empleado_destino_id;
+
+-- Y la sede: la de un equipo con traslados confirmados es la del último.
+INSERT INTO hallazgo
+SELECT 'F2', 'equipos que no estan en el destino de su ultimo traslado confirmado', count(*)
+FROM equipos e
+JOIN LATERAL (
+  SELECT m.sede_destino_id
+    FROM movimientos m
+   WHERE m.equipo_id = e.id
+     AND m.tipo = 'Traslado' AND m.fecha_confirmacion IS NOT NULL
+   ORDER BY m.fecha_confirmacion DESC
+   LIMIT 1
+) ult ON true
+WHERE e.sede_id IS DISTINCT FROM ult.sede_destino_id;
+
 -- ===========================================================================
 -- G. Reconciliación de las corridas de importación
 -- ===========================================================================
@@ -293,6 +400,11 @@ SELECT (SELECT count(*) FROM equipos) AS equipos,
        (SELECT count(*) FROM empleados) AS empleados,
        (SELECT count(*) FROM equipos WHERE requiere_revision) AS marcados,
        (SELECT count(*) FROM equipos_motivos_revision) AS motivos,
-       (SELECT count(*) FROM importaciones) AS corridas;
+       (SELECT count(*) FROM importaciones) AS corridas,
+       -- Sin esto, las comprobaciones F2 saldrían verdes sobre cero
+       -- movimientos de estado y no se vería que no comprobaron nada.
+       (SELECT count(*) FROM movimientos WHERE tipo <> 'Alta') AS movimientos_de_estado,
+       (SELECT count(*) FROM movimientos
+         WHERE tipo = 'Traslado' AND fecha_confirmacion IS NULL) AS traslados_abiertos;
 
 DROP TABLE hallazgo;

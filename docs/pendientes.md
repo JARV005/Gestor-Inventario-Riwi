@@ -19,6 +19,13 @@ Encaja mejor con la etapa 5, cuando existan las mutaciones de estado y haya un
 tampoco escribió aquí; su rastro equivalente son `importaciones` y los 186
 movimientos `Alta`.
 
+**Medio cerrado en la etapa 5.** Las seis mutaciones y la confirmación de
+traslado escriben su fila de `auditoria` dentro de la misma transacción. Siguen
+sin dejar rastro `POST /api/equipos` (el alta, cuyo rastro hoy es su movimiento
+`Alta`) y `PATCH /api/equipos/:id` (la edición de la ficha, que desde la etapa 5
+ya no puede tocar estado, responsable ni sede). Cerrar los dos en la etapa 7,
+con el resto del endurecimiento.
+
 ---
 
 ## Etapa 5 — movimientos y actas
@@ -90,51 +97,26 @@ Tres cosas que hay que corregir al montarla, y que en el original estaban mal:
   firmante que no existe. Si el acta lleva número, tiene que salir de una
   secuencia real; el firmante, de la sesión.
 
-### Los traslados abiertos desaparecieron de la interfaz
+### El equipo perdido o robado mientras estaba asignado
 
-Es la única funcionalidad **visible** que se perdió al sustituir
-`LogisticsHubsView` por `SedesView` en la etapa 4a. Todo lo demás que se fue
-—capacidad de los hubs, transportadoras, números de guía— nunca tuvo datos
-detrás: ni en el Excel ni en el esquema.
+**No resolver todavía.** Se anota porque va a aparecer, no porque haya que
+inventarle una operación ahora.
 
-**Qué mostraba antes.** Una lista de envíos en curso, cada uno con:
-transportadora (DHL / FedEx / Estafeta), número de guía, fecha estimada de
-entrega, hub de origen y de destino, nombre del empleado y equipos incluidos.
-Todo ello inventado por el prototipo.
+Dar de baja un equipo `Asignado` está prohibido a propósito (`db/transiciones.ts`):
+destruir en el inventario algo que una persona tiene en la mano deja a esa
+persona con un activo que el sistema cree que ya no existe. La salida que el 409
+ofrece es «devuélvelo primero».
 
-**Qué tiene que mostrar cuando existan los movimientos.** Un traslado abierto
-es una fila de `movimientos` con `tipo = 'Traslado'` y
-`fecha_confirmacion IS NULL` (D1). El esquema ya tiene los campos, vacíos desde
-la migración 0000:
+Eso funciona para un equipo que se rompe o se jubila. **No funciona para uno que
+se perdió o lo robaron**: nadie devolvió nada, y registrar una `Devolución` para
+poder dar la baja es escribir en el historial un hecho que no ocurrió — el
+equipo nunca volvió a manos de TI.
 
-| Columna | Qué es |
-|---|---|
-| `transportadora` | Quién lo lleva |
-| `guia` | Número de seguimiento |
-| `fecha_estimada` | Entrega prevista |
-| `sede_origen_id` / `sede_destino_id` | De dónde a dónde |
-| `equipo_id` | Qué se mueve |
-
-En `SedesView` va como lista bajo las tarjetas de sede: origen → destino,
-equipo, transportadora, guía y días en tránsito. Y el contador «en tránsito» de
-cada tarjeta, que hoy sale de `equipos.estado`, debe cuadrar con el número de
-traslados abiertos de esa sede — es el invariante de D1 y son las dos caras del
-mismo hecho.
-
-El sitio en el código está marcado con `TODO(5)` al final de
-`src/components/SedesView.tsx`, pero **el TODO no es el recordatorio**: esta
-entrada lo es.
-
-### El invariante de D1 no lo impone nadie
-
-«Un equipo está `En tránsito` ⟺ existe un movimiento `Traslado` con
-`fecha_confirmacion IS NULL`». Cruza dos tablas, así que no cabe en un CHECK.
-Hoy no hay ni un traslado, así que no hay nada incumplido, pero tampoco nada
-que lo impida.
-
-Cuando exista el primero, decidir si va como CONSTRAINT TRIGGER deferido —el
-mismo patrón que `0006_motivos_referenciales.sql`— o si se deja a la capa de
-transacciones.
+Cuando ocurra el primer caso real, se decide con él delante: si es un
+`tipo_movimiento` nuevo (`Pérdida`, `Baja por siniestro`), si es una baja con
+motivo que sí acepta salir de `Asignado`, o si el flujo pasa por otro sitio
+—acta, denuncia, seguro— antes de tocar el inventario. La respuesta depende de
+qué haga la empresa con el papel, y eso no se puede adivinar desde aquí.
 
 ### El importador dejará de poder reimportar
 
@@ -197,6 +179,39 @@ cuyos campos cifrados no se pueden leer está restaurada solo a medias, y el
 ---
 
 ## Resueltos
+
+### ~~Los traslados abiertos desaparecieron de la interfaz~~
+
+Cerrado en la etapa 5, paso 3. Era la única funcionalidad **visible** que se
+perdió al sustituir `LogisticsHubsView` por `SedesView` en la etapa 4a.
+
+Vuelve como lista bajo las tarjetas de sede, con origen → destino, equipo,
+responsable, transportadora, guía, llegada prevista y días en tránsito —este
+último calculado por Postgres, no por el navegador. Cada fila lleva su botón de
+confirmar llegada, que es `POST /api/movimientos/:id/confirmar`.
+
+Lo que cambia respecto al prototipo: **los datos existen**. El original los
+inventaba (DHL / FedEx / Estafeta y hubs con capacidad); estos salen de las
+columnas que `movimientos` tenía vacías desde la 0000. Lo que no volvió es la
+capacidad de los hubs, que nunca tuvo de dónde salir.
+
+El badge del sidebar y esta lista salen de la misma condición —`tipo =
+'Traslado'` y `fecha_confirmacion IS NULL`—, así que no pueden discrepar.
+
+### ~~El invariante de D1 no lo impone nadie~~
+
+Disuelto por D13 en la etapa 5, que es mejor que impuesto.
+
+El invariante era «un equipo está `En tránsito` ⟺ existe un movimiento
+`Traslado` con `fecha_confirmacion IS NULL`», y hacía falta un CONSTRAINT
+TRIGGER deferido porque cruza dos tablas. Al quitar `En tránsito` del enum de
+estados (0008) y **derivar** «está viajando» del traslado abierto, el lado
+izquierdo de la equivalencia dejó de existir: ya no hay dos sitios que puedan
+contradecirse. El índice único parcial cubre lo que quedaba —que no haya dos
+traslados abiertos del mismo equipo, que sería el equipo en dos sitios a la vez.
+
+Lo que sí quedó por comprobar, y está en `verificar-datos.sql` §F2: que la sede
+de un equipo sea la del destino de su último traslado confirmado.
 
 ### ~~`POLIZA DE SEGURO` y `z No asignar` están en `empleados`~~
 

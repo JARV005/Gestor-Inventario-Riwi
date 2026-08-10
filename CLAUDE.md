@@ -62,6 +62,10 @@ Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
   rota desde la etapa 3, la base de tests acumulaba filas corrida a
   corrida, y la corrida siguiente moría por un choque de UNIQUE — un
   síntoma dos pasos por delante de la causa.
+- La base de tests puede ir una migración por detrás de la de desarrollo, y
+  el síntoma no lo parece: fallos que se leen como bugs de la aplicación
+  (un 500 inesperado, un 200 donde debía haber 409). Antes de diagnosticar
+  un test rojo, comprobar que la base de tests está al día.
 - Antes de dar por cerrada una etapa, pregúntate qué prueba la habría
   dejado en rojo si el trabajo estuviera mal. Si no existe, escríbela.
 - Una exploración de datos se diseña para encontrar dónde están mal, no
