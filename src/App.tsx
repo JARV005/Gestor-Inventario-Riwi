@@ -151,6 +151,7 @@ export function App() {
       <OnboardingModal
         isOpen={isOnboardingModalOpen}
         onClose={() => setIsOnboardingModalOpen(false)}
+        onAsignado={recargarResumen}
       />
 
       <NewDeviceModal

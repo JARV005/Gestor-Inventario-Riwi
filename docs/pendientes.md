@@ -97,6 +97,23 @@ Tres cosas que hay que corregir al montarla, y que en el original estaban mal:
   firmante que no existe. Si el acta lleva número, tiene que salir de una
   secuencia real; el firmante, de la sesión.
 
+### «Reasignar» abre el asistente de entrega sin decirle qué equipo
+
+`InventoryView` tiene un botón **Reasignar** sobre un equipo concreto, y
+`EmployeesView` tiene **Offboarding**. Los dos abren `OnboardingModal` sin
+pasarle nada, así que el asistente empieza de cero: hay que volver a buscar el
+equipo en su desplegable.
+
+Peor en el caso de reasignar: el asistente solo lista equipos `Disponible` o
+`Reservado` —son los únicos que se pueden asignar—, de modo que el equipo desde
+el que se pulsó el botón **no aparece**. Reasignar es en realidad devolver y
+volver a asignar, dos operaciones, y el modal solo hace la segunda.
+
+No se resuelve en la etapa 5 porque son dos flujos distintos y ninguno de los
+dos es «entregar un kit»: reasignar necesita el paso de devolución previa, y
+offboarding necesita recoger **todos** los equipos de la persona, no entregar
+uno. Etapa 6, con las dos pantallas delante.
+
 ### El equipo perdido o robado mientras estaba asignado
 
 **No resolver todavía.** Se anota porque va a aparecer, no porque haya que

@@ -227,3 +227,62 @@ Ya mordió una vez: en la 4b la limpieza del arnés de tests llevaba rota desde 
 etapa 3 por este mismo RESTRICT, tapada porque `node:test` no cuenta el fallo de
 un hook en `# fail`. La solución correcta fue que la suite borrase su propia
 auditoría antes que sus usuarios, no relajar la constraint.
+
+---
+
+## D19. El `PATCH` de un equipo no puede mover estado, responsable ni sede
+
+`PATCH /api/equipos/:id` edita la **ficha**: marca, modelo, RAM, notas, costo.
+Desde la etapa 5 rechaza con **409** cualquier cuerpo que traiga `estado`,
+`empleado_id` o `sede_id`, y el mensaje dice por qué endpoint va cada uno.
+
+No es una restricción de forma. La regla 5 del proyecto —«las mutaciones de
+estado escriben en `equipos` y `movimientos` en la misma transacción, nunca por
+separado»— tenía una puerta trasera abierta desde la etapa 3: un `PATCH` que
+cambiara el estado escribía en `equipos` y en nada más. El equipo cambiaba de
+dueño sin dejar rastro de quién lo tenía antes, y el historial —lo único que
+justifica el proyecto— quedaba con agujeros que nadie ve, porque un historial
+incompleto se lee igual que uno completo.
+
+**409 y no descarte silencioso.** La alternativa fácil era quitar los tres
+campos del esquema de zod y ya: el `PATCH` los ignoraría y devolvería 200. Es el
+mismo modo de fallo que tenía `costo` en el `POST`, encontrado en la 4b — el
+formulario mandaba el dato, la API lo tiraba, y nadie se enteraba porque la
+respuesta decía que todo había ido bien.
+
+**Lo que esto hace comprobable.** Con esa puerta cerrada, el estado de un equipo
+solo puede venir de un movimiento, y eso ya es un invariante que se puede
+contar: `verificar-datos.sql` §F2 comprueba que el estado de cada equipo es el
+que dejó su último movimiento de estado, que su responsable es el de su última
+`Asignación`, y que su sede es el destino de su último traslado confirmado. Si
+alguien reabre la puerta, esas tres se ponen rojas.
+
+**Lo que queda fuera:** el `POST` sí pone estado, responsable y sede, porque el
+alta los establece en vez de cambiarlos, y escribe su movimiento `Alta` en la
+misma transacción. Y el importador escribe directo contra la base, que es lo
+correcto para una carga masiva con su propio rastro (`importaciones`).
+
+---
+
+## D20. La entrega de un kit no es atómica, y se dice
+
+`OnboardingModal` entrega varios equipos a la vez: un portátil, un monitor,
+periféricos. Cada uno se manda por separado —`POST /api/equipos/:id/asignar`, y
+un `trasladar` detrás si el equipo no está en la sede de quien lo recibe—, y
+**no hay ninguna transacción que abarque el kit entero**.
+
+Cada llamada sí es atómica por dentro. Lo que no existe es «los tres o
+ninguno». Un endpoint de lote lo daría, y se descartó porque el caso que hace
+fallar a uno del kit no es un error del sistema: es que alguien se llevó ese
+portátil hace un minuto. Deshacer las otras dos asignaciones por eso sería peor
+—dos equipos que ya salieron del almacén volverían a figurar como disponibles.
+
+La consecuencia es de interfaz y es obligatoria: el modal enseña el resultado
+**equipo por equipo**, y el confeti solo salta si salieron todos. Celebrar un
+kit a medias esconde justo lo que hay que mirar: el equipo que no se asignó
+sigue disponible para otra persona, y alguien tiene que enterarse hoy y no
+cuando lo reclame el colaborador.
+
+Si más adelante hace falta el todo-o-nada, el sitio es un endpoint de lote que
+llame a `mutar()` varias veces dentro de una sola transacción; la función ya
+acepta el ejecutor por parámetro precisamente para eso.

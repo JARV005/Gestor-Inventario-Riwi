@@ -165,6 +165,26 @@ export const api = {
   mantenimientos: (f: { equipo?: string; estado?: string; porPagina?: number } = {}) =>
     pedir<Pagina<MantenimientoConEquipo>>(`/api/mantenimientos${consulta(f)}`),
 
+  /**
+   * Las mutaciones de estado. Cada una escribe `equipos`, `movimientos` y
+   * `auditoria` en una sola transacción; qué transición es legal lo decide el
+   * servidor (`db/transiciones.ts`) y lo explica en el 409.
+   */
+  asignar: (equipoId: string, empleadoId: string) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/asignar`,
+      { method: 'POST', body: JSON.stringify({ empleado_id: empleadoId }) },
+    ),
+
+  trasladar: (equipoId: string, sedeDestinoId: string, transportadora?: string | null) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/trasladar`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ sede_destino_id: sedeDestinoId, transportadora: transportadora ?? null }),
+      },
+    ),
+
   /** Los traslados en curso. La otra cara del badge del sidebar. */
   trasladosAbiertos: () => pedir<{ traslados: TrasladoAbierto[] }>('/api/traslados'),
 

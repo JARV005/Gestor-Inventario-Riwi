@@ -493,6 +493,97 @@ describe('movimientos: la auditoría va con la mutación', () => {
 });
 
 // ---------------------------------------------------------------------------
+// La entrega de un kit: la secuencia que hace OnboardingModal
+// ---------------------------------------------------------------------------
+//
+// El modal manda una asignación por equipo, y un traslado detrás cuando el
+// equipo no está en la sede de quien lo recibe. No hay transacción que abarque
+// el kit entero —no existe endpoint de lote—, así que lo que hay que probar es
+// justo eso: que un fallo en mitad del kit no arrastra a los demás ni deja al
+// que falló a medias.
+
+describe('entrega de un kit: asignación por equipo, y traslado si cambia de sede', () => {
+  const suite = ambito('kit');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let sedeB: string;
+  let receptor: string;
+  let otro: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    sedeB = await segundaSede();
+    receptor = await crearEmpleado(`${suite.prefijo}receptor`);
+    otro = await crearEmpleado(`${suite.prefijo}otro`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([receptor, otro]);
+    await suite.limpiar();
+  });
+
+  it('un equipo de otra sede se asigna Y se pone en tránsito', async () => {
+    // El portátil está en A, quien lo recibe está en B.
+    const id = await crearEquipo(c, `${suite.prefijo}VIAJA`, sedeA);
+    creados.push(id);
+
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: receptor })).estado, 200);
+    assert.equal(
+      (await c.post(`/api/equipos/${id}/trasladar`, {
+        sede_destino_id: sedeB,
+        transportadora: 'Servientrega',
+      })).estado,
+      200,
+    );
+
+    // Las tres cosas a la vez, que es lo que D13 permite decir: es suyo, sigue
+    // en la sede de origen, y está viajando.
+    assert.equal(await estadoDe(id), 'Asignado');
+    assert.equal(await sedeDe(id), sedeA, 'la sede no se mueve hasta confirmar');
+    const abierto = await trasladoAbiertoDe(id);
+    assert.equal(abierto?.sede_destino_id, sedeB);
+
+    const tipos = (await movimientosDe(id)).map((m) => m.tipo);
+    assert.deepEqual(tipos, ['Alta', 'Asignación', 'Traslado']);
+  });
+
+  it('si un equipo del kit falla, los otros dos quedan entregados y él intacto', async () => {
+    const uno = await crearEquipo(c, `${suite.prefijo}K1`, sedeA);
+    const dos = await crearEquipo(c, `${suite.prefijo}K2`, sedeA);
+    const tres = await crearEquipo(c, `${suite.prefijo}K3`, sedeA);
+    creados.push(uno, dos, tres);
+
+    // El del medio se lo lleva otra persona un segundo antes: cuando llegue su
+    // turno ya no está disponible. Es el caso real, no uno inventado.
+    await c.post(`/api/equipos/${dos}/asignar`, { empleado_id: otro });
+
+    const kit = [uno, dos, tres];
+    const resultados: number[] = [];
+    for (const id of kit) {
+      resultados.push((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: receptor })).estado);
+    }
+    assert.deepEqual(resultados, [200, 409, 200], 'el fallo del segundo no corta la secuencia');
+
+    // Los dos que salieron bien están entregados...
+    for (const id of [uno, tres]) {
+      assert.equal(await estadoDe(id), 'Asignado');
+      assert.equal((await movimientosDe(id)).at(-1)?.empleado_destino_id, receptor);
+    }
+    // ...y el que falló sigue exactamente como estaba: de la otra persona, con
+    // un solo movimiento de asignación y sin auditoría de un intento fallido.
+    assert.equal(await estadoDe(dos), 'Asignado');
+    assert.equal((await movimientosDe(dos)).filter((m) => m.tipo === 'Asignación').length, 1);
+    assert.equal(await contarAuditoria(dos, 'asignar'), 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Atomicidad: la conexión muere a mitad
 // ---------------------------------------------------------------------------
 
