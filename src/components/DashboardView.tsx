@@ -74,10 +74,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
   /**
    * Un estado sin ninguna fila **no viene** en la respuesta: `GROUP BY` no
-   * devuelve grupos vacíos. Hoy es el caso de 'En tránsito' y 'En
-   * mantenimiento', las dos a cero. Leerlo con un `.find()?.equipos` a secas
-   * daría `undefined`, que en la barra de progreso sale como `NaN%` y en el
-   * texto como «undefined equipos».
+   * devuelve grupos vacíos. Hoy es el caso de 'En mantenimiento', a cero.
+   * Leerlo con un `.find()?.equipos` a secas daría `undefined`, que en la
+   * barra de progreso sale como `NaN%` y en el texto como «undefined equipos».
    */
   const conteoDe = (estado: EstadoEquipo) =>
     resumen.por_estado.find((e) => e.estado === estado)?.equipos ?? 0;
@@ -86,9 +85,14 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const totalCount = resumen.total;
   const inUseCount = conteoDe('Asignado');
   const availableInHubs = conteoDe('Disponible');
-  const inTransitCount = conteoDe('En tránsito');
   const inMaintenanceCount = conteoDe('En mantenimiento');
   const pendingReturnCount = conteoDe('Reservado');
+
+  // D13: no es un estado, es un traslado sin confirmar. Por eso NO entra en el
+  // desglose de estados de abajo: un equipo que viaja ya está contado como
+  // Asignado o Disponible, y sumarlo otra vez haría que las barras pasaran
+  // del total.
+  const inTransitCount = resumen.traslados_abiertos;
 
   const categoryChartData = resumen.por_categoria.map((c: { categoria: CategoriaEquipo; equipos: number }) => ({
     name: c.categoria,
@@ -100,7 +104,9 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   const statusChartData = [
     { name: 'En Uso', value: inUseCount, color: '#10b981' },
     { name: 'Disponible Hub', value: availableInHubs, color: '#06b6d4' },
-    { name: 'En Tránsito', value: inTransitCount, color: '#6366f1' },
+    // 'En Tránsito' NO va aquí: ya no es un estado, y estas barras se dibujan
+    // como porcentaje sobre `totalCount`. Un equipo que viaja está contado en
+    // su estado real, así que añadirlo sumaría dos veces.
     { name: 'Mantenimiento', value: inMaintenanceCount, color: '#f59e0b' },
     { name: 'Reservado', value: pendingReturnCount, color: '#ec4899' },
   ].filter((item) => item.value > 0);

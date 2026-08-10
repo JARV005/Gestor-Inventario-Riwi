@@ -146,6 +146,13 @@ export interface ResumenEquipos {
   por_estado: { estado: EstadoEquipo; equipos: number }[];
   por_categoria: { categoria: CategoriaEquipo; equipos: number }[];
   total: number;
+  /**
+   * Equipos con un traslado sin confirmar. **No es un estado** (D13): un
+   * equipo que viaja sigue estando `Asignado` o `Disponible`, así que este
+   * número no suma con `por_estado` ni cuadra contra `total`. Son dos hechos
+   * distintos sobre el mismo equipo.
+   */
+  traslados_abiertos: number;
 }
 
 export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
@@ -214,11 +221,16 @@ export const CATEGORIAS_EQUIPO = [
   'Otro',
 ] as const;
 
+/**
+ * De quién es el equipo y para qué está. **No dónde está.**
+ *
+ * `En tránsito` salió en la 0008 (D13). «Está viajando» se deriva de que
+ * exista un movimiento `Traslado` sin confirmar, no de esta lista.
+ */
 export const ESTADOS_EQUIPO = [
   'Disponible',
   'Asignado',
   'En mantenimiento',
-  'En tránsito',
   'Reservado',
   'De baja',
 ] as const;

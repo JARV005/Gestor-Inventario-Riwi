@@ -29,6 +29,8 @@ DECLARE
   v_upd1 timestamptz;
   v_upd2 timestamptz;
   v_abiertos_antes int;
+  v_eq_res uuid;
+  v_acta   uuid;
 BEGIN
   SELECT id INTO v_sede FROM sedes WHERE nombre = 'Medellín';
   SELECT id INTO v_usr  FROM usuarios_app WHERE email = 'sistema@bbl.local';
@@ -304,6 +306,141 @@ BEGIN
     INSERT INTO resultado VALUES ('FK restrict: borrar empleado con equipo', 'rechazado', 'ACEPTADO');
   EXCEPTION WHEN foreign_key_violation THEN
     INSERT INTO resultado VALUES ('FK restrict: borrar empleado con equipo', 'rechazado', 'rechazado');
+  END;
+
+  -- =========================================================================
+  -- Etapa 5 (migración 0008). Ver docs/decisiones-04.md.
+  -- =========================================================================
+
+  -- 17. D13: 'En tránsito' ya no es un valor del enum.
+  --     Es el lado que fija que el estado dejó de poder ponerse a mano. Si
+  --     alguien lo reintroduce «porque hacía falta», este caso lo dice.
+  BEGIN
+    INSERT INTO equipos (categoria, estado) VALUES ('Portátil', 'En tránsito');
+    INSERT INTO resultado VALUES ('D13: estado En tránsito retirado', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN invalid_text_representation THEN
+    INSERT INTO resultado VALUES ('D13: estado En tránsito retirado', 'rechazado', 'rechazado');
+  END;
+
+  -- 18. Los dos valores nuevos de tipo_movimiento existen y se aceptan.
+  --     El lado positivo del 17: retirar uno no puede haberse llevado otros.
+  INSERT INTO equipos (categoria, estado, sede_id)
+    VALUES ('Portátil', 'Reservado', v_sede) RETURNING id INTO v_eq_res;
+
+  INSERT INTO movimientos (equipo_id, tipo, usuario_app_id)
+    VALUES (v_eq_res, 'Reserva', v_usr);
+  INSERT INTO movimientos (equipo_id, tipo, usuario_app_id)
+    VALUES (v_eq_res, 'Liberación', v_usr);
+
+  INSERT INTO resultado VALUES ('Reserva y Liberación se aceptan', '2',
+    (SELECT count(*)::text FROM movimientos
+      WHERE equipo_id = v_eq_res AND tipo IN ('Reserva', 'Liberación')));
+
+  -- 19. D13: un equipo no puede tener DOS traslados abiertos.
+  --     Sin esto, derivar «está viajando» de la existencia de un traslado
+  --     abierto diría «viajando» sin poder decir hacia dónde.
+  INSERT INTO movimientos (equipo_id, tipo, usuario_app_id, sede_destino_id)
+    VALUES (v_eq_res, 'Traslado', v_usr, v_sede);
+
+  BEGIN
+    INSERT INTO movimientos (equipo_id, tipo, usuario_app_id, sede_destino_id)
+      VALUES (v_eq_res, 'Traslado', v_usr, v_sede);
+    INSERT INTO resultado VALUES ('D13: dos traslados abiertos', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D13: dos traslados abiertos', 'rechazado', 'rechazado');
+  END;
+
+  -- 20. El otro lado del 19: cerrado el primero, el segundo entra.
+  --     El índice es PARCIAL. Si alguien le quitara el WHERE, este caso
+  --     fallaría y el 19 seguiría en verde — un equipo no podría trasladarse
+  --     dos veces en su vida y nadie se enteraría hasta el segundo traslado.
+  UPDATE movimientos SET fecha_confirmacion = now()
+   WHERE equipo_id = v_eq_res AND tipo = 'Traslado' AND fecha_confirmacion IS NULL;
+
+  BEGIN
+    INSERT INTO movimientos (equipo_id, tipo, usuario_app_id, sede_destino_id)
+      VALUES (v_eq_res, 'Traslado', v_usr, v_sede);
+    INSERT INTO resultado VALUES ('D13: segundo traslado tras cerrar el primero', 'aceptado', 'aceptado');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D13: segundo traslado tras cerrar el primero', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 21. D14: un acta no puede apuntar a un equipo que no existe.
+  --     Es lo que el `uuid[]` del §2 no podía imponer.
+  INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por)
+    VALUES ('PRUEBA-0001', 'Entrega', v_emp, v_usr) RETURNING id INTO v_acta;
+
+  BEGIN
+    INSERT INTO actas_equipos (acta_id, equipo_id)
+      VALUES (v_acta, '00000000-0000-0000-0000-000000000000');
+    INSERT INTO resultado VALUES ('D14: acta hacia un equipo inexistente', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO resultado VALUES ('D14: acta hacia un equipo inexistente', 'rechazado', 'rechazado');
+  END;
+
+  -- 22. D14: el mismo equipo no puede ir dos veces en la misma acta.
+  INSERT INTO actas_equipos (acta_id, equipo_id, etiqueta, serial)
+    VALUES (v_acta, v_eq_res, 'ETQ-INSTANTANEA', 'SN-INSTANTANEA');
+
+  BEGIN
+    INSERT INTO actas_equipos (acta_id, equipo_id) VALUES (v_acta, v_eq_res);
+    INSERT INTO resultado VALUES ('D14: equipo repetido en un acta', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D14: equipo repetido en un acta', 'rechazado', 'rechazado');
+  END;
+
+  -- 23. D14: la instantánea NO sigue al equipo.
+  --     Es la mitad que el array del §2 sí protegía y una puente pelada
+  --     perdería: corregir el serial del equipo no puede reescribir lo que
+  --     dice un acta ya emitida.
+  UPDATE equipos SET serial = 'SN-CORREGIDO-DESPUES' WHERE id = v_eq_res;
+
+  INSERT INTO resultado VALUES ('D14: la instantánea del acta no cambia', 'SN-INSTANTANEA',
+    (SELECT serial FROM actas_equipos WHERE acta_id = v_acta AND equipo_id = v_eq_res));
+
+  -- 24. D14: un equipo referenciado por un acta no se puede borrar.
+  BEGIN
+    DELETE FROM equipos WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D14: borrar equipo con acta', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO resultado VALUES ('D14: borrar equipo con acta', 'rechazado', 'rechazado');
+  END;
+
+  -- 25. D15: o están el PDF y su hash, o no está ninguno.
+  --     Un PDF sin hash no se puede verificar; un hash sin PDF no verifica
+  --     nada. Los dos lados, porque el CHECK es una equivalencia.
+  BEGIN
+    UPDATE actas SET pdf = '\x255044462d'::bytea WHERE id = v_acta;
+    INSERT INTO resultado VALUES ('D15: PDF sin hash', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D15: PDF sin hash', 'rechazado', 'rechazado');
+  END;
+
+  BEGIN
+    UPDATE actas SET hash_sha256 = 'abc123' WHERE id = v_acta;
+    INSERT INTO resultado VALUES ('D15: hash sin PDF', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D15: hash sin PDF', 'rechazado', 'rechazado');
+  END;
+
+  BEGIN
+    UPDATE actas SET pdf = '\x255044462d'::bytea, hash_sha256 = 'abc123' WHERE id = v_acta;
+    INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 26. D18: un usuario con rastro en auditoría no se puede borrar.
+  --     El RESTRICT es deliberado: un rastro que se borra borrando al usuario
+  --     no es un rastro. Dar de baja a alguien es activo = false.
+  INSERT INTO auditoria (tabla, registro_id, accion, usuario_app_id)
+    VALUES ('equipos', v_eq_res, 'prueba_esquema', v_usr);
+
+  BEGIN
+    DELETE FROM usuarios_app WHERE id = v_usr;
+    INSERT INTO resultado VALUES ('D18: borrar usuario con auditoría', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO resultado VALUES ('D18: borrar usuario con auditoría', 'rechazado', 'rechazado');
   END;
 END;
 $$;

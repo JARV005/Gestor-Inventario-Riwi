@@ -64,19 +64,19 @@ export function App() {
   const handleReasignar = () => setIsOnboardingModalOpen(true);
 
   /**
-   * D1: "en tránsito" ya no es un ticket de logística, es un estado del equipo.
-   * El contador del sidebar sale de ahí. El traslado en sí es un movimiento, y
-   * eso llega en la etapa 5.
-   *
    * Un estado sin filas no viene en `por_estado` —`GROUP BY` no devuelve grupos
-   * vacíos—, y hoy es el caso de los dos: cero equipos en tránsito y cero en
-   * mantenimiento. La ausencia se lee como cero; el `null` de `resumen` es
-   * «no se sabe» y se propaga tal cual.
+   * vacíos—, y hoy es el caso de 'En mantenimiento'. La ausencia se lee como
+   * cero; el `null` de `resumen` es «no se sabe» y se propaga tal cual.
    */
   const conteoDe = (estado: EstadoEquipo): number | null =>
     resumen ? (resumen.por_estado.find((e) => e.estado === estado)?.equipos ?? 0) : null;
 
-  const enTransito = conteoDe('En tránsito');
+  /**
+   * D13: «en tránsito» dejó de ser un estado del equipo y pasó a derivarse de
+   * que exista un traslado sin confirmar. No sale de `por_estado`, sale de su
+   * propio conteo — un equipo que viaja sigue estando `Asignado`.
+   */
+  const enTransito = resumen ? resumen.traslados_abiertos : null;
   const enMantenimiento = conteoDe('En mantenimiento');
 
   if (usuario === undefined) {

@@ -175,16 +175,55 @@ verdad. Eso entra en `verificar-datos.sql` como invariante.
 
 ---
 
-## Lo que queda anotado, sin decisión todavía
+## D17. `Reservado` deja de ser un estado terminal
 
-**`Reservado` es un estado sin puerta de entrada.** `tipo_movimiento` no tiene
-ningún valor que lo produzca, y de las cuatro mutaciones de la etapa 5 solo
-`asignar` lo saca. Hay 1 equipo así, puesto por el importador. Pendiente de
-decidir si se añade la mutación o se documenta como estado heredado.
+`Reservado` existe en `estado_equipo` desde la 0000 y **ningún movimiento podía
+producirlo**: se podía salir de ese estado pero no entrar. El importador dejó un
+equipo así y nadie más podía crear otro, aunque «reservar un equipo para quien
+entra el mes que viene» es una operación corriente.
 
-**`auditoria.usuario_app_id` es `ON DELETE RESTRICT`.** En cuanto la etapa 5
-audite toda escritura sobre `equipos`, ningún usuario que haya hecho algo podrá
-borrarse nunca. Para un rastro de auditoría es lo correcto —dar de baja a
-alguien es desactivar, no borrar— pero conviene que sea una decisión consciente
-y no una sorpresa el día que alguien lo intente. Ya mordió al arnés de tests en
-la 4b.
+Se añaden dos valores a `tipo_movimiento` (0008) y dos mutaciones:
+
+```
+POST /api/equipos/:id/reservar   ->  Disponible  ->  Reservado
+POST /api/equipos/:id/liberar    ->  Reservado   ->  Disponible
+```
+
+`Liberación` y no `Devolución`: devolver es lo que hace quien tenía el equipo.
+Liberar una reserva no devuelve nada, porque nadie llegó a tenerlo. Son dos
+hechos distintos y el historial tiene que poder distinguirlos.
+
+Con esto la etapa 5 tiene **seis** mutaciones, no cuatro: asignar, devolver,
+trasladar, dar de baja, reservar y liberar.
+
+---
+
+## D18. Los usuarios no se borran nunca, y el RESTRICT es deliberado
+
+`auditoria.usuario_app_id` y `movimientos.usuario_app_id` son
+`ON DELETE RESTRICT`. En cuanto la etapa 5 audite toda escritura sobre
+`equipos`, ningún usuario que haya hecho algo podrá borrarse.
+
+**Eso no es un efecto secundario que haya que tolerar: es el punto.** Un rastro
+que se borra borrando al usuario no es un rastro. El caso real con un equipo de
+TI de una a tres personas es que alguien se va, y eso ya está resuelto:
+`activo = false` corta sus sesiones en el acto —comprobado en la etapa 3— y
+conserva su historial.
+
+El riesgo es que dentro de un año alguien reciba un error de clave foránea al
+intentar borrar un usuario y lo «arregle» cambiando el RESTRICT por CASCADE, que
+es exactamente lo que no debe pasar. Por eso queda escrito en tres sitios, no en
+uno:
+
+1. **En la base**, como `COMMENT ON CONSTRAINT` sobre las dos FK (0008). Sale en
+   un `\d+ auditoria` sin tener que encontrar ningún documento.
+2. **En el código**, cuando exista el endpoint de borrado de usuarios: devuelve
+   **409** explicando que las cuentas se desactivan, no se borran, y con la
+   ruta del `PATCH` que sí hace lo que se quería. Un 500 con «violates foreign
+   key constraint» invita a ir a tocar la constraint.
+3. **Aquí.**
+
+Ya mordió una vez: en la 4b la limpieza del arnés de tests llevaba rota desde la
+etapa 3 por este mismo RESTRICT, tapada porque `node:test` no cuenta el fallo de
+un hook en `# fail`. La solución correcta fue que la suite borrase su propia
+auditoría antes que sus usuarios, no relajar la constraint.

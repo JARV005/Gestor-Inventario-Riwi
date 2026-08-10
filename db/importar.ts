@@ -114,7 +114,7 @@ function leerHoja(hoja: ExcelJS.Worksheet): Fila[] {
 // Candidatas
 // ---------------------------------------------------------------------------
 
-type EstadoEquipo = 'Disponible' | 'Asignado' | 'En mantenimiento' | 'En tránsito' | 'Reservado' | 'De baja';
+type EstadoEquipo = 'Disponible' | 'Asignado' | 'En mantenimiento' | 'Reservado' | 'De baja';
 type Categoria = 'Portátil' | 'Desktop' | 'Monitor' | 'Teclado' | 'Mouse' | 'Diadema' | 'Celular' | 'Otro';
 type Condicion = 'Nuevo' | 'Excelente' | 'Bueno' | 'Usado' | 'Requiere reparación';
 type Licencia = 'RETAIL' | 'OEM' | 'Sin licencia' | 'No aplica';

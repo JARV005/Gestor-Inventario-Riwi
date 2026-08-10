@@ -48,9 +48,24 @@ export async function listarConConteos(bd: BD = db) {
         SELECT count(*)::int FROM equipos
          WHERE equipos.sede_id = sedes.id AND equipos.estado = 'Disponible'
       )`,
+      /**
+       * Equipos **saliendo** de esta sede: los que todavía la tienen como
+       * `sede_id` y ya tienen un traslado abierto. Hasta que el traslado se
+       * confirma, el equipo sigue perteneciendo a la sede de origen.
+       *
+       * Antes salía de `equipos.estado = 'En tránsito'`. Ese valor ya no
+       * existe (D13, 0008): «está viajando» se deriva del traslado abierto, y
+       * el índice único de `movimientos` garantiza que no haya dos.
+       */
       equipos_en_transito: sql<number>`(
         SELECT count(*)::int FROM equipos
-         WHERE equipos.sede_id = sedes.id AND equipos.estado = 'En tránsito'
+         WHERE equipos.sede_id = sedes.id
+           AND EXISTS (
+             SELECT 1 FROM movimientos
+              WHERE movimientos.equipo_id = equipos.id
+                AND movimientos.tipo = 'Traslado'
+                AND movimientos.fecha_confirmacion IS NULL
+           )
       )`,
       equipos_por_revisar: sql<number>`(
         SELECT count(*)::int FROM equipos

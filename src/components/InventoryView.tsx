@@ -44,7 +44,6 @@ const colorEstado: Record<EstadoEquipo, string> = {
   Asignado: 'bg-brand text-white',
   Disponible: 'bg-ok/15 text-ink border border-ok/40',
   'En mantenimiento': 'bg-warn/20 text-ink border border-warn/50',
-  'En tránsito': 'bg-info/20 text-ink border border-info/50',
   Reservado: 'bg-surface-alt text-ink-muted border border-line',
   'De baja': 'bg-danger/15 text-ink border border-danger/40',
 };

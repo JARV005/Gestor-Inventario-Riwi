@@ -14,7 +14,7 @@ interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
   /**
-   * D1: equipos en estado 'En transito'. Ya no hay tickets de logistica.
+   * D13: equipos con un traslado sin confirmar. Ya no es un estado del equipo.
    *
    * `null` es «todavia no se sabe» —o no se pudo consultar—, y es distinto de
    * cero. Los dos ocultan el badge, pero un `0` puesto por defecto cuando la

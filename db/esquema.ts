@@ -83,11 +83,25 @@ export const licenciaTipo = pgEnum('licencia_tipo', [
   'No aplica',
 ]);
 
+/**
+ * De quién es el equipo y para qué está. **No dónde está.**
+ *
+ * `En tránsito` estuvo aquí hasta la 0008 y no podía quedarse (D13): el CHECK
+ * `equipos_asignado_implica_empleado` es una equivalencia, así que un equipo
+ * asignado y viajando a la vez no cabía. O conservaba a su responsable y no
+ * podía estar en tránsito, o estaba en tránsito y el CHECK obligaba a
+ * `empleado_id = NULL`. El caso principal del propio D1 —mandar el kit de
+ * onboarding a alguien remoto— es justo ese.
+ *
+ * «Está viajando» se deriva ahora de que exista un `Traslado` sin
+ * `fecha_confirmacion`, y el índice único de `movimientos` garantiza que no
+ * haya dos. El invariante de D1 dejó de ser algo que vigilar: es la
+ * definición.
+ */
 export const estadoEquipo = pgEnum('estado_equipo', [
   'Disponible',
   'Asignado',
   'En mantenimiento',
-  'En tránsito',
   'Reservado',
   'De baja',
 ]);
@@ -105,6 +119,17 @@ export const condicionEquipo = pgEnum('condicion_equipo', [
   'Requiere reparación',
 ]);
 
+/**
+ * `Reserva` y `Liberación` son de la 0008.
+ *
+ * `Reservado` existía en `estado_equipo` desde la 0000 y ningún movimiento
+ * podía producirlo: se podía salir de ese estado pero no entrar. El importador
+ * dejó un equipo así y nadie más podía crear otro, aunque «reservar un equipo
+ * para quien entra el mes que viene» es una operación corriente.
+ *
+ * `Liberación` y no `Devolución`: devolver es lo que hace quien tenía el
+ * equipo. Liberar una reserva no devuelve nada, porque nadie llegó a tenerlo.
+ */
 export const tipoMovimiento = pgEnum('tipo_movimiento', [
   'Alta',
   'Asignación',
@@ -113,6 +138,8 @@ export const tipoMovimiento = pgEnum('tipo_movimiento', [
   'Envío a mantenimiento',
   'Retorno de mantenimiento',
   'Baja',
+  'Reserva',
+  'Liberación',
 ]);
 
 export const estadoMantenimiento = pgEnum('estado_mantenimiento', [
@@ -451,9 +478,18 @@ export const movimientos = pgTable(
   },
   (t) => [
     index('idx_movimientos_equipo').on(t.equipo_id, t.fecha.desc()),
-    // Los traslados abiertos son la fuente del contador "En tránsito" del
-    // sidebar y de SedesView (D1). Se consultan en cada carga; son pocos.
-    index('idx_movimientos_traslado_abierto')
+    /**
+     * UNIQUE, y no solo un índice de consulta (D13, 0008).
+     *
+     * Desde que «en tránsito» se deriva de que exista un traslado abierto,
+     * dos traslados abiertos del mismo equipo no son un dato feo: son una
+     * contradicción sobre dónde está. La derivación diría «viajando» sin poder
+     * decir hacia dónde.
+     *
+     * Lo impide Postgres en el INSERT. Un verificador que lo comprobara
+     * después encontraría el equipo ya en dos sitios.
+     */
+    uniqueIndex('idx_movimientos_traslado_abierto')
       .on(t.equipo_id)
       .where(sql`tipo = 'Traslado' AND fecha_confirmacion IS NULL`),
   ],
@@ -482,27 +518,78 @@ export const mantenimientos = pgTable(
 );
 
 /**
- * `equipos_ids` es un array de UUID, no una tabla puente, tal como lo fija el
- * §2: un acta es un documento firmado y congelado. Su lista de equipos no debe
- * seguir cambiando si después se corrige la fila del equipo.
+ * Los equipos del acta están en `actas_equipos`, no en un array (D14, 0008).
+ *
+ * El §2 los fijaba como `uuid[]` con un argumento bueno: un acta es un
+ * documento firmado y congelado, y su lista no debe cambiar porque después se
+ * corrija la fila del equipo. Pero un array no tiene clave foránea, así que
+ * «toda acta apunta a equipos que existen» no se podía imponer ni comprobar.
+ * La puente resuelve las dos cosas a la vez; ver el comentario de
+ * `actasEquipos`.
+ *
+ * El PDF va en la fila y no en una ruta de disco (D15): el §5 exige probar la
+ * restauración de un backup, y un fichero suelto es una segunda cosa que
+ * restaurar en paso con lo que lo referencia.
  */
-export const actas = pgTable('actas', {
-  ...columnasBase,
-  consecutivo: text('consecutivo').notNull().unique(),
-  tipo: tipoActa('tipo').notNull(),
-  empleado_id: uuid('empleado_id')
-    .notNull()
-    .references(() => empleados.id, { onDelete: 'restrict' }),
-  equipos_ids: uuid('equipos_ids').array().notNull(),
-  fecha: timestamp('fecha', { withTimezone: true }).notNull().defaultNow(),
-  generada_por: uuid('generada_por')
-    .notNull()
-    .references(() => usuariosApp.id, { onDelete: 'restrict' }),
-  pdf_path: text('pdf_path'),
-  hash_sha256: text('hash_sha256'),
-  firmada: boolean('firmada').notNull().default(false),
-  fecha_firma: timestamp('fecha_firma', { withTimezone: true }),
-});
+export const actas = pgTable(
+  'actas',
+  {
+    ...columnasBase,
+    consecutivo: text('consecutivo').notNull().unique(),
+    tipo: tipoActa('tipo').notNull(),
+    empleado_id: uuid('empleado_id')
+      .notNull()
+      .references(() => empleados.id, { onDelete: 'restrict' }),
+    fecha: timestamp('fecha', { withTimezone: true }).notNull().defaultNow(),
+    generada_por: uuid('generada_por')
+      .notNull()
+      .references(() => usuariosApp.id, { onDelete: 'restrict' }),
+    pdf: customType<{ data: Buffer; driverData: Buffer }>({
+      dataType: () => 'bytea',
+    })('pdf'),
+    hash_sha256: text('hash_sha256'),
+    firmada: boolean('firmada').notNull().default(false),
+    fecha_firma: timestamp('fecha_firma', { withTimezone: true }),
+  },
+  (t) => [
+    // O están el documento y su hash, o no está ninguno. Un PDF sin hash no se
+    // puede verificar; un hash sin PDF no verifica nada.
+    check('actas_pdf_con_hash', sql`(pdf IS NULL) = (hash_sha256 IS NULL)`),
+    index('idx_actas_empleado').on(t.empleado_id),
+  ],
+);
+
+/**
+ * Qué equipos entrega o recibe un acta, **y qué decía el acta de cada uno**.
+ *
+ * Las cuatro columnas de instantánea no son denormalización por comodidad: son
+ * el contenido del documento. La FK garantiza que el equipo existe; la
+ * instantánea, que lo impreso no cambia si mañana alguien corrige el serial.
+ * Con solo una de las dos cosas se pierde la otra — un array tenía la segunda
+ * y ninguna FK; una puente pelada tendría FK y un documento que muta.
+ *
+ * `ON DELETE RESTRICT` en las dos: ni un acta ni un equipo referenciado por un
+ * acta se borran. Un acta firmada es un documento legal.
+ */
+export const actasEquipos = pgTable(
+  'actas_equipos',
+  {
+    acta_id: uuid('acta_id')
+      .notNull()
+      .references(() => actas.id, { onDelete: 'restrict' }),
+    equipo_id: uuid('equipo_id')
+      .notNull()
+      .references(() => equipos.id, { onDelete: 'restrict' }),
+    etiqueta: text('etiqueta'),
+    serial: text('serial'),
+    marca: text('marca'),
+    modelo: text('modelo'),
+  },
+  (t) => [
+    primaryKey({ name: 'actas_equipos_pk', columns: [t.acta_id, t.equipo_id] }),
+    index('idx_actas_equipos_equipo').on(t.equipo_id),
+  ],
+);
 
 /**
  * Obligatoria por el §5: toda escritura sobre `equipos` y todo desciframiento

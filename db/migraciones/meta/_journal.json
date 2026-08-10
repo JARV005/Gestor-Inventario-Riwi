@@ -57,6 +57,13 @@
       "when": 1785979790679,
       "tag": "0007_store_de_sesiones",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786377074922,
+      "tag": "0008_transito_derivado_y_actas",
+      "breakpoints": true
     }
   ]
 }

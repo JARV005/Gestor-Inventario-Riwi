@@ -20,7 +20,7 @@
  * un `.select()` sin argumentos. El comentario avisa; el test es lo que impide.
  */
 
-import { and, asc, count, desc, eq, ilike, inArray, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { db, type BD } from '../cliente.js';
 import { descifrar } from '../cifrado.js';
@@ -168,7 +168,7 @@ export async function listar(f: FiltrosEquipos = {}, bd: BD = db) {
  * suponer que están los seis.
  */
 export async function resumen(bd: BD = db) {
-  const [porEstado, porCategoria, totales] = await Promise.all([
+  const [porEstado, porCategoria, totales, enTransito] = await Promise.all([
     bd
       .select({ estado: equipos.estado, equipos: count() })
       .from(equipos)
@@ -180,12 +180,22 @@ export async function resumen(bd: BD = db) {
       .groupBy(equipos.categoria)
       .orderBy(asc(equipos.categoria)),
     bd.select({ total: count() }).from(equipos),
+    // «En tránsito» ya no es un estado (D13): son los equipos con un traslado
+    // abierto. Va aparte de `por_estado` a propósito — sumarlo ahí haría que
+    // los grupos no cuadraran con el total, porque un equipo que viaja SIGUE
+    // estando Asignado o Disponible. Son dos hechos distintos, no dos valores
+    // del mismo campo.
+    bd
+      .select({ n: count() })
+      .from(movimientos)
+      .where(and(eq(movimientos.tipo, 'Traslado'), isNull(movimientos.fecha_confirmacion))),
   ]);
 
   return {
     por_estado: porEstado,
     por_categoria: porCategoria,
     total: totales[0]?.total ?? 0,
+    traslados_abiertos: enTransito[0]?.n ?? 0,
   };
 }
 
