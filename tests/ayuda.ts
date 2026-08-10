@@ -406,6 +406,82 @@ export async function matarConexionEnMedioDeAsignar(
   }
 }
 
+/**
+ * El mismo corte, en la otra transacción de dos escrituras: **entre mover el
+ * equipo y cerrar el traslado**.
+ *
+ * Si solo cuajara una de las dos, el equipo estaría en dos sedes a la vez según
+ * a qué tabla se pregunte — y el trigger append-only impide reabrir un traslado
+ * cerrado, así que la contradicción no se podría deshacer.
+ */
+export async function matarConexionEnMedioDeConfirmar(
+  equipoId: string,
+  movimientoId: string,
+  sedeDestinoId: string,
+): Promise<string> {
+  const cliente = new Client({ connectionString: process.env.DATABASE_URL });
+  cliente.on('error', () => {
+    /* la vamos a matar a propósito */
+  });
+  await cliente.connect();
+
+  try {
+    const { rows } = await cliente.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const pid = rows[0].pid;
+
+    await cliente.query('BEGIN');
+    await cliente.query('UPDATE equipos SET sede_id = $1 WHERE id = $2', [
+      sedeDestinoId,
+      equipoId,
+    ]);
+
+    // Igual que en el de asignar: comprobar DENTRO que la primera escritura se
+    // aplicó. Sin esto, el test pasaría igual si el UPDATE no tocara nada.
+    const dentro = await cliente.query<{ sede_id: string }>(
+      'SELECT sede_id FROM equipos WHERE id = $1',
+      [equipoId],
+    );
+    if (dentro.rows[0]?.sede_id !== sedeDestinoId) {
+      throw new Error('el UPDATE de la sede no llegó a aplicarse dentro de la transacción');
+    }
+
+    await db.execute(sql`SELECT pg_terminate_backend(${pid})`);
+
+    try {
+      await cliente.query('UPDATE movimientos SET fecha_confirmacion = now() WHERE id = $1', [
+        movimientoId,
+      ]);
+      return 'el UPDATE pasó: la conexión no murió';
+    } catch {
+      return 'conexión terminada';
+    }
+  } finally {
+    await cliente.end().catch(() => {});
+  }
+}
+
+/** La sede en la que la base dice que está el equipo. */
+export async function sedeDe(equipoId: string): Promise<string | null> {
+  const r = await db.execute<{ sede_id: string | null }>(
+    sql`SELECT equipos.sede_id FROM equipos WHERE equipos.id = ${equipoId}`,
+  );
+  return r.rows[0]?.sede_id ?? null;
+}
+
+/** El traslado abierto de un equipo leído de la base, no de la API. */
+export async function trasladoAbiertoDe(
+  equipoId: string,
+): Promise<{ id: string; sede_destino_id: string | null } | null> {
+  const r = await db.execute<{ id: string; sede_destino_id: string | null }>(
+    sql`SELECT movimientos.id, movimientos.sede_destino_id
+          FROM movimientos
+         WHERE movimientos.equipo_id = ${equipoId}
+           AND movimientos.tipo = 'Traslado'
+           AND movimientos.fecha_confirmacion IS NULL`,
+  );
+  return r.rows[0] ?? null;
+}
+
 /** La segunda sede sembrada. Para probar traslados de A a B. */
 export async function segundaSede(): Promise<string> {
   const r = await db.execute<{ id: string }>(
@@ -414,6 +490,14 @@ export async function segundaSede(): Promise<string> {
   const id = r.rows[0]?.id;
   if (!id) throw new Error("Hacen falta al menos dos sedes. Correr: npm run test:preparar");
   return id;
+}
+
+/** El nombre que la base le da a una sede. Para no escribirlo en los tests. */
+export async function nombreDeSede(id: string): Promise<string | null> {
+  const r = await db.execute<{ nombre: string }>(
+    sql`SELECT sedes.nombre FROM sedes WHERE sedes.id = ${id}`,
+  );
+  return r.rows[0]?.nombre ?? null;
 }
 
 /** La primera sede sembrada. Las altas necesitan una que exista de verdad. */
@@ -436,6 +520,7 @@ export async function contarEquiposConEtiqueta(etiqueta: string): Promise<number
 /** Los movimientos de un equipo, del más antiguo al más nuevo. */
 /** `drizzle.execute<T>` exige que `T` tenga índice de cadena. */
 export type MovimientoDePrueba = {
+  id: string;
   tipo: string;
   sede_origen_id: string | null;
   sede_destino_id: string | null;
@@ -447,7 +532,8 @@ export type MovimientoDePrueba = {
 
 export async function movimientosDe(equipoId: string): Promise<MovimientoDePrueba[]> {
   const r = await db.execute<MovimientoDePrueba>(
-    sql`SELECT movimientos.tipo,
+    sql`SELECT movimientos.id,
+               movimientos.tipo,
                movimientos.sede_origen_id,
                movimientos.sede_destino_id,
                movimientos.empleado_origen_id,

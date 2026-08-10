@@ -9,6 +9,12 @@
  *   POST /api/equipos/:id/trasladar  no cambia el estado; abre el traslado
  *   GET  /api/equipos/:id/historial  con nombres, no con UUIDs
  *
+ * Y el cierre del traslado, que es lo único que se puede tocar de un
+ * movimiento ya escrito:
+ *
+ *   GET  /api/traslados                 los que están en curso, con nombres
+ *   POST /api/movimientos/:id/confirmar cierra el movimiento y mueve el equipo
+ *
  * Qué transición es legal desde qué estado **no se decide aquí**: está en
  * `db/transiciones.ts`, en una sola tabla. Estos manejadores solo traducen su
  * excepción a un 409 con un mensaje que se pueda leer.
@@ -70,6 +76,16 @@ function traducir(e: unknown): never {
   }
   if (e instanceof repoMovimientos.FaltaDato) throw new ErrorHttp(400, e.message);
   if (e instanceof repoMovimientos.EquipoNoEncontrado) throw noEncontrado('Equipo');
+
+  if (e instanceof repoMovimientos.MovimientoNoEncontrado) throw noEncontrado('Movimiento');
+  if (e instanceof repoMovimientos.NoEsTraslado) {
+    throw new ErrorHttp(409, `Ese movimiento es de tipo "${e.message}": no hay nada que confirmar.`);
+  }
+  if (e instanceof repoMovimientos.TrasladoYaConfirmado) {
+    // 409 y no 404: el traslado existe, y quien lo pide probablemente está
+    // viendo una lista de hace un minuto. Recargar es la respuesta.
+    throw new ErrorHttp(409, 'Ese traslado ya estaba confirmado. Recargar para ver la lista al día.');
+  }
   throw e;
 }
 
@@ -145,6 +161,53 @@ export function registrarRutasMovimientos(app: Express): void {
       // tiene `fecha_confirmacion`. Es el mismo hecho que el badge del
       // sidebar, y sale de la misma condición.
       res.json({ movimientos, traslado_abierto: traslado });
+    }),
+  );
+
+  /**
+   * Los traslados en curso. Alimenta la lista de `SedesView` y es la otra cara
+   * del badge del sidebar: los dos salen de `tipo = 'Traslado'` y
+   * `fecha_confirmacion IS NULL`, así que no pueden discrepar.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/traslados',
+    'autenticado',
+    guardian,
+    asincrono(async (_req, res) => {
+      res.json({ traslados: await repoMovimientos.listarTrasladosAbiertos() });
+    }),
+  );
+
+  /**
+   * Confirmar la llegada. Cierra el movimiento y mueve `equipos.sede_id` en la
+   * misma transacción — ver la cabecera de `confirmarTraslado`.
+   *
+   * Va sobre el id del **movimiento** y no sobre el del equipo: es la fila del
+   * movimiento la que se cierra, y la lista de la que se pulsa ya la tiene. Con
+   * `/api/equipos/:id/confirmar` habría que resolver cuál de sus movimientos es
+   * —hoy solo puede haber uno abierto, pero eso es una consecuencia del índice
+   * único, no algo que la URL deba dar por hecho.
+   */
+  ruta(
+    app,
+    'post',
+    '/api/movimientos/:id/confirmar',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+
+      try {
+        const r = await repoMovimientos.confirmarTraslado(id, { usuarioId, ip: req.ip ?? null });
+        const equipo = await repoEquipos.porId(r.equipo_id);
+        res.json({ equipo, movimiento: r.movimiento });
+      } catch (e) {
+        traducir(e);
+      }
     }),
   );
 }

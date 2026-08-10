@@ -22,7 +22,7 @@
  * mismo equipo pasarían las dos y dejarían dos movimientos `Baja`.
  */
 
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { db, type BD } from '../cliente.js';
@@ -49,6 +49,13 @@ export interface DatosMutacion {
 
 export class EquipoNoEncontrado extends Error {}
 export class FaltaDato extends Error {}
+
+/** El id no corresponde a ningún movimiento. */
+export class MovimientoNoEncontrado extends Error {}
+/** Existe, pero no es un traslado: confirmar solo tiene sentido sobre uno. */
+export class NoEsTraslado extends Error {}
+/** Ya se confirmó. El trigger de `0001_reglas.sql` no deja reabrirlo. */
+export class TrasladoYaConfirmado extends Error {}
 
 /** El estado del equipo antes de tocarlo. Lo que va a `auditoria.antes`. */
 interface Antes {
@@ -238,6 +245,171 @@ export async function historialConNombres(equipoId: string, bd: BD = db) {
     // transacción comparten `fecha` al milisegundo, y sin desempate el orden
     // entre ellos lo decide el planificador.
     .orderBy(desc(movimientos.fecha), desc(movimientos.created_at));
+}
+
+/**
+ * Confirma un traslado: cierra el movimiento y mueve el equipo, **a la vez**.
+ *
+ * ============================================================================
+ * LAS DOS ESCRITURAS SON EL MISMO HECHO. Si solo cuaja una, el equipo está en
+ * dos sedes a la vez según a qué tabla se le pregunte:
+ *
+ *   - `equipos.sede_id` movido y el traslado abierto → la tarjeta de la sede
+ *     destino ya lo cuenta, y `SedesView` lo sigue enseñando en tránsito.
+ *   - el traslado cerrado y el equipo sin mover → el traslado desaparece de la
+ *     lista habiendo dejado el equipo donde estaba, y ya no se puede reabrir:
+ *     el trigger append-only lo impide, así que la contradicción es permanente.
+ * ============================================================================
+ *
+ * **Orden de bloqueo: primero `equipos`, después `movimientos`.** Es el mismo
+ * que usa `mutar`, y tiene que serlo: si una confirmación bloqueara primero el
+ * movimiento y una mutación primero el equipo, dos peticiones simultáneas sobre
+ * el mismo equipo se esperarían en cruz. La primera lectura del movimiento va
+ * SIN bloqueo y solo sirve para saber qué equipo bloquear; la que decide es la
+ * segunda, ya con el equipo en la mano.
+ */
+export async function confirmarTraslado(
+  movimientoId: string,
+  contexto: { usuarioId: string; ip: string | null },
+  bd: BD = db,
+) {
+  return bd.transaction(async (tx) => {
+    // 1. Solo para saber a qué equipo pertenece. `equipo_id` y `tipo` no pueden
+    //    cambiar bajo los pies: la tabla es append-only salvo la confirmación.
+    const [cabecera] = await tx
+      .select({ equipo_id: movimientos.equipo_id, tipo: movimientos.tipo })
+      .from(movimientos)
+      .where(eq(movimientos.id, movimientoId));
+
+    if (!cabecera) throw new MovimientoNoEncontrado(movimientoId);
+    if (cabecera.tipo !== 'Traslado') throw new NoEsTraslado(cabecera.tipo);
+
+    // 2. El equipo, bloqueado. Nadie lo asigna ni lo da de baja mientras dura.
+    const [equipo] = await tx
+      .select({ id: equipos.id, sede_id: equipos.sede_id, estado: equipos.estado })
+      .from(equipos)
+      .where(eq(equipos.id, cabecera.equipo_id))
+      .for('update');
+
+    if (!equipo) throw new EquipoNoEncontrado(cabecera.equipo_id);
+
+    // 3. Y ahora sí el movimiento, bloqueado. Entre 1 y 2 pudo confirmarse.
+    const [mov] = await tx
+      .select({
+        id: movimientos.id,
+        sede_origen_id: movimientos.sede_origen_id,
+        sede_destino_id: movimientos.sede_destino_id,
+        fecha_confirmacion: movimientos.fecha_confirmacion,
+      })
+      .from(movimientos)
+      .where(eq(movimientos.id, movimientoId))
+      .for('update');
+
+    if (mov.fecha_confirmacion) throw new TrasladoYaConfirmado(movimientoId);
+    if (!mov.sede_destino_id) {
+      // No debería poder existir: `mutar` exige la sede destino y la FK la
+      // valida. Si aparece, mover el equipo a NULL sería inventarse el
+      // resultado del traslado.
+      throw new FaltaDato('El traslado no dice a qué sede iba: no se puede confirmar.');
+    }
+
+    const antes = { sede_id: equipo.sede_id, fecha_confirmacion: null };
+
+    // 4. El equipo se mueve. Solo `sede_id`: quién lo tiene y en qué estado
+    //    está no cambian por llegar a destino (D13).
+    await tx
+      .update(equipos)
+      .set({ sede_id: mov.sede_destino_id })
+      .where(eq(equipos.id, equipo.id));
+
+    // 5. El movimiento se cierra. `isNull` en el WHERE además del bloqueo: si
+    //    por lo que sea otra transacción se coló, aquí no hay fila y sale el
+    //    409 en vez de un cierre silencioso sobre algo ya cerrado.
+    const [cerrado] = await tx
+      .update(movimientos)
+      .set({ fecha_confirmacion: sql`now()` })
+      .where(and(eq(movimientos.id, movimientoId), isNull(movimientos.fecha_confirmacion)))
+      .returning({
+        id: movimientos.id,
+        tipo: movimientos.tipo,
+        fecha: movimientos.fecha,
+        fecha_confirmacion: movimientos.fecha_confirmacion,
+        sede_origen_id: movimientos.sede_origen_id,
+        sede_destino_id: movimientos.sede_destino_id,
+      });
+
+    if (!cerrado) throw new TrasladoYaConfirmado(movimientoId);
+
+    // 6. La auditoría, dentro. El `registro_id` es el equipo y no el
+    //    movimiento: la pregunta que se le hace a esta tabla es «qué le pasó a
+    //    este equipo», y el id del movimiento va en `despues`.
+    await repoAuditoria.registrar(
+      {
+        tabla: 'equipos',
+        registro_id: equipo.id,
+        accion: 'confirmar_traslado',
+        usuario_app_id: contexto.usuarioId,
+        ip: contexto.ip,
+        antes,
+        despues: {
+          sede_id: mov.sede_destino_id,
+          fecha_confirmacion: cerrado.fecha_confirmacion,
+          movimiento_id: cerrado.id,
+        },
+      },
+      tx,
+    );
+
+    return { movimiento: cerrado, equipo_id: equipo.id };
+  });
+}
+
+/**
+ * Todos los traslados en curso, con nombres. Es la lista que `SedesView`
+ * perdió al sustituir a `LogisticsHubsView` en la etapa 4a.
+ *
+ * `dias_en_transito` se calcula en Postgres y no en el navegador: el reloj del
+ * cliente puede estar en otra zona o desajustado, y «lleva 9 días» es
+ * precisamente el número por el que alguien va a llamar a la transportadora.
+ */
+export async function listarTrasladosAbiertos(bd: BD = db) {
+  const sedeOrigen = alias(sedes, 'sede_origen');
+  const sedeDestino = alias(sedes, 'sede_destino');
+
+  return bd
+    .select({
+      id: movimientos.id,
+      fecha: movimientos.fecha,
+      equipo_id: movimientos.equipo_id,
+      etiqueta: equipos.etiqueta,
+      marca: equipos.marca,
+      modelo: equipos.modelo,
+      categoria: equipos.categoria,
+      estado: equipos.estado,
+      responsable: empleados.nombre,
+      sede_origen_id: movimientos.sede_origen_id,
+      sede_origen: sedeOrigen.nombre,
+      sede_destino_id: movimientos.sede_destino_id,
+      sede_destino: sedeDestino.nombre,
+      transportadora: movimientos.transportadora,
+      guia: movimientos.guia,
+      fecha_estimada: movimientos.fecha_estimada,
+      observaciones: movimientos.observaciones,
+      usuario: usuariosApp.nombre,
+      // Tablas calificadas a mano dentro del fragmento crudo, aunque aquí haya
+      // JOIN y drizzle fuera a calificar solo: la regla es no depender de eso.
+      dias_en_transito: sql<number>`(now()::date - movimientos.fecha::date)::int`,
+    })
+    .from(movimientos)
+    .innerJoin(equipos, eq(equipos.id, movimientos.equipo_id))
+    .leftJoin(empleados, eq(empleados.id, equipos.empleado_id))
+    .leftJoin(sedeOrigen, eq(sedeOrigen.id, movimientos.sede_origen_id))
+    .leftJoin(sedeDestino, eq(sedeDestino.id, movimientos.sede_destino_id))
+    .leftJoin(usuariosApp, eq(usuariosApp.id, movimientos.usuario_app_id))
+    .where(and(eq(movimientos.tipo, 'Traslado'), isNull(movimientos.fecha_confirmacion)))
+    // El más antiguo primero: el que lleva nueve días parado es el que hay que
+    // mirar, y en una lista ordenada por lo más nuevo queda el último.
+    .orderBy(asc(movimientos.fecha));
 }
 
 /** El traslado sin confirmar de un equipo, si lo hay. Como mucho hay uno. */

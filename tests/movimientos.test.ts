@@ -22,9 +22,13 @@ import {
   crearEmpleado,
   estadoDe,
   matarConexionEnMedioDeAsignar,
+  matarConexionEnMedioDeConfirmar,
   movimientosDe,
+  nombreDeSede,
   primeraSede,
+  sedeDe,
   segundaSede,
+  trasladoAbiertoDe,
   type Servidor,
   type UsuarioDePrueba,
 } from './ayuda.js';
@@ -259,6 +263,181 @@ describe('movimientos: lo que no se puede hacer', () => {
 
     assert.equal((await movimientosDe(id)).length, antes, 'no dejó movimiento');
     assert.equal(await contarAuditoria(id, 'devolver'), 0, 'no dejó auditoría');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Confirmar la llegada: cierra el movimiento y mueve el equipo
+// ---------------------------------------------------------------------------
+
+describe('traslados: confirmar cierra el movimiento y mueve el equipo', () => {
+  const suite = ambito('confirm');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let sedeB: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    sedeB = await segundaSede();
+    empleado = await crearEmpleado(`${suite.prefijo}receptor`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  /** Crea un equipo en sedeA y le abre un traslado a sedeB. */
+  async function conTrasladoAbierto(etiqueta: string): Promise<{ id: string; mov: string }> {
+    const id = await crearEquipo(c, etiqueta, sedeA);
+    creados.push(id);
+    const r = await c.post(`/api/equipos/${id}/trasladar`, {
+      sede_destino_id: sedeB,
+      transportadora: 'Servientrega',
+      guia: `G-${etiqueta}`,
+    });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    const abierto = await trasladoAbiertoDe(id);
+    assert.ok(abierto, 'el traslado tenía que quedar abierto');
+    return { id, mov: abierto.id };
+  }
+
+  it('el equipo llega a destino y el movimiento queda cerrado', async () => {
+    const { id, mov } = await conTrasladoAbierto(`${suite.prefijo}LLEGA`);
+    assert.equal(await sedeDe(id), sedeA, 'antes de confirmar sigue en origen');
+
+    const r = await c.post(`/api/movimientos/${mov}/confirmar`, {});
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    // Las dos mitades, leídas de la base y no de la respuesta.
+    assert.equal(await sedeDe(id), sedeB, 'el equipo se movió a la sede destino');
+    assert.equal(await trasladoAbiertoDe(id), null, 'ya no hay traslado abierto');
+
+    const movs = await movimientosDe(id);
+    const traslado = movs.find((m) => m.tipo === 'Traslado');
+    assert.ok(traslado?.fecha_confirmacion, 'la fecha de confirmación quedó puesta');
+    assert.equal(traslado.sede_origen_id, sedeA);
+    assert.equal(traslado.sede_destino_id, sedeB);
+  });
+
+  it('confirmar deja su fila de auditoría, con el antes y el después de la sede', async () => {
+    const id = creados[0];
+    assert.equal(await contarAuditoria(id, 'confirmar_traslado'), 1);
+
+    const { filas } = await import('./ayuda.js').then((m) =>
+      m.auditoriaDe(id, 'confirmar_traslado'),
+    );
+    assert.equal((filas[0].antes as { sede_id: string }).sede_id, sedeA);
+    assert.equal((filas[0].despues as { sede_id: string }).sede_id, sedeB);
+    assert.equal(filas[0].usuario_app_id, admin.id);
+  });
+
+  it('confirmarlo dos veces: 409 la segunda, y nada cambia', async () => {
+    const { id, mov } = await conTrasladoAbierto(`${suite.prefijo}DOBLE`);
+    assert.equal((await c.post(`/api/movimientos/${mov}/confirmar`, {})).estado, 200);
+
+    const auditAntes = await contarAuditoria(id, 'confirmar_traslado');
+    const r = await c.post(`/api/movimientos/${mov}/confirmar`, {});
+    assert.equal(r.estado, 409);
+    assert.match((r.cuerpo as { error: string }).error, /ya estaba confirmado/i);
+    assert.equal(
+      await contarAuditoria(id, 'confirmar_traslado'),
+      auditAntes,
+      'el intento fallido no deja auditoría',
+    );
+  });
+
+  it('confirmar un movimiento que no es un traslado: 409, no 500', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}ALTA`, sedeA);
+    creados.push(id);
+    // El `Alta` que escribe el POST. Nunca se confirma nada de eso.
+    const alta = await movimientosDe(id);
+    assert.equal(alta.length, 1);
+
+    const r = await c.post(`/api/movimientos/${alta[0].id}/confirmar`, {});
+    assert.equal(r.estado, 409);
+    assert.match((r.cuerpo as { error: string }).error, /Alta/);
+  });
+
+  it('un movimiento que no existe: 404', async () => {
+    const r = await c.post('/api/movimientos/00000000-0000-0000-0000-000000000000/confirmar', {});
+    assert.equal(r.estado, 404);
+  });
+
+  it('después de confirmar, se puede abrir otro traslado', async () => {
+    // El índice único es PARCIAL: bloquea dos ABIERTOS, no dos traslados. Si
+    // fuera total, un equipo solo podría viajar una vez en su vida.
+    const id = creados[0];
+    const r = await c.post(`/api/equipos/${id}/trasladar`, { sede_destino_id: sedeA });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    assert.equal(await sedeDe(id), sedeB, 'el de vuelta tampoco mueve la sede hasta confirmarse');
+  });
+
+  it('la lista de traslados abiertos trae nombres, no UUIDs', async () => {
+    const { id } = await conTrasladoAbierto(`${suite.prefijo}LISTA`);
+
+    const r = await c.get('/api/traslados');
+    assert.equal(r.estado, 200);
+    const { traslados } = r.cuerpo as {
+      traslados: {
+        equipo_id: string;
+        etiqueta: string | null;
+        sede_origen: string | null;
+        sede_destino: string | null;
+        dias_en_transito: number;
+        guia: string | null;
+      }[];
+    };
+
+    const mio = traslados.find((t) => t.equipo_id === id);
+    assert.ok(mio, 'el traslado recién abierto tiene que estar en la lista');
+    // Contra el nombre que tiene la sede en la base, no contra uno escrito
+    // aquí: renombrar una sede no puede poner rojo un test de traslados.
+    assert.equal(mio.sede_origen, await nombreDeSede(sedeA));
+    assert.equal(mio.sede_destino, await nombreDeSede(sedeB));
+    assert.equal(mio.dias_en_transito, 0, 'se abrió hoy');
+    assert.equal(mio.guia, `G-${suite.prefijo}LISTA`);
+
+    // Y los confirmados NO están: la lista es de los que están en curso.
+    const cerrados = traslados.filter((t) => t.guia === `G-${suite.prefijo}DOBLE`);
+    assert.deepEqual(cerrados, [], 'un traslado confirmado sale de la lista');
+  });
+
+  /**
+   * El corte real, en la segunda transacción de dos escrituras. Ver
+   * `matarConexionEnMedioDeConfirmar`.
+   */
+  it('matar la conexión entre mover el equipo y cerrar el traslado no deja media confirmación', async () => {
+    const { id, mov } = await conTrasladoAbierto(`${suite.prefijo}CORTE`);
+
+    const resultado = await matarConexionEnMedioDeConfirmar(id, mov, sedeB);
+    assert.equal(resultado, 'conexión terminada', 'la conexión tenía que morir de verdad');
+
+    // Las dos mitades. Que sobreviviera una sola es el equipo en dos sedes a la
+    // vez: movido y todavía viajando, o parado y ya sin traslado que lo mueva.
+    assert.equal(await sedeDe(id), sedeA, 'el equipo NO se movió');
+    const sigueAbierto = await trasladoAbiertoDe(id);
+    assert.ok(sigueAbierto, 'el traslado sigue abierto');
+    assert.equal(sigueAbierto.id, mov);
+  });
+
+  it('y el traslado que sobrevivió al corte se puede confirmar después', async () => {
+    // Que la base deshaga la transacción no basta: el traslado tiene que
+    // quedar utilizable, no en un limbo que haya que arreglar a mano.
+    const id = creados[creados.length - 1];
+    const abierto = await trasladoAbiertoDe(id);
+    assert.ok(abierto);
+
+    const r = await c.post(`/api/movimientos/${abierto.id}/confirmar`, {});
+    assert.equal(r.estado, 200, 'matar una conexión no puede dejar el pool inservible');
+    assert.equal(await sedeDe(id), sedeB);
   });
 });
 
