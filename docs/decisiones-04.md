@@ -351,3 +351,109 @@ primero. Ese 409 era hasta ahora un callejón sin salida en la interfaz: decía 
 que faltaba y no había forma de hacerlo. Ahora la recogida termina justo en la
 condición que lo levanta, y cuando no queda nada a nombre de la persona el modal
 ofrece desactivarla. Las dos mitades de la misma operación, en el mismo sitio.
+
+---
+
+## D23. La instantánea del acta incluye a la persona, no solo al equipo
+
+La 0008 (D14) congeló etiqueta, serial, marca y modelo del equipo. Al escribir
+la 5a quedó claro que eso era **media instantánea**.
+
+El cuerpo del acta imprime, además de eso: el nombre, el cargo y el documento
+del colaborador, su sede, las especificaciones del equipo (procesador, RAM,
+disco, sistema operativo) y su estado físico. Todo eso se habría leído por FK al
+pintar el documento — y entonces corregir el cargo de alguien en marzo cambiaría
+el acta que firmó en enero. Es exactamente el fallo que la instantánea existe
+para impedir, aplicado a la mitad de la tabla que nadie miró.
+
+La 0009 lo cierra: `actas` gana el bloque de la persona, `actas_equipos` el
+resto del equipo. `empleado_nombre` y `generada_por_nombre` van **NOT NULL**, y
+eso no es cosmética: es lo que impide que alguien añada mañana un segundo camino
+de creación que se olvide de copiar la instantánea y deje el acta apuntando solo
+por FK. El caso 30 de `verificar-esquema.sql` lo comprueba.
+
+**Qué NO se congela:** nada que el acta no imprima. La instantánea es la copia
+de lo que el documento dice, no un duplicado de la fila.
+
+Y la regla para leerlo: en cualquier vista que muestre un acta emitida, los
+datos salen de la instantánea. Volver a consultar `equipos` o `empleados` desde
+ahí deshace todo esto sin cambiar una sola línea de esquema.
+
+---
+
+## D24. El acta se ata al movimiento que la origina
+
+Un acta se emite **sobre una operación que ya ocurrió**: una entrega documenta
+la `Asignación`, una devolución documenta la `Devolución`. No al revés — no se
+emite el acta y luego se entrega el equipo.
+
+Sin la atadura, dentro de un año hay actas que nadie sabe a qué entrega
+corresponden, y movimientos de los que nadie sabe si se firmó papel. Son las dos
+caras de la misma pregunta y hoy no se podía responder ninguna.
+
+**Dónde vive:** `actas_equipos.movimiento_id`, NOT NULL. No en
+`movimientos.acta_id`, que era la columna que había desde la 0000 y que se ha
+borrado. Dos razones:
+
+1. Un acta cubre N equipos y **cada equipo tiene su propio movimiento**. El par
+   (acta, equipo) ya vive en `actas_equipos`; el movimiento es un atributo de
+   ese par, no del acta ni del movimiento por separado.
+2. `movimientos` es append-only y su trigger solo permite cambiar
+   `fecha_confirmacion`. Como el acta se emite **después** del movimiento,
+   rellenar `movimientos.acta_id` habría exigido relajar por segunda vez la
+   regla que protege el historial. La columna era, literalmente, imposible de
+   escribir sin tocarla — y nunca tuvo un valor: 0 de 190 filas.
+
+**La FK es compuesta**, `(movimiento_id, equipo_id) → movimientos(id, equipo_id)`,
+y eso requirió añadir un UNIQUE redundante sobre `movimientos(id, equipo_id)`.
+Merece la pena: con dos FK sueltas, ambas apuntarían a filas que existen y se
+podría firmar el acta de un portátil contra la asignación de otro. Nadie lo
+vería hasta leer el acta. Ahora lo rechaza Postgres en el INSERT.
+
+**Un movimiento se firma una vez**, por UNIQUE sobre `movimiento_id`. Dos actas
+sobre la misma entrega son dos papeles con distinto número, y el día que
+discrepen no hay forma de saber cuál vale.
+
+Lo que la FK no puede imponer —que el movimiento sea del *tipo* que el acta dice
+documentar, y que la persona del acta sea la del extremo correcto del
+movimiento— está en el grupo H de `verificar-datos.sql`.
+
+---
+
+## D25. El consecutivo es una tabla, no una SEQUENCE
+
+`actas_consecutivo(anio, valor)`, incrementada dentro de la transacción del acta:
+
+```sql
+INSERT INTO actas_consecutivo (anio, valor) VALUES ($1, 1)
+ON CONFLICT (anio) DO UPDATE SET valor = actas_consecutivo.valor + 1
+RETURNING valor;
+```
+
+**Por qué no `nextval()`.** Una secuencia es inmune a los duplicados, que es el
+riesgo grave, pero no participa en la transacción: un acta que falle después de
+pedir su número se lo lleva para siempre. Un hueco en la numeración de un
+documento firmable es una pregunta que alguien tendrá que responder —«¿dónde
+está el acta 47?»— y «se perdió en un rollback» no es una respuesta que valga
+delante de nadie.
+
+Con la tabla, el `UPDATE` toma el bloqueo de fila hasta el COMMIT: los
+concurrentes se serializan y reciben números seguidos, y un rollback devuelve el
+número al contador. Ni repetidos ni huecos.
+
+**El precio** es que emitir actas se serializa. Con tres personas en la
+aplicación no se nota, y la alternativa es un número repetido en un documento
+que se firma.
+
+**El UNIQUE de `actas.consecutivo` sigue siendo la última red.** Si esta lógica
+se rompiera, el INSERT falla en vez de emitir dos actas con el mismo número — y
+eso no es teoría: al comprobar que el test muerde, la versión ingenua
+(`max(...)+1`) hizo fallar 11 de 12 peticiones simultáneas con
+`Ya existe un acta con el consecutivo "ACT-2026-0001"`. La red hizo su trabajo.
+
+**Cómo está probado**, que era la pregunta: doce peticiones HTTP simultáneas por
+doce conexiones distintas del pool, no un razonamiento sobre el bloqueo. Se
+comprueban las tres cosas —doce números distintos, seguidos y sin huecos, y el
+contador donde debe quedar— y además que un acta fallida no adelanta el
+contador. El test se validó sustituyendo la implementación por un `max(...)+1`
+y viendo que se pone rojo.

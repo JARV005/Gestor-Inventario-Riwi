@@ -8,6 +8,8 @@
  */
 
 import type {
+  ActaEmitida,
+  ActaResumen,
   CatalogoTransiciones,
   EmpleadoConConteo,
   EquipoConMotivos,
@@ -20,6 +22,7 @@ import type {
   ResumenEquipos,
   Sede,
   SedeConConteos,
+  TipoActa,
   TrasladoAbierto,
   UsuarioSesion,
 } from '../types';
@@ -221,6 +224,21 @@ export const api = {
     pedir<{ movimientos: MovimientoConNombres[]; traslado_abierto: TrasladoAbierto | null }>(
       `/api/equipos/${equipoId}/historial`,
     ),
+
+  /**
+   * Emitir un acta sobre operaciones **que ya ocurrieron**. El servidor busca
+   * el movimiento que documenta cada equipo y responde 409 si no existe.
+   */
+  emitirActa: (datos: { tipo: TipoActa; empleado_id: string; equipos: string[] }) =>
+    pedir<{ acta: ActaEmitida }>('/api/actas', {
+      method: 'POST',
+      body: JSON.stringify(datos),
+    }),
+
+  acta: (id: string) => pedir<{ acta: ActaEmitida }>(`/api/actas/${id}`),
+
+  actas: (f: { empleado?: string } = {}) =>
+    pedir<{ actas: ActaResumen[] }>(`/api/actas${consulta(f)}`),
 
   /** Desactivar a alguien. 409 si tiene equipos a su nombre. */
   desactivarEmpleado: (id: string) =>

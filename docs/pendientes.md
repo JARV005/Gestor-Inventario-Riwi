@@ -30,7 +30,16 @@ con el resto del endurecimiento.
 
 ## Etapa 5 — movimientos y actas
 
-### El cuerpo del acta quedó en TODO(5)
+### El cuerpo del acta quedó en TODO(5) → ahora TODO(5b)
+
+**Al día tras la 5a.** El acta ya se registra: toma consecutivo, congela su
+instantánea, queda atada al movimiento que documenta y se emite desde
+`HandoverDocumentView`. Lo que sigue pendiente es **el documento**: las
+cláusulas de abajo, los bloques de firma y el PDF con su hash. Es 5b.
+
+El resto de esta entrada se conserva porque la plantilla transcrita sigue siendo
+el punto de partida, y sigue sin pasar por legal.
+
 
 Sin IA (`decisiones-03.md` §D12), el acta pasa a plantilla fija. Construirla es
 trabajo de la etapa 5; lo que la 4b dejó hecho es la mitad de lectura:

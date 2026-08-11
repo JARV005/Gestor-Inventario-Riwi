@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { CircleDashed, Printer, User, Laptop } from 'lucide-react';
+import { CircleDashed, FileSignature, Printer, User, Laptop } from 'lucide-react';
 
-import type { EmpleadoConConteo, EquipoConMotivos, Sede } from '../types';
+import type { ActaEmitida, ActaResumen, EmpleadoConConteo, EquipoConMotivos, Sede } from '../types';
 import { api, ErrorApi } from '../lib/api';
 import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
 
@@ -48,6 +48,19 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
   const [empleadoId, setEmpleadoId] = useState<string>('');
   const [equipoId, setEquipoId] = useState<string>('');
 
+  /**
+   * Etapa 5a: la vista deja de ser solo lectura y **emite**.
+   *
+   * El acta se emite sobre un movimiento que ya ocurrió, así que aquí no se
+   * elige «entregar»: se elige de qué operación pasada se firma el papel. Si no
+   * ha ocurrido, el servidor responde 409 y el mensaje lo explica.
+   */
+  const [tipo, setTipo] = useState<'Entrega' | 'Devolución'>('Entrega');
+  const [emitiendo, setEmitiendo] = useState(false);
+  const [errorEmitir, setErrorEmitir] = useState<string | null>(null);
+  const [emitida, setEmitida] = useState<ActaEmitida | null>(null);
+  const [historial, setHistorial] = useState<ActaResumen[]>([]);
+
   const cargar = useCallback(async () => {
     setCargando(true);
     setError(null);
@@ -89,6 +102,27 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
     setEmpleadoId((actual) => actual || equipoSeleccionado?.empleado_id || empleados[0].id);
   }, [empleados, equipoSeleccionado]);
 
+  const cargarHistorial = useCallback(async (idEmpleado: string) => {
+    try {
+      const r = await api.actas({ empleado: idEmpleado });
+      setHistorial(r.actas);
+    } catch {
+      // El historial es contexto, no el trabajo: si no carga, emitir sigue
+      // funcionando y el acta recién emitida se enseña igual.
+      setHistorial([]);
+    }
+  }, []);
+
+  // Cambiar de colaborador trae sus actas y borra el acuse de la anterior: el
+  // «Acta ACT-2026-0007 emitida» de otra persona junto a los datos de esta es
+  // la confusión que hace firmar el papel equivocado.
+  useEffect(() => {
+    setEmitida(null);
+    setErrorEmitir(null);
+    if (empleadoId) void cargarHistorial(empleadoId);
+    else setHistorial([]);
+  }, [empleadoId, cargarHistorial]);
+
   if (cargando) return <Cargando que="los datos del acta" />;
   if (error) return <ErrorDeCarga error={error} que="los datos del acta" onReintentar={cargar} />;
   if (!equipos.length) {
@@ -119,6 +153,23 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
   // del equipo equivocado.
   const recortado =
     totales.equipos > equipos.length || totales.empleados > empleados.length;
+
+  const emitir = async () => {
+    if (!empleadoId || !equipoId) return;
+    setEmitiendo(true);
+    setErrorEmitir(null);
+    try {
+      const r = await api.emitirActa({ tipo, empleado_id: empleadoId, equipos: [equipoId] });
+      setEmitida(r.acta);
+      await cargarHistorial(empleadoId);
+    } catch (e) {
+      // El 409 del servidor explica el orden («primero la operación, después el
+      // papel») y se enseña tal cual: es la frase que hay que leer.
+      setErrorEmitir(e instanceof ErrorApi ? e.message : 'No se pudo emitir el acta.');
+    } finally {
+      setEmitiendo(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -170,6 +221,25 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
                 {e.cargo ? ` (${e.cargo})` : ''}
               </option>
             ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="acta-tipo" className="block text-xs font-bold text-ink-muted uppercase mb-1">
+            Tipo de acta
+          </label>
+          <select
+            id="acta-tipo"
+            value={tipo}
+            onChange={(e) => {
+              setTipo(e.target.value as 'Entrega' | 'Devolución');
+              setEmitida(null);
+              setErrorEmitir(null);
+            }}
+            className="w-full bg-surface-alt border border-line rounded-lg px-3 py-2 text-xs text-ink focus:outline-none focus:border-brand"
+          >
+            <option value="Entrega">Entrega — documenta la asignación</option>
+            <option value="Devolución">Devolución — documenta la devolución</option>
           </select>
         </div>
 
@@ -260,27 +330,115 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
           </div>
         </div>
 
+        {/* ---------------------------------------------------------------
+            Emitir. Etapa 5a: el acta ya se registra en la base.
+
+            Registrar el acta y redactar su cuerpo legal son dos cosas, y esta
+            es la primera. El consecutivo, la instantánea y la atadura al
+            movimiento existen desde aquí; las cláusulas y el PDF, en la 5b.
+            --------------------------------------------------------------- */}
+        <div className="border border-line rounded-lg p-4 space-y-3 print:hidden">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div>
+              <p className="text-sm font-semibold text-ink">Registrar el acta</p>
+              <p className="text-xs text-ink-muted">
+                Toma número consecutivo y congela lo que el equipo y la persona son ahora. Se
+                emite sobre la {tipo === 'Entrega' ? 'asignación' : 'devolución'} que ya está en
+                el historial.
+              </p>
+            </div>
+            <button
+              onClick={() => void emitir()}
+              disabled={emitiendo || !empleadoId || !equipoId}
+              className="px-4 py-2 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shrink-0"
+            >
+              <FileSignature className="w-4 h-4" />
+              {emitiendo ? 'Registrando…' : `Emitir acta de ${tipo}`}
+            </button>
+          </div>
+
+          {errorEmitir && (
+            <p
+              role="alert"
+              className="text-xs text-danger bg-danger/10 border border-danger/40 rounded-lg px-3 py-2"
+            >
+              {errorEmitir}
+            </p>
+          )}
+
+          {emitida && (
+            <div className="bg-ok/10 border border-ok/40 rounded-lg p-3 space-y-2 text-xs">
+              <p className="font-semibold text-ink">
+                Acta {emitida.consecutivo} · {emitida.tipo}
+              </p>
+              <p className="text-ink-muted">
+                {new Date(emitida.fecha).toLocaleString('es-CO')} · emitida por{' '}
+                {emitida.generada_por_nombre}
+              </p>
+              {/* Lo que el acta DICE, leído de su instantánea. No se vuelve a
+                  consultar el equipo: si mañana se corrige su serial, este
+                  bloque tiene que seguir mostrando el de hoy. */}
+              <ul className="space-y-0.5 text-ink">
+                <li>
+                  {emitida.empleado_nombre}
+                  {emitida.empleado_cargo ? ` — ${emitida.empleado_cargo}` : ''}
+                  {emitida.sede_nombre ? ` · ${emitida.sede_nombre}` : ''}
+                </li>
+                {emitida.equipos.map((l) => (
+                  <li key={l.equipo_id}>
+                    {[l.marca, l.modelo].filter(Boolean).join(' ') || l.categoria}
+                    {l.etiqueta ? ` (${l.etiqueta})` : ''} · serial {l.serial ?? '—'}
+                  </li>
+                ))}
+              </ul>
+              <p className="text-ink-muted">
+                Sin PDF todavía: el documento firmable se genera en la etapa 5b, sobre estos
+                datos y no sobre los de ese momento.
+              </p>
+            </div>
+          )}
+
+          {historial.length > 0 && (
+            <div className="text-xs space-y-1">
+              <p className="font-semibold text-ink-muted uppercase">
+                Actas de {empleado?.nombre ?? 'este colaborador'}
+              </p>
+              <ul className="space-y-0.5">
+                {historial.map((a) => (
+                  <li key={a.id} className="text-ink-muted">
+                    <span className="font-mono text-ink">{a.consecutivo}</span> · {a.tipo} ·{' '}
+                    {new Date(a.fecha).toLocaleDateString('es-CO')} · {a.equipos} equipo
+                    {a.equipos === 1 ? '' : 's'}
+                    {!a.tiene_pdf && ' · sin PDF'}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+
         {/*
-          TODO(5): el cuerpo del acta.
+          TODO(5b): el CUERPO legal del acta.
 
-          Va aquí: razón social, número de acta, cláusulas de custodia y uso,
-          protocolo de devolución y los dos bloques de firma. El punto de
-          partida está transcrito en `docs/pendientes.md`, y tiene que pasar por
-          alguien de legal antes de imprimirse.
+          Lo que falta ya no es el registro —eso lo hace el botón de arriba—
+          sino el documento: razón social, cláusulas de custodia y uso,
+          protocolo de devolución y los dos bloques de firma, más el PDF con su
+          hash. El punto de partida está transcrito en `docs/pendientes.md` y
+          tiene que pasar por alguien de legal antes de imprimirse.
 
-          El hueco se ve a propósito, igual que en el dashboard: un acta que se
-          imprime con aspecto de completa y sin cláusulas es la que alguien
-          firma sin mirar.
+          El hueco se ve a propósito: un acta que se imprime con aspecto de
+          completa y sin cláusulas es la que alguien firma sin mirar.
         */}
         <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 space-y-2">
           <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-500">
             <CircleDashed className="w-4 h-4" />
-            Cuerpo del acta — pendiente (etapa 5)
+            Cuerpo del acta — pendiente (etapa 5b)
           </p>
           <p className="text-xs leading-relaxed text-slate-500">
-            Las cláusulas de custodia y uso, el número de acta y los bloques de firma se redactan
-            en la etapa 5, a partir de una plantilla fija revisada por legal. Hasta entonces este
-            documento sirve para consultar los datos, <strong>no para firmarse</strong>.
+            El acta ya se registra con su consecutivo y su instantánea. Lo que falta es el
+            documento: cláusulas de custodia y uso, protocolo de devolución y los bloques de
+            firma, sobre una plantilla fija revisada por legal, y el PDF con su hash. Hasta
+            entonces esta pantalla registra la entrega, <strong>no la formaliza</strong>.
           </p>
           <p className="text-xs text-slate-500">
             Ver <span className="font-mono">docs/pendientes.md</span>, etapa 5.

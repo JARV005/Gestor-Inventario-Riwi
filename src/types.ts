@@ -159,6 +159,69 @@ export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
 export type Operacion = 'asignar' | 'devolver' | 'trasladar' | 'baja' | 'reservar' | 'liberar';
 
+export type TipoActa = 'Entrega' | 'Devolución';
+
+/**
+ * Una línea de acta: **lo que el equipo era al firmar**, no lo que es ahora.
+ *
+ * Estas columnas son el contenido del documento, copiado al emitirlo (D23). Si
+ * alguien corrige el serial el mes que viene, esta línea sigue diciendo el de
+ * aquel día — por eso la vista pinta esto y no vuelve a consultar el equipo.
+ */
+export interface LineaActa {
+  equipo_id: string;
+  /** El movimiento que este acta documenta (D24). */
+  movimiento_id: string;
+  etiqueta: string | null;
+  serial: string | null;
+  marca: string | null;
+  modelo: string | null;
+  categoria: CategoriaEquipo;
+  condicion: string | null;
+  procesador: string | null;
+  ram: string | null;
+  disco: string | null;
+  sistema_operativo: string | null;
+}
+
+/** Un acta emitida, tal como la devuelven `POST /api/actas` y `GET /api/actas/:id`. */
+export interface ActaEmitida {
+  id: string;
+  consecutivo: string;
+  tipo: TipoActa;
+  fecha: string;
+  empleado_id: string;
+  /** Instantánea de la persona, congelada al emitir. */
+  empleado_nombre: string;
+  empleado_cedula: string | null;
+  empleado_cargo: string | null;
+  empleado_area: string | null;
+  sede_nombre: string | null;
+  generada_por: string;
+  generada_por_nombre: string;
+  firmada: boolean;
+  fecha_firma: string | null;
+  hash_sha256: string | null;
+  /** El binario no viaja en el detalle: en 5a siempre es `false`. */
+  tiene_pdf: boolean;
+  equipos: LineaActa[];
+}
+
+/** Una fila del listado de actas. */
+export interface ActaResumen {
+  id: string;
+  consecutivo: string;
+  tipo: TipoActa;
+  fecha: string;
+  empleado_id: string;
+  empleado_nombre: string;
+  sede_nombre: string | null;
+  generada_por_nombre: string;
+  firmada: boolean;
+  tiene_pdf: boolean;
+  equipos: number;
+}
+
 /**
  * Una fila del historial con los nombres ya resueltos por el servidor. Es la
  * pantalla que justifica el proyecto: un historial que contesta `a3f9c1e2-…`
