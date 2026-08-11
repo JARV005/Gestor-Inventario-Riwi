@@ -94,6 +94,11 @@ const REGLAS: Record<string, string> = {
   actas_pdf_con_hash:
     'Un acta guarda su PDF y el hash que lo verifica juntos, o ninguno de los dos.',
   actas_equipos_pk: 'Ese equipo ya está incluido en esta acta.',
+  idx_actas_equipos_movimiento:
+    'Ya hay un acta emitida sobre esa entrega. Un movimiento se firma una vez: dos actas sobre la misma operación son dos papeles con distinto número, y el día que discrepen no habría forma de saber cuál vale.',
+  actas_equipos_movimiento_del_mismo_equipo:
+    'El movimiento indicado no es de ese equipo. Un acta solo puede documentar la operación del equipo que incluye.',
+  actas_consecutivo_positivo: 'El consecutivo de actas no puede ser cero ni negativo.',
 };
 
 /** `Key (serial)=(776B494) already exists.` → `{ columna, valor }` */

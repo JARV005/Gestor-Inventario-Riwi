@@ -64,6 +64,13 @@
       "when": 1786377074922,
       "tag": "0008_transito_derivado_y_actas",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1786550400000,
+      "tag": "0009_actas_instantanea_y_consecutivo",
+      "breakpoints": true
     }
   ]
 }

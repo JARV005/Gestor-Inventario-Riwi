@@ -18,6 +18,7 @@ import {
   check,
   customType,
   date,
+  foreignKey,
   index,
   inet,
   integer,
@@ -28,6 +29,7 @@ import {
   pgTable,
   primaryKey,
   text,
+  unique,
   uniqueIndex,
   timestamp,
   uuid,
@@ -469,7 +471,11 @@ export const movimientos = pgTable(
     usuario_app_id: uuid('usuario_app_id')
       .notNull()
       .references(() => usuariosApp.id, { onDelete: 'restrict' }),
-    acta_id: uuid('acta_id').references(() => actas.id, { onDelete: 'restrict' }),
+    // `acta_id` estuvo aquí desde la 0000 y nunca tuvo un valor. Se fue en la
+    // 0009: el vínculo acta↔movimiento vive en `actas_equipos.movimiento_id`,
+    // que es donde está el par (acta, equipo). Además esta columna era
+    // imposible de escribir — el acta se emite después del movimiento, y el
+    // trigger append-only solo deja cambiar `fecha_confirmacion`.
     observaciones: text('observaciones'),
     fecha_confirmacion: timestamp('fecha_confirmacion', { withTimezone: true }),
     transportadora: text('transportadora'),
@@ -478,6 +484,12 @@ export const movimientos = pgTable(
   },
   (t) => [
     index('idx_movimientos_equipo').on(t.equipo_id, t.fecha.desc()),
+    /**
+     * No añade unicidad —`id` ya es la PK— pero es lo que permite que
+     * `actas_equipos` referencie `(movimiento_id, equipo_id)` como par. Sin
+     * ella, Postgres rechaza la FK compuesta.
+     */
+    unique('movimientos_id_equipo_uq').on(t.id, t.equipo_id),
     /**
      * UNIQUE, y no solo un índice de consulta (D13, 0008).
      *
@@ -544,6 +556,23 @@ export const actas = pgTable(
     generada_por: uuid('generada_por')
       .notNull()
       .references(() => usuariosApp.id, { onDelete: 'restrict' }),
+
+    /**
+     * Instantánea de la persona: lo que el acta DICE, copiado al emitirla
+     * (D23). No se lee de `empleados` al pintar el documento.
+     *
+     * La FK `empleado_id` responde «de quién es este acta»; esto responde «qué
+     * se firmó». Son preguntas distintas y la segunda no puede cambiar: si en
+     * marzo se corrige el cargo de alguien, el acta que firmó en enero sigue
+     * diciendo el cargo de enero.
+     */
+    empleado_nombre: text('empleado_nombre').notNull(),
+    empleado_cedula: text('empleado_cedula'),
+    empleado_cargo: text('empleado_cargo'),
+    empleado_area: text('empleado_area'),
+    sede_nombre: text('sede_nombre'),
+    /** Quién la emitió, con su nombre congelado por lo mismo. */
+    generada_por_nombre: text('generada_por_nombre').notNull(),
     pdf: customType<{ data: Buffer; driverData: Buffer }>({
       dataType: () => 'bytea',
     })('pdf'),
@@ -571,6 +600,13 @@ export const actas = pgTable(
  * `ON DELETE RESTRICT` en las dos: ni un acta ni un equipo referenciado por un
  * acta se borran. Un acta firmada es un documento legal.
  */
+/**
+ * Un equipo dentro de un acta, **con lo que ese equipo era al firmar**.
+ *
+ * Las columnas de instantánea no son una desnormalización por rendimiento: son
+ * el contenido del documento. La FK dice que el equipo existe; la instantánea,
+ * que lo impreso no cambia cuando la fila de `equipos` cambie (D14, D23).
+ */
 export const actasEquipos = pgTable(
   'actas_equipos',
   {
@@ -580,16 +616,58 @@ export const actasEquipos = pgTable(
     equipo_id: uuid('equipo_id')
       .notNull()
       .references(() => equipos.id, { onDelete: 'restrict' }),
+    /**
+     * El movimiento que este acta documenta (D24). Un acta se emite sobre algo
+     * que ya ocurrió: la `Asignación` de una entrega, la `Devolución` de una
+     * recogida.
+     *
+     * La FK es COMPUESTA con `equipo_id` —ver 0009—: ata el acta al movimiento
+     * **de ese equipo**. Con dos FK sueltas se podría firmar el acta de un
+     * portátil contra la asignación de otro, y nadie lo vería hasta leerla.
+     */
+    movimiento_id: uuid('movimiento_id').notNull(),
+
     etiqueta: text('etiqueta'),
     serial: text('serial'),
     marca: text('marca'),
     modelo: text('modelo'),
+    categoria: categoriaEquipo('categoria').notNull(),
+    condicion: condicionEquipo('condicion'),
+    procesador: text('procesador'),
+    ram: text('ram'),
+    disco: text('disco'),
+    sistema_operativo: text('sistema_operativo'),
   },
   (t) => [
     primaryKey({ name: 'actas_equipos_pk', columns: [t.acta_id, t.equipo_id] }),
     index('idx_actas_equipos_equipo').on(t.equipo_id),
+    /** Un movimiento se firma una vez: dos actas sobre la misma entrega son
+     *  dos papeles con distinto número, y el día que discrepen no hay forma de
+     *  saber cuál vale. */
+    uniqueIndex('idx_actas_equipos_movimiento').on(t.movimiento_id),
+    foreignKey({
+      name: 'actas_equipos_movimiento_del_mismo_equipo',
+      columns: [t.movimiento_id, t.equipo_id],
+      foreignColumns: [movimientos.id, movimientos.equipo_id],
+    }).onDelete('restrict'),
   ],
 );
+
+/**
+ * El contador del consecutivo, por año. **Tabla y no SEQUENCE** (D25).
+ *
+ * `nextval()` no participa en la transacción: es inmune a los duplicados pero
+ * deja huecos, porque un acta que falle después de pedir su número se lo lleva.
+ * Un hueco en la numeración de un documento firmable es una pregunta que
+ * alguien tendrá que responder, y «se perdió en un rollback» no es respuesta.
+ *
+ * La fila se incrementa dentro de la transacción del acta, así que el bloqueo
+ * serializa a los concurrentes y un rollback devuelve el número.
+ */
+export const actasConsecutivo = pgTable('actas_consecutivo', {
+  anio: integer('anio').primaryKey(),
+  valor: integer('valor').notNull(),
+});
 
 /**
  * Obligatoria por el §5: toda escritura sobre `equipos` y todo desciframiento

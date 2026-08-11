@@ -12,6 +12,7 @@ import express, { type Express } from 'express';
 import { manejadorErrores } from './errores.js';
 import { guardian } from './autenticar.js';
 import { limpiarRegistro, ruta } from './permisos.js';
+import { registrarRutasActas } from './rutas/actas.js';
 import { registrarRutasAuth } from './rutas/auth.js';
 import { registrarRutasEmpleados } from './rutas/empleados.js';
 import { registrarRutasEquipos } from './rutas/equipos.js';
@@ -47,6 +48,7 @@ export function crearApp(): Express {
   // Después de las de equipos: sus rutas son '/api/equipos/:id/algo' y no
   // chocan con '/api/equipos/:id', que ya está registrada arriba.
   registrarRutasMovimientos(app);
+  registrarRutasActas(app);
 
   // Siempre el último: si se registra antes que las rutas, no las cubre.
   app.use(manejadorErrores);
