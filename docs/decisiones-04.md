@@ -457,3 +457,56 @@ comprueban las tres cosas —doce números distintos, seguidos y sin huecos, y e
 contador donde debe quedar— y además que un acta fallida no adelanta el
 contador. El test se validó sustituyendo la implementación por un `max(...)+1`
 y viendo que se pone rojo.
+
+---
+
+## D26. El PDF es reproducible, y por eso guarda de qué plantilla salió
+
+Un PDF lleva por defecto la fecha de generación y el nombre del programa que lo
+hizo, así que el mismo documento generado dos veces produce dos ficheros
+distintos. Con eso, un hash no dice nada útil: no se puede volver a calcular.
+
+Se fijan las cuatro cosas que varían: `CreationDate` y `ModDate` toman **la
+fecha del acta**, no `now()`, y `Producer`/`Creator` son constantes. Fuentes,
+solo las estándar de PDF (Helvetica), que no se incrustan y por tanto no meten
+bytes que dependan de la versión de una fuente del sistema.
+
+Comprobado **antes** de construir nada encima, no después: dos generaciones
+separadas 1,1 s dan el mismo sha256; cambiar el contenido o la fecha lo cambia.
+
+**La plantilla se guarda con el acta** (`actas.plantilla_version`, 0010). El
+hash contra los bytes guardados responde «¿está intacto el fichero?». La
+pregunta que D16 quería poder responder es otra: «¿el documento guardado es el
+que estos datos producen?», y esa exige regenerarlo — lo que solo tiene sentido
+frente a la redacción que lo produjo. En cuanto se corrija una cláusula, las
+actas nuevas cambian de bytes y las viejas no; sin la columna no habría forma de
+saber cuál de las dos redacciones regenera cada una.
+
+Es el argumento de la instantánea (D23) aplicado al documento en vez de a los
+datos: lo que se firmó no cambia porque cambie lo que se firmaría hoy.
+`GET /api/actas/:id/verificar` devuelve las dos respuestas y dice si la
+plantilla guardada es la de hoy.
+
+### El texto no está aprobado, y el documento lo dice
+
+`PLANTILLA_VERSION = '1-borrador'`. Mientras diga «borrador», el PDF imprime en
+el pie que su texto no lo ha revisado el área legal. Quien decide qué debe decir
+un acta de entrega en esta organización no es quien la programa. Cuando esté
+revisada se cambia la constante: el aviso desaparece del pie y de la pantalla a
+la vez, y las actas ya emitidas conservan su `plantilla_version` — que es
+precisamente para lo que existe la columna.
+
+Hay dos actas de ejemplo con datos inventados en `data/origen/`, para poder
+enseñar la redacción sin datos de nadie.
+
+### Un defecto que solo se vio abriéndolo
+
+La primera versión producía **tres páginas** para un acta de un solo equipo,
+con las firmas huérfanas en la primera. El pie se escribía por debajo del margen
+inferior y pdfkit añadía una página; el segundo `text()` añadía otra.
+
+El generador no fallaba: devolvía un PDF válido, con su hash, y todos los tests
+en verde. Ninguna comprobación sobre bytes lo habría encontrado. Es la lección
+de la etapa 4a otra vez —los caminos se prueban ejecutándolos sobre el sistema
+completo— aplicada a un artefacto que hay que mirar. De ahí que el test cuente
+las páginas: 1 equipo → 1 página, 8 → 2.

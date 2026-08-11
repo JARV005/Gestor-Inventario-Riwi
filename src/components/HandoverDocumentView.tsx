@@ -1,12 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { CircleDashed, FileSignature, Printer, User, Laptop } from 'lucide-react';
+import { AlertTriangle, Download, FileSignature, Printer, User, Laptop } from 'lucide-react';
 
 import type { ActaEmitida, ActaResumen, EmpleadoConConteo, EquipoConMotivos, Sede } from '../types';
 import { api, ErrorApi } from '../lib/api';
 import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
 
 /**
- * El acta de entrega, en modo lectura.
+ * El acta de entrega: se consulta, se emite y se descarga.
  *
  * Hasta la etapa 4b el cuerpo lo redactaba Gemini contra
  * `POST /api/gemini/handover-act`, y cuando no había clave de API caía a una
@@ -15,10 +15,11 @@ import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
  * principio: un documento legal tiene formato estable, y una redacción distinta
  * cada vez es un defecto, no una función.
  *
- * **Esa plantilla es trabajo de la etapa 5.** Lo que hace esta vista hoy es
- * leer de la base los datos que el acta necesita, que es la mitad que sí
- * pertenece a la 4b. El cuerpo —cláusulas, número de acta, firmante de la
- * empresa— queda como hueco declarado: ver `docs/pendientes.md`.
+ * La 5a le dio el registro —consecutivo, instantánea, atadura al movimiento— y
+ * la 5b el documento: `db/acta-pdf.ts` genera el PDF, reproducible byte a byte,
+ * y aquí se descarga. Lo que sigue sin estar cerrado no es código: **el texto
+ * de las cláusulas no lo ha revisado nadie de la organización**, y eso se avisa
+ * en pantalla y en el pie del propio PDF.
  *
  * Lo que traía el prototipo en su lugar no era un borrador, era relleno:
  * razón social de otra empresa, un número de acta inventado, una firmante que
@@ -179,7 +180,7 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             Generador de Actas de Entrega de Equipo
           </h1>
           <p className="text-xs text-ink-muted">
-            Datos leídos del inventario. La redacción del acta llega en la etapa 5.
+            Datos leídos del inventario. El acta se emite sobre una operación ya registrada.
           </p>
         </div>
 
@@ -391,9 +392,24 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
                   </li>
                 ))}
               </ul>
+              <div className="flex items-center gap-2 flex-wrap pt-1">
+                <a
+                  href={`/api/actas/${emitida.id}/pdf`}
+                  download={`${emitida.consecutivo}.pdf`}
+                  className="px-3 py-1.5 bg-brand hover:bg-brand-hover text-white font-semibold rounded-lg flex items-center gap-1.5"
+                >
+                  <Download className="w-4 h-4" />
+                  Descargar {emitida.consecutivo}.pdf
+                </a>
+                {emitida.hash_sha256 && (
+                  <span className="text-ink-muted font-mono" title={emitida.hash_sha256}>
+                    sha256 {emitida.hash_sha256.slice(0, 12)}…
+                  </span>
+                )}
+              </div>
               <p className="text-ink-muted">
-                Sin PDF todavía: el documento firmable se genera en la etapa 5b, sobre estos
-                datos y no sobre los de ese momento.
+                El documento se generó con la instantánea de arriba y su hash queda guardado
+                junto a él. Regenerarlo desde esos mismos datos da el mismo fichero.
               </p>
             </div>
           )}
@@ -405,11 +421,25 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
               </p>
               <ul className="space-y-0.5">
                 {historial.map((a) => (
-                  <li key={a.id} className="text-ink-muted">
-                    <span className="font-mono text-ink">{a.consecutivo}</span> · {a.tipo} ·{' '}
-                    {new Date(a.fecha).toLocaleDateString('es-CO')} · {a.equipos} equipo
-                    {a.equipos === 1 ? '' : 's'}
-                    {!a.tiene_pdf && ' · sin PDF'}
+                  <li key={a.id} className="text-ink-muted flex items-center gap-2 flex-wrap">
+                    <span className="font-mono text-ink">{a.consecutivo}</span>
+                    <span>
+                      · {a.tipo} · {new Date(a.fecha).toLocaleDateString('es-CO')} · {a.equipos}{' '}
+                      equipo{a.equipos === 1 ? '' : 's'}
+                    </span>
+                    {a.tiene_pdf ? (
+                      <a
+                        href={`/api/actas/${a.id}/pdf`}
+                        download={`${a.consecutivo}.pdf`}
+                        className="text-brand hover:underline inline-flex items-center gap-1"
+                      >
+                        <Download className="w-3 h-3" />
+                        PDF
+                      </a>
+                    ) : (
+                      // Las emitidas en la 5a, antes de que hubiera generación.
+                      <span className="text-ink-faint">sin PDF</span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -418,30 +448,29 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
         </div>
 
         {/*
-          TODO(5b): el CUERPO legal del acta.
+          El TODO(5) se fue: el acta se registra y su PDF se descarga.
 
-          Lo que falta ya no es el registro —eso lo hace el botón de arriba—
-          sino el documento: razón social, cláusulas de custodia y uso,
-          protocolo de devolución y los dos bloques de firma, más el PDF con su
-          hash. El punto de partida está transcrito en `docs/pendientes.md` y
-          tiene que pasar por alguien de legal antes de imprimirse.
-
-          El hueco se ve a propósito: un acta que se imprime con aspecto de
-          completa y sin cláusulas es la que alguien firma sin mirar.
+          Lo que queda no es un hueco de implementación sino un hecho sobre el
+          documento —su texto no lo ha revisado nadie de la organización—, y por
+          eso se dice como hecho y no como pendiente. El propio PDF lo lleva
+          impreso en el pie. Se quita de los dos sitios a la vez, cambiando
+          `PLANTILLA_VERSION` en `db/acta-pdf.ts`.
         */}
-        <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 space-y-2">
-          <p className="flex items-center gap-1.5 text-sm font-semibold text-slate-500">
-            <CircleDashed className="w-4 h-4" />
-            Cuerpo del acta — pendiente (etapa 5b)
+        <div className="border border-warn/50 bg-warn/10 rounded-lg p-4 space-y-1 print:hidden">
+          <p className="flex items-center gap-1.5 text-sm font-semibold text-ink">
+            <AlertTriangle className="w-4 h-4 text-warn" />
+            El texto del acta está sin revisar por legal
           </p>
-          <p className="text-xs leading-relaxed text-slate-500">
-            El acta ya se registra con su consecutivo y su instantánea. Lo que falta es el
-            documento: cláusulas de custodia y uso, protocolo de devolución y los bloques de
-            firma, sobre una plantilla fija revisada por legal, y el PDF con su hash. Hasta
-            entonces esta pantalla registra la entrega, <strong>no la formaliza</strong>.
+          <p className="text-xs leading-relaxed text-ink-muted">
+            Las cláusulas son un borrador escrito a partir de la plantilla del prototipo. Quien
+            decide qué debe decir un acta de entrega en esta organización no es quien la
+            programa: hay que pasarla por quien vaya a firmarla. Mientras tanto el PDF lo dice
+            en su pie, para que no se firme creyendo que está aprobado.
           </p>
-          <p className="text-xs text-slate-500">
-            Ver <span className="font-mono">docs/pendientes.md</span>, etapa 5.
+          <p className="text-xs text-ink-muted">
+            La razón social y el NIT salen de <span className="font-mono">ORGANIZACION_RAZON_SOCIAL</span>{' '}
+            y <span className="font-mono">ORGANIZACION_NIT</span>. Sin ellas el acta imprime el
+            hueco en blanco, nunca un nombre inventado.
           </p>
         </div>
       </div>

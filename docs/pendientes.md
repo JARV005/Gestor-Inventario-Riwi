@@ -30,15 +30,25 @@ con el resto del endurecimiento.
 
 ## Etapa 5 — movimientos y actas
 
-### El cuerpo del acta quedó en TODO(5) → ahora TODO(5b)
+### El cuerpo del acta: escrito, y SIN REVISAR POR LEGAL
 
-**Al día tras la 5a.** El acta ya se registra: toma consecutivo, congela su
-instantánea, queda atada al movimiento que documenta y se emite desde
-`HandoverDocumentView`. Lo que sigue pendiente es **el documento**: las
-cláusulas de abajo, los bloques de firma y el PDF con su hash. Es 5b.
+**Al día tras la 5b.** El acta se registra, se genera su PDF y se descarga desde
+`HandoverDocumentView`. El `TODO(5)` ya no existe en el código.
 
-El resto de esta entrada se conserva porque la plantilla transcrita sigue siendo
-el punto de partida, y sigue sin pasar por legal.
+**Lo que queda no es código.** Las cláusulas de `db/acta-pdf.ts` son un borrador
+escrito a partir de la plantilla de abajo, y nadie de la organización las ha
+revisado. Mientras `PLANTILLA_VERSION` diga `borrador`, el PDF lo imprime en su
+pie y la vista lo avisa en pantalla. Cambiar esa constante quita el aviso de los
+dos sitios a la vez, y **es lo último que hay que hacer**, cuando quien vaya a
+firmar el acta haya dado el visto bueno.
+
+Hay dos actas de ejemplo con datos inventados en `data/origen/`
+(`acta-ejemplo-entrega.pdf` y `acta-ejemplo-devolucion.pdf`) para poder
+enseñarlas sin datos de nadie.
+
+El resto de esta entrada se conserva porque la plantilla transcrita es el punto
+de partida del que salió la redacción actual, y las tres correcciones de abajo
+ya están aplicadas.
 
 
 Sin IA (`decisiones-03.md` §D12), el acta pasa a plantilla fija. Construirla es
@@ -134,6 +144,22 @@ propio modal (`OffboardingModal`), que devuelve en vez de asignar.
 puede hacer, aunque no desde este botón. Desde el detalle del equipo salen
 «Registrar devolución» y luego «Asignar a alguien», que son exactamente las dos
 mitades de reasignar. Lo que falta es el atajo, no la capacidad.
+
+### Etapa 5c — el acta de varios equipos desde la interfaz
+
+La API ya acepta hasta 50 equipos por acta y la plantilla los imprime en lista
+(comprobado: cuatro caben en una página, ocho ocupan dos). Lo que emite de uno
+en uno es **`HandoverDocumentView`**, porque su selector es de un solo equipo y
+cambiarlo cambia lo que la pantalla muestra.
+
+Un onboarding entrega portátil, teclado, ratón y diadema el mismo día. Cuatro
+actas separadas para una entrega son cuatro números de consecutivo, cuatro
+firmas y cuatro papeles que archivar — fricción que devuelve a la gente al
+método anterior, que es el fallo que este proyecto existe para arreglar.
+
+Al hacerlo: el selector pasa a marcar varios de los equipos que la persona tiene
+a su nombre, igual que hace `OffboardingModal`. El servidor no necesita ningún
+cambio.
 
 ### El equipo perdido o robado mientras estaba asignado
 
