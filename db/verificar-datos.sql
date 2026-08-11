@@ -386,6 +386,79 @@ WHERE NOT e.requiere_revision
   AND EXISTS (SELECT 1 FROM equipos_motivos_revision m WHERE m.equipo_id = e.id);
 
 -- ===========================================================================
+-- H. Actas (etapa 5a)
+-- ===========================================================================
+--
+-- Lo que la base no puede imponer con una constraint. La FK compuesta ya
+-- garantiza que el movimiento es del equipo del acta; lo que no puede
+-- garantizar es que sea del TIPO que el acta dice documentar, ni que la
+-- numeración no tenga huecos.
+
+INSERT INTO hallazgo
+SELECT 'H', 'actas sin ningun equipo', count(*)
+FROM actas a
+WHERE NOT EXISTS (SELECT 1 FROM actas_equipos ae WHERE ae.acta_id = a.id);
+
+-- Un acta de Entrega tiene que colgar de una Asignación, y una de Devolución
+-- de una Devolución. Cruzarlos daría un papel que dice «entregado» sobre el
+-- movimiento en el que la persona lo devolvió.
+INSERT INTO hallazgo
+SELECT 'H', 'actas cuyo movimiento no concuerda con su tipo', count(*)
+FROM actas_equipos ae
+JOIN actas a ON a.id = ae.acta_id
+JOIN movimientos m ON m.id = ae.movimiento_id
+WHERE m.tipo <> CASE a.tipo WHEN 'Entrega' THEN 'Asignación'
+                            WHEN 'Devolución' THEN 'Devolución' END::tipo_movimiento;
+
+-- El acta es de la persona que aparece en el extremo correcto del movimiento.
+-- Sin esto, el acta de Ana podría colgar de la entrega que se le hizo a Luis.
+INSERT INTO hallazgo
+SELECT 'H', 'actas cuya persona no es la del movimiento', count(*)
+FROM actas_equipos ae
+JOIN actas a ON a.id = ae.acta_id
+JOIN movimientos m ON m.id = ae.movimiento_id
+WHERE a.empleado_id IS DISTINCT FROM
+      CASE a.tipo WHEN 'Entrega' THEN m.empleado_destino_id
+                  ELSE m.empleado_origen_id END;
+
+INSERT INTO hallazgo
+SELECT 'H', 'consecutivos con formato inesperado', count(*)
+FROM actas a WHERE a.consecutivo !~ '^ACT-\d{4}-\d{4,}$';
+
+-- El año del número tiene que ser el de la fecha, o el consecutivo de 2027
+-- empezaría a numerar sobre el contador de 2026.
+INSERT INTO hallazgo
+SELECT 'H', 'consecutivos cuyo anio no es el de la fecha', count(*)
+FROM actas a
+WHERE a.consecutivo ~ '^ACT-\d{4}-'
+  AND substring(a.consecutivo from 5 for 4)::int <> extract(year FROM a.fecha AT TIME ZONE 'UTC');
+
+-- Sin huecos: es lo que distingue el contador en tabla de una SEQUENCE (D25),
+-- y lo único que lo comprueba de verdad sobre lo emitido.
+INSERT INTO hallazgo
+SELECT 'H', 'anios con huecos en la numeracion de actas', count(*)
+FROM (
+  SELECT substring(a.consecutivo from 5 for 4)::int AS anio,
+         count(*) AS emitidas,
+         max(substring(a.consecutivo from '\d+$')::int) AS maximo,
+         min(substring(a.consecutivo from '\d+$')::int) AS minimo
+    FROM actas a
+   WHERE a.consecutivo ~ '^ACT-\d{4}-\d+$'
+   GROUP BY 1
+) x
+WHERE x.minimo <> 1 OR x.maximo <> x.emitidas;
+
+-- Y el contador no puede ir por detrás de lo emitido: si lo hiciera, la
+-- siguiente acta reintentaría un número ya usado y chocaría con el UNIQUE.
+INSERT INTO hallazgo
+SELECT 'H', 'contadores que no cuadran con las actas emitidas', count(*)
+FROM actas_consecutivo c
+WHERE c.valor <> (
+  SELECT count(*) FROM actas a
+   WHERE a.consecutivo LIKE 'ACT-' || c.anio || '-%'
+);
+
+-- ===========================================================================
 
 SELECT grupo, caso, filas,
        CASE WHEN filas = 0 THEN 'OK' ELSE '>>> FALLA' END AS veredicto
@@ -405,6 +478,9 @@ SELECT (SELECT count(*) FROM equipos) AS equipos,
        -- movimientos de estado y no se vería que no comprobaron nada.
        (SELECT count(*) FROM movimientos WHERE tipo <> 'Alta') AS movimientos_de_estado,
        (SELECT count(*) FROM movimientos
-         WHERE tipo = 'Traslado' AND fecha_confirmacion IS NULL) AS traslados_abiertos;
+         WHERE tipo = 'Traslado' AND fecha_confirmacion IS NULL) AS traslados_abiertos,
+       -- Igual que arriba: sin actas, el grupo H sale verde sin comprobar nada
+       -- y eso tiene que verse a simple vista.
+       (SELECT count(*) FROM actas) AS actas;
 
 DROP TABLE hallazgo;

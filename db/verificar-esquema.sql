@@ -31,6 +31,10 @@ DECLARE
   v_abiertos_antes int;
   v_eq_res uuid;
   v_acta   uuid;
+  v_acta2  uuid;
+  v_mov_acta uuid;
+  v_eq_otro  uuid;
+  v_mov_otro uuid;
 BEGIN
   SELECT id INTO v_sede FROM sedes WHERE nombre = 'Medellín';
   SELECT id INTO v_usr  FROM usuarios_app WHERE email = 'sistema@bbl.local';
@@ -367,23 +371,31 @@ BEGIN
 
   -- 21. D14: un acta no puede apuntar a un equipo que no existe.
   --     Es lo que el `uuid[]` del §2 no podía imponer.
-  INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por)
-    VALUES ('PRUEBA-0001', 'Entrega', v_emp, v_usr) RETURNING id INTO v_acta;
+  INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                     empleado_nombre, generada_por_nombre)
+    VALUES ('PRUEBA-0001', 'Entrega', v_emp, v_usr,
+            'Nombre Congelado', 'Autor Congelado') RETURNING id INTO v_acta;
+
+  -- El movimiento que el acta documentará (D24). Sobre v_eq_res, que es el
+  -- equipo que usan los casos de abajo.
+  INSERT INTO movimientos (equipo_id, tipo, usuario_app_id, empleado_destino_id)
+    VALUES (v_eq_res, 'Asignación', v_usr, v_emp) RETURNING id INTO v_mov_acta;
 
   BEGIN
-    INSERT INTO actas_equipos (acta_id, equipo_id)
-      VALUES (v_acta, '00000000-0000-0000-0000-000000000000');
+    INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria)
+      VALUES (v_acta, '00000000-0000-0000-0000-000000000000', v_mov_acta, 'Portátil');
     INSERT INTO resultado VALUES ('D14: acta hacia un equipo inexistente', 'rechazado', 'ACEPTADO');
   EXCEPTION WHEN foreign_key_violation THEN
     INSERT INTO resultado VALUES ('D14: acta hacia un equipo inexistente', 'rechazado', 'rechazado');
   END;
 
   -- 22. D14: el mismo equipo no puede ir dos veces en la misma acta.
-  INSERT INTO actas_equipos (acta_id, equipo_id, etiqueta, serial)
-    VALUES (v_acta, v_eq_res, 'ETQ-INSTANTANEA', 'SN-INSTANTANEA');
+  INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria, etiqueta, serial)
+    VALUES (v_acta, v_eq_res, v_mov_acta, 'Portátil', 'ETQ-INSTANTANEA', 'SN-INSTANTANEA');
 
   BEGIN
-    INSERT INTO actas_equipos (acta_id, equipo_id) VALUES (v_acta, v_eq_res);
+    INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria)
+      VALUES (v_acta, v_eq_res, v_mov_acta, 'Portátil');
     INSERT INTO resultado VALUES ('D14: equipo repetido en un acta', 'rechazado', 'ACEPTADO');
   EXCEPTION WHEN unique_violation THEN
     INSERT INTO resultado VALUES ('D14: equipo repetido en un acta', 'rechazado', 'rechazado');
@@ -428,6 +440,95 @@ BEGIN
     INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'aceptado');
   EXCEPTION WHEN check_violation THEN
     INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 27. D24: un acta no puede colgar del movimiento de OTRO equipo.
+  --     Es la FK compuesta (movimiento_id, equipo_id) de la 0009. Con dos FK
+  --     sueltas las dos apuntarían a filas que existen y nadie vería que el
+  --     acta de un portátil cuelga de la asignación de otro.
+  INSERT INTO equipos (categoria, estado, sede_id)
+    VALUES ('Monitor', 'Disponible', v_sede) RETURNING id INTO v_eq_otro;
+  INSERT INTO movimientos (equipo_id, tipo, usuario_app_id)
+    VALUES (v_eq_otro, 'Alta', v_usr) RETURNING id INTO v_mov_otro;
+
+  INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                     empleado_nombre, generada_por_nombre)
+    VALUES ('PRUEBA-0002', 'Entrega', v_emp, v_usr, 'N', 'A') RETURNING id INTO v_acta2;
+
+  BEGIN
+    -- El equipo es v_eq_res y el movimiento es de v_eq_otro: cruzados.
+    INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria)
+      VALUES (v_acta2, v_eq_res, v_mov_otro, 'Portátil');
+    INSERT INTO resultado VALUES ('D24: acta contra el movimiento de otro equipo', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO resultado VALUES ('D24: acta contra el movimiento de otro equipo', 'rechazado', 'rechazado');
+  END;
+
+  -- Y el mismo par, bien puesto, tiene que pasar: si no, el caso de arriba
+  -- estaría en verde porque la FK rechaza todo.
+  BEGIN
+    INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria)
+      VALUES (v_acta2, v_eq_otro, v_mov_otro, 'Monitor');
+    INSERT INTO resultado VALUES ('D24: acta contra el movimiento de SU equipo', 'aceptado', 'aceptado');
+  EXCEPTION WHEN foreign_key_violation THEN
+    INSERT INTO resultado VALUES ('D24: acta contra el movimiento de SU equipo', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 28. D24: un movimiento se firma UNA vez. Dos actas sobre la misma entrega
+  --     son dos papeles con distinto número, y el día que discrepen no hay
+  --     forma de saber cuál vale.
+  BEGIN
+    INSERT INTO actas_equipos (acta_id, equipo_id, movimiento_id, categoria)
+      VALUES (v_acta, v_eq_otro, v_mov_otro, 'Monitor');
+    INSERT INTO resultado VALUES ('D24: dos actas sobre el mismo movimiento', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D24: dos actas sobre el mismo movimiento', 'rechazado', 'rechazado');
+  END;
+
+  -- 29. D23: la instantánea de la PERSONA tampoco sigue a la ficha.
+  --     La 0008 congeló el equipo y dejó la persona leyéndose por FK: si en
+  --     marzo se corrige un nombre, el acta de enero cambiaba.
+  UPDATE empleados SET nombre = 'Nombre Corregido Despues' WHERE id = v_emp;
+
+  INSERT INTO resultado VALUES ('D23: la instantánea de la persona no cambia', 'Nombre Congelado',
+    (SELECT empleado_nombre FROM actas WHERE id = v_acta));
+
+  -- 30. D23: un acta sin instantánea de la persona no se puede insertar.
+  --     El NOT NULL es lo que impide que alguien añada un camino de creación
+  --     que se olvide de copiarla y deje el acta apuntando solo por FK.
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por, generada_por_nombre)
+      VALUES ('PRUEBA-0003', 'Entrega', v_emp, v_usr, 'A');
+    INSERT INTO resultado VALUES ('D23: acta sin nombre congelado', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN not_null_violation THEN
+    INSERT INTO resultado VALUES ('D23: acta sin nombre congelado', 'rechazado', 'rechazado');
+  END;
+
+  -- 31. D25: el consecutivo no se repite. Es la última red por debajo del
+  --     contador: si la lógica de la aplicación se rompiera, el INSERT falla
+  --     en vez de emitir dos actas con el mismo número.
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                       empleado_nombre, generada_por_nombre)
+      VALUES ('PRUEBA-0001', 'Entrega', v_emp, v_usr, 'N', 'A');
+    INSERT INTO resultado VALUES ('D25: consecutivo repetido', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D25: consecutivo repetido', 'rechazado', 'rechazado');
+  END;
+
+  -- 32. D24: un movimiento firmado por un acta no se puede borrar.
+  --     `movimientos` ya es append-only por trigger; esto comprueba la otra
+  --     mitad, que la FK del acta también lo sujeta.
+  BEGIN
+    DELETE FROM movimientos WHERE id = v_mov_otro;
+    INSERT INTO resultado VALUES ('D24: borrar un movimiento con acta', 'rechazado', 'ACEPTADO');
+  EXCEPTION
+    WHEN foreign_key_violation THEN
+      INSERT INTO resultado VALUES ('D24: borrar un movimiento con acta', 'rechazado', 'rechazado');
+    WHEN restrict_violation THEN
+      -- El trigger append-only muerde antes que la FK. Cualquiera de los dos
+      -- vale: lo que se comprueba es que no se pueda.
+      INSERT INTO resultado VALUES ('D24: borrar un movimiento con acta', 'rechazado', 'rechazado');
   END;
 
   -- 26. D18: un usuario con rastro en auditoría no se puede borrar.

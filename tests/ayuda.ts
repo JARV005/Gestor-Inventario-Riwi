@@ -310,10 +310,43 @@ export async function borrarEquipos(ids: string[]): Promise<void> {
   await db.transaction(async (tx) => {
     await tx.execute(sql`SET LOCAL session_replication_role = replica`);
     for (const id of ids) {
+      // ATENCIÓN: `replica` desactiva las FK, así que borrar el equipo NO falla
+      // aunque algo lo referencie — se queda huérfano y envenena la corrida
+      // siguiente. Todo lo que apunte a `equipos` tiene que borrarse aquí a
+      // mano. Las actas entraron en la 5a y son el segundo caso; el primero
+      // fueron los movimientos, y su ausencia costó una etapa entera de
+      // `# fail 0` con exit 1.
+      await tx.execute(sql`DELETE FROM actas_equipos WHERE actas_equipos.equipo_id = ${id}`);
       await tx.execute(sql`DELETE FROM movimientos WHERE movimientos.equipo_id = ${id}`);
       await tx.execute(sql`DELETE FROM equipos WHERE equipos.id = ${id}`);
     }
+    // Las actas que se quedaron sin ninguna línea. Referencian al usuario de la
+    // suite con RESTRICT, así que si sobreviven, `limpiar()` no puede borrarlo.
+    await tx.execute(
+      sql`DELETE FROM actas
+           WHERE NOT EXISTS (
+             SELECT 1 FROM actas_equipos WHERE actas_equipos.acta_id = actas.id
+           )`,
+    );
   });
+}
+
+/** Los datos de un acta leídos de la base, no de la API. */
+export async function actaEnLaBase(
+  id: string,
+): Promise<{ consecutivo: string; empleado_nombre: string } | null> {
+  const r = await db.execute<{ consecutivo: string; empleado_nombre: string }>(
+    sql`SELECT actas.consecutivo, actas.empleado_nombre FROM actas WHERE actas.id = ${id}`,
+  );
+  return r.rows[0] ?? null;
+}
+
+/** El valor actual del contador del año, o 0 si todavía no existe. */
+export async function consecutivoActual(anio: number): Promise<number> {
+  const r = await db.execute<{ valor: number }>(
+    sql`SELECT actas_consecutivo.valor FROM actas_consecutivo WHERE actas_consecutivo.anio = ${anio}`,
+  );
+  return r.rows[0]?.valor ?? 0;
 }
 
 export async function borrarEmpleados(ids: string[]): Promise<void> {
