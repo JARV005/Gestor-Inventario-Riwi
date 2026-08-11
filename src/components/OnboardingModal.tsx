@@ -151,7 +151,9 @@ export const OnboardingModal: React.FC<OnboardingModalProps> = ({
         // bien: un traslado de un equipo que no se pudo asignar movería de
         // sede algo que sigue disponible para otra persona.
         if (necesitaTraslado(equipo)) {
-          await api.trasladar(equipo.id, selectedEmp.sede_id!, courier.trim() || null);
+          await api.trasladar(equipo.id, selectedEmp.sede_id!, {
+            transportadora: courier.trim() || null,
+          });
           detalle += ` · en tránsito a ${nombreSede(selectedEmp.sede_id)}`;
         }
         hechos.push({ equipo, ok: true, detalle });

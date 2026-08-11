@@ -16,6 +16,7 @@ import {
 import type { CategoriaEquipo, EquipoConMotivos, EstadoEquipo, Sede } from '../types';
 import { CATEGORIAS_EQUIPO, ESTADOS_EQUIPO, MOTIVOS } from '../types';
 import { api, ErrorApi, type ConteoMotivo } from '../lib/api';
+import { AccionesEquipo } from './AccionesEquipo';
 
 /**
  * La primera vista con datos reales.
@@ -36,6 +37,8 @@ interface InventoryViewProps {
   onGenerarActa: (equipo: EquipoConMotivos) => void;
   onSolicitarMantenimiento: () => void;
   onReasignar: () => void;
+  /** Una mutación mueve los contadores del sidebar, que se pintan fuera. */
+  onEquipoMutado?: () => void;
 }
 
 type Pestana = 'todos' | 'revision';
@@ -55,6 +58,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   searchTerm,
   setSearchTerm,
   onOpenNewDeviceModal,
+  onEquipoMutado,
 }) => {
   const [pestana, setPestana] = useState<Pestana>('todos');
   const [estado, setEstado] = useState<EstadoEquipo | ''>('');
@@ -375,6 +379,14 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           equipo={seleccionado}
           sede={nombreSede(seleccionado.sede_id)}
           onCerrar={() => setSeleccionado(null)}
+          onMutado={(actualizado) => {
+            // El detalle se queda abierto con el equipo ya cambiado: encadenar
+            // dos operaciones —reservar y luego asignar— es lo normal, y
+            // cerrar el panel obligaría a volver a buscarlo.
+            setSeleccionado(actualizado);
+            void cargar();
+            onEquipoMutado?.();
+          }}
         />
       )}
     </div>
@@ -452,11 +464,13 @@ const ErrorDeCarga: React.FC<{ error: ErrorApi; onReintentar: () => void }> = ({
   );
 };
 
-const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () => void }> = ({
-  equipo,
-  sede,
-  onCerrar,
-}) => (
+const Detalle: React.FC<{
+  equipo: EquipoConMotivos;
+  sede: string;
+  onCerrar: () => void;
+  /** Una mutación cambia el equipo y los conteos: hay que recargar el listado. */
+  onMutado: (equipo: EquipoConMotivos) => void;
+}> = ({ equipo, sede, onCerrar, onMutado }) => (
   <div
     className="fixed inset-0 bg-ink/30 z-50 flex items-center justify-center p-4"
     onClick={onCerrar}
@@ -529,6 +543,9 @@ const Detalle: React.FC<{ equipo: EquipoConMotivos; sede: string; onCerrar: () =
       {/* La clave BIOS y el serial de Windows no están aquí: no salen en ningún
           listado ni detalle (§5.2). Solo por GET /api/equipos/:id/bios, con rol
           admin y dejando fila en auditoria. */}
+
+      {/* Las seis mutaciones. Qué botones se pintan lo decide el servidor. */}
+      <AccionesEquipo equipo={equipo} onHecho={onMutado} />
     </div>
   </div>
 );

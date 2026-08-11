@@ -157,6 +157,58 @@ export interface ResumenEquipos {
 
 export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
+export type Operacion = 'asignar' | 'devolver' | 'trasladar' | 'baja' | 'reservar' | 'liberar';
+
+/**
+ * Una fila del historial con los nombres ya resueltos por el servidor. Es la
+ * pantalla que justifica el proyecto: un historial que contesta `a3f9c1e2-…`
+ * no contesta.
+ */
+export interface MovimientoConNombres {
+  id: string;
+  tipo: string;
+  fecha: string;
+  observaciones: string | null;
+  empleado_origen_id: string | null;
+  empleado_origen: string | null;
+  empleado_destino_id: string | null;
+  empleado_destino: string | null;
+  sede_origen_id: string | null;
+  sede_origen: string | null;
+  sede_destino_id: string | null;
+  sede_destino: string | null;
+  usuario_app_id: string;
+  usuario: string | null;
+  usuario_email: string | null;
+  fecha_confirmacion: string | null;
+  transportadora: string | null;
+  guia: string | null;
+  fecha_estimada: string | null;
+}
+
+/**
+ * Lo que devuelve `GET /api/transiciones`: la tabla de `db/transiciones.ts`
+ * tal cual, para que la interfaz pinte los botones sin tener su propia copia.
+ *
+ * **No añadir aquí una lista de operaciones escrita a mano.** Esa lista sería
+ * una segunda tabla de transiciones, y se desincronizaría en silencio: un botón
+ * para una operación retirada, o ninguno para una nueva. Lo que se puede hacer
+ * con un equipo en estado X es `por_estado[X]`, y punto.
+ */
+export interface CatalogoTransiciones {
+  operaciones: {
+    operacion: Operacion;
+    etiqueta: string;
+    desde: EstadoEquipo[];
+    hacia: EstadoEquipo | null;
+    requiere: 'empleado' | 'sede' | null;
+    explicacion: string;
+    irreversible: boolean;
+  }[];
+  por_estado: Record<EstadoEquipo, Operacion[]>;
+  sin_operacion: EstadoEquipo[];
+}
+
 /**
  * Una fila de `GET /api/traslados`: un equipo que está viajando ahora mismo.
  *

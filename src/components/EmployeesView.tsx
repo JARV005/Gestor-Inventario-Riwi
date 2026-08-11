@@ -73,6 +73,18 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
     Record<string, EquipoResumen[] | 'cargando' | 'error'>
   >({});
 
+  /**
+   * Desactivar: qué ficha se está desactivando, y el fallo de la última.
+   *
+   * El error se guarda con el id porque las tarjetas están en una rejilla: un
+   * mensaje global aparecería lejos del botón que se pulsó, y con 24 fichas en
+   * pantalla nadie sabría a cuál se refiere.
+   */
+  const [desactivandoId, setDesactivandoId] = useState<string | null>(null);
+  const [errorDesactivar, setErrorDesactivar] = useState<{ id: string; mensaje: string } | null>(
+    null,
+  );
+
   const porPagina = 24;
 
   const cargar = useCallback(async () => {
@@ -96,6 +108,28 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
       setCargando(false);
     }
   }, [q, sede, soloActivos, pagina]);
+
+  const desactivar = useCallback(
+    async (emp: EmpleadoConConteo) => {
+      setDesactivandoId(emp.id);
+      setErrorDesactivar(null);
+      try {
+        await api.desactivarEmpleado(emp.id);
+        await cargar();
+      } catch (e) {
+        // El 409 dice «No se puede desactivar a un empleado con equipos a su
+        // nombre. Devolverlos primero.» Se enseña tal cual, que es lo que hay
+        // que hacer, y el botón de Offboarding está justo encima.
+        setErrorDesactivar({
+          id: emp.id,
+          mensaje: e instanceof ErrorApi ? e.message : 'No se pudo desactivar.',
+        });
+      } finally {
+        setDesactivandoId(null);
+      }
+    },
+    [cargar],
+  );
 
   useEffect(() => {
     const t = setTimeout(cargar, q ? 300 : 0);
@@ -319,12 +353,35 @@ export const EmployeesView: React.FC<EmployeesViewProps> = ({
                   )}
 
                   {emp.activo && (
-                    <button
-                      onClick={() => onOpenOffboardingModal(emp)}
-                      className="w-full text-xs text-ink-muted hover:text-ink border border-line rounded-lg py-1.5"
-                    >
-                      Offboarding
-                    </button>
+                    <div className="space-y-1.5">
+                      <button
+                        onClick={() => onOpenOffboardingModal(emp)}
+                        className="w-full text-xs text-ink-muted hover:text-ink border border-line rounded-lg py-1.5"
+                      >
+                        Offboarding — recoger sus equipos
+                      </button>
+
+                      {/* Desactivar sin pasar por la recogida: el caso de quien
+                          nunca tuvo equipos, o de una ficha duplicada. Con
+                          equipos a su nombre el servidor responde 409, y ese
+                          mensaje es exactamente el que hay que enseñar. */}
+                      <button
+                        onClick={() => void desactivar(emp)}
+                        disabled={desactivandoId === emp.id}
+                        className="w-full text-xs text-ink-muted hover:text-danger border border-line rounded-lg py-1.5 disabled:opacity-50"
+                      >
+                        {desactivandoId === emp.id ? 'Desactivando…' : 'Desactivar ficha'}
+                      </button>
+
+                      {errorDesactivar?.id === emp.id && (
+                        <p
+                          role="alert"
+                          className="text-xs text-danger bg-danger/10 border border-danger/40 rounded-lg px-2 py-1.5"
+                        >
+                          {errorDesactivar.mensaje}
+                        </p>
+                      )}
+                    </div>
                   )}
                 </article>
               );

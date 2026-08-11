@@ -8,11 +8,13 @@
  */
 
 import type {
+  CatalogoTransiciones,
   EmpleadoConConteo,
   EquipoConMotivos,
   EquipoResumen,
   MantenimientoConEquipo,
   Movimiento,
+  MovimientoConNombres,
   NuevoEquipo,
   Pagina,
   ResumenEquipos,
@@ -176,14 +178,56 @@ export const api = {
       { method: 'POST', body: JSON.stringify({ empleado_id: empleadoId }) },
     ),
 
-  trasladar: (equipoId: string, sedeDestinoId: string, transportadora?: string | null) =>
+  devolver: (equipoId: string, observaciones?: string | null) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/devolver`,
+      { method: 'POST', body: JSON.stringify({ observaciones: observaciones ?? null }) },
+    ),
+
+  trasladar: (
+    equipoId: string,
+    sedeDestinoId: string,
+    extra: { transportadora?: string | null; guia?: string | null; fecha_estimada?: string | null } = {},
+  ) =>
     pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
       `/api/equipos/${equipoId}/trasladar`,
       {
         method: 'POST',
-        body: JSON.stringify({ sede_destino_id: sedeDestinoId, transportadora: transportadora ?? null }),
+        body: JSON.stringify({
+          sede_destino_id: sedeDestinoId,
+          transportadora: extra.transportadora ?? null,
+          guia: extra.guia ?? null,
+          fecha_estimada: extra.fecha_estimada ?? null,
+        }),
       },
     ),
+
+  /**
+   * Las que no necesitan más datos que el equipo. Una sola función porque la
+   * diferencia entre ellas está en el servidor, no aquí: si esta capa supiera
+   * qué hace cada una, sería otra copia de la tabla de transiciones.
+   */
+  operacionSimple: (equipoId: string, operacion: 'reservar' | 'liberar' | 'baja') =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/${operacion}`,
+      { method: 'POST', body: '{}' },
+    ),
+
+  /** La tabla de transiciones. Se pide una vez y vale para todos los equipos. */
+  transiciones: () => pedir<CatalogoTransiciones>('/api/transiciones'),
+
+  /** Historial con nombres resueltos, y el traslado abierto si lo hay. */
+  historial: (equipoId: string) =>
+    pedir<{ movimientos: MovimientoConNombres[]; traslado_abierto: TrasladoAbierto | null }>(
+      `/api/equipos/${equipoId}/historial`,
+    ),
+
+  /** Desactivar a alguien. 409 si tiene equipos a su nombre. */
+  desactivarEmpleado: (id: string) =>
+    pedir<{ empleado: EmpleadoConConteo }>(`/api/empleados/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ activo: false }),
+    }),
 
   /** Los traslados en curso. La otra cara del badge del sidebar. */
   trasladosAbiertos: () => pedir<{ traslados: TrasladoAbierto[] }>('/api/traslados'),

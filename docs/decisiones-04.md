@@ -286,3 +286,68 @@ cuando lo reclame el colaborador.
 Si más adelante hace falta el todo-o-nada, el sitio es un endpoint de lote que
 llame a `mutar()` varias veces dentro de una sola transacción; la función ya
 acepta el ejecutor por parámetro precisamente para eso.
+
+---
+
+## D21. Los botones de las mutaciones los decide el servidor
+
+`GET /api/transiciones` devuelve la tabla de `db/transiciones.ts` entera —qué
+operaciones hay, desde qué estados, qué dato exige cada una, con qué etiqueta se
+pinta el botón y cuáles son irreversibles— y `por_estado`, el mapa que dice qué
+se puede hacer con un equipo en cada estado.
+
+**El frontend no tiene ni un `if` sobre el estado.** Los botones son
+`por_estado[equipo.estado]`. Cualquier alternativa —una lista de operaciones en
+el componente, un `switch` por estado, un array de etiquetas— sería una segunda
+tabla de transiciones, y las dos se separarían sin que nadie lo note: un botón
+que siempre da 409, o una operación nueva sin botón. Lo segundo es peor porque
+es invisible: nadie echa de menos lo que nunca vio.
+
+`por_estado` se genera recorriendo los valores del enum, no una lista aparte.
+Un estado nuevo aparece solo, aunque sea con la lista vacía, y esa lista vacía
+también es información: significa que no hay forma de salir de él.
+
+### Por qué existe
+
+Las seis mutaciones se construyeron en el paso 2 y ninguna tenía punto de
+entrada: solo se podían ejecutar por `curl`. Es el mismo patrón que el estado de
+error de `InventoryView` en la etapa 4a —código correcto e inalcanzable, con la
+interfaz como capa que falta— y con una consecuencia concreta: quien no
+encuentra cómo dar de baja un equipo termina pidiendo que se lo cambien en la
+base a mano, que es justo lo que D19 acaba de cerrar.
+
+### El caso de fallo
+
+Si el catálogo no carga, **no se pinta ningún botón** y se explica por qué.
+Pintarlos adivinando pondría en pantalla operaciones que van a dar 409, y una
+interfaz que ofrece lo que no se puede hacer es peor que una que no ofrece nada.
+
+Comprobado: con Postgres parado, `GET /api/transiciones` responde 500 —el
+endpoint no consulta la base, pero el guardián de sesión sí—, y el detalle del
+equipo enseña el aviso en vez de una fila de botones.
+
+---
+
+## D22. Offboarding es la operación contraria a onboarding, no la misma
+
+Herencia del prototipo, encontrada probando la aplicación en el navegador: los
+botones **Offboarding** de `EmployeesView` y **Enviar Kit Onboarding** abrían el
+mismo modal, que asigna equipos. Offboarding hace lo contrario: la persona
+entrega lo que tiene y los equipos vuelven a `Disponible`. Una pone
+`empleado_id` y la otra lo quita.
+
+En el prototipo daba igual porque ninguno de los dos escribía nada. Desde que el
+asistente de entrega escribe de verdad, el botón de recoger equipos asignaba
+más.
+
+`OffboardingModal` es ahora su propio flujo: elegir a la persona (viene de la
+tarjeta), listar lo que tiene hoy con `GET /api/empleados/:id/equipos`, marcar
+lo que entrega, y un `POST /api/equipos/:id/devolver` por cada uno. Mismo
+tratamiento por equipo que la entrega y por el mismo motivo (D20).
+
+**Enlaza con el bloqueo de la etapa 3.** Un empleado con equipos a su nombre no
+se puede desactivar; el `PATCH` responde 409 diciendo que hay que devolverlos
+primero. Ese 409 era hasta ahora un callejón sin salida en la interfaz: decía lo
+que faltaba y no había forma de hacerlo. Ahora la recogida termina justo en la
+condición que lo levanta, y cuando no queda nada a nombre de la persona el modal
+ofrece desactivarla. Las dos mitades de la misma operación, en el mismo sitio.

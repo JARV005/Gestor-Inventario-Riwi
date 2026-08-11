@@ -1,6 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 
-import type { EquipoConMotivos, EstadoEquipo, ResumenEquipos, UsuarioSesion } from './types';
+import type {
+  EmpleadoConConteo,
+  EquipoConMotivos,
+  EstadoEquipo,
+  ResumenEquipos,
+  UsuarioSesion,
+} from './types';
 import { api } from './lib/api';
 import { Login } from './components/Login';
 
@@ -14,6 +20,7 @@ import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
 
 import { OnboardingModal } from './components/OnboardingModal';
+import { OffboardingModal } from './components/OffboardingModal';
 import { NewDeviceModal } from './components/NewDeviceModal';
 
 export function App() {
@@ -52,6 +59,12 @@ export function App() {
   }, [usuario, recargarResumen]);
 
   const [isOnboardingModalOpen, setIsOnboardingModalOpen] = useState<boolean>(false);
+  /**
+   * El offboarding necesita saber DE QUIÉN. Es la operación contraria a la
+   * entrega —devuelve equipos en vez de asignarlos— y hasta ahora su botón
+   * abría el asistente de entrega, que hacía justo lo contrario.
+   */
+  const [empleadoSaliente, setEmpleadoSaliente] = useState<EmpleadoConConteo | null>(null);
   const [isNewDeviceModalOpen, setIsNewDeviceModalOpen] = useState<boolean>(false);
   const [equipoParaActa, setEquipoParaActa] = useState<EquipoConMotivos | null>(null);
 
@@ -124,6 +137,7 @@ export function App() {
               onGenerarActa={handleGenerarActa}
               onSolicitarMantenimiento={handleSolicitarMantenimiento}
               onReasignar={handleReasignar}
+              onEquipoMutado={recargarResumen}
             />
           )}
 
@@ -135,7 +149,7 @@ export function App() {
           {activeTab === 'employees' && (
             <EmployeesView
               onOpenOnboardingModal={() => setIsOnboardingModalOpen(true)}
-              onOpenOffboardingModal={() => setIsOnboardingModalOpen(true)}
+              onOpenOffboardingModal={setEmpleadoSaliente}
             />
           )}
 
@@ -152,6 +166,13 @@ export function App() {
         isOpen={isOnboardingModalOpen}
         onClose={() => setIsOnboardingModalOpen(false)}
         onAsignado={recargarResumen}
+      />
+
+      <OffboardingModal
+        isOpen={empleadoSaliente !== null}
+        empleado={empleadoSaliente}
+        onClose={() => setEmpleadoSaliente(null)}
+        onCambio={recargarResumen}
       />
 
       <NewDeviceModal

@@ -116,9 +116,15 @@ Necesita además la pregunta que hoy nadie hace —«¿lo devolvió de verdad?»
 porque la devolución es un hecho físico y no un paso de formulario.
 
 No se arregla en la etapa 5: 5a y 5b primero. Al arreglarlo, el modal tiene que
-recibir el equipo de partida en vez de empezar de cero, y `Offboarding` es un
-tercer flujo distinto —recoger **todos** los equipos de una persona, no entregar
-uno— que hoy comparte modal con los otros dos por herencia del prototipo.
+recibir el equipo de partida en vez de empezar de cero.
+
+`Offboarding` era el tercer caso de este mismo bug y ya está cerrado: tiene su
+propio modal (`OffboardingModal`), que devuelve en vez de asignar.
+
+**Atenuante desde que existen los botones del detalle:** hoy la operación se
+puede hacer, aunque no desde este botón. Desde el detalle del equipo salen
+«Registrar devolución» y luego «Asignar a alguien», que son exactamente las dos
+mitades de reasignar. Lo que falta es el atajo, no la capacidad.
 
 ### El equipo perdido o robado mientras estaba asignado
 
