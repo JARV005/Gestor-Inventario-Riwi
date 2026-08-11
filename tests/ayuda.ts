@@ -119,6 +119,29 @@ export class Cliente {
   patch = (c: string, cuerpo?: unknown, o?: { cookie?: string }) =>
     this.pedir('PATCH', c, { cuerpo, ...o });
 
+  /**
+   * Un GET que NO intenta interpretar la respuesta como texto.
+   *
+   * `pedir()` hace `r.text()`, y sobre un PDF eso destruye los bytes: el
+   * decodificador UTF-8 sustituye cada secuencia inválida por U+FFFD, así que
+   * el hash de lo «descargado» no coincidiría nunca y el fallo parecería del
+   * generador.
+   */
+  async getBinario(
+    camino: string,
+  ): Promise<{ estado: number; cuerpo: Buffer; tipo: string | null; disposicion: string | null }> {
+    const cabeceras: Record<string, string> = {};
+    if (this.cookieCruda) cabeceras.Cookie = this.cookieCruda;
+
+    const r = await fetch(`${this.base}${camino}`, { headers: cabeceras, redirect: 'manual' });
+    return {
+      estado: r.status,
+      cuerpo: Buffer.from(await r.arrayBuffer()),
+      tipo: r.headers.get('content-type'),
+      disposicion: r.headers.get('content-disposition'),
+    };
+  }
+
   async entrar(email: string, password: string): Promise<Respuesta> {
     return this.post('/api/auth/login', { email, password });
   }
@@ -339,6 +362,21 @@ export async function actaEnLaBase(
     sql`SELECT actas.consecutivo, actas.empleado_nombre FROM actas WHERE actas.id = ${id}`,
   );
   return r.rows[0] ?? null;
+}
+
+/**
+ * El PDF de un acta leído de la base. Es el único helper que trae el binario, y
+ * lo trae de uno en uno a propósito.
+ */
+export async function pdfEnLaBase(
+  id: string,
+): Promise<{ pdf: Buffer; hash: string; plantilla: string } | null> {
+  const r = await db.execute<{ pdf: Buffer; hash: string; plantilla: string }>(
+    sql`SELECT actas.pdf, actas.hash_sha256 AS hash, actas.plantilla_version AS plantilla
+          FROM actas WHERE actas.id = ${id}`,
+  );
+  const f = r.rows[0];
+  return f?.pdf ? { pdf: f.pdf, hash: f.hash, plantilla: f.plantilla } : null;
 }
 
 /** El valor actual del contador del año, o 0 si todavía no existe. */
