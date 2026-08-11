@@ -97,22 +97,28 @@ Tres cosas que hay que corregir al montarla, y que en el original estaban mal:
   firmante que no existe. Si el acta lleva número, tiene que salir de una
   secuencia real; el firmante, de la sesión.
 
-### «Reasignar» abre el asistente de entrega sin decirle qué equipo
+### BUG — «Reasignar» no reasigna: abre un modal que solo sabe asignar
+
+**Es un defecto, no una decisión abierta.** El botón existe, se pulsa, y la
+operación que promete no ocurre.
 
 `InventoryView` tiene un botón **Reasignar** sobre un equipo concreto, y
 `EmployeesView` tiene **Offboarding**. Los dos abren `OnboardingModal` sin
-pasarle nada, así que el asistente empieza de cero: hay que volver a buscar el
-equipo en su desplegable.
+pasarle nada, así que el asistente empieza de cero. Y como el asistente solo
+lista equipos `Disponible` o `Reservado` —los únicos que se pueden asignar—, el
+equipo desde el que se pulsó **no aparece en su desplegable**. Quien pulsa
+Reasignar sobre un portátil asignado se encuentra un formulario en el que ese
+portátil no está.
 
-Peor en el caso de reasignar: el asistente solo lista equipos `Disponible` o
-`Reservado` —son los únicos que se pueden asignar—, de modo que el equipo desde
-el que se pulsó el botón **no aparece**. Reasignar es en realidad devolver y
-volver a asignar, dos operaciones, y el modal solo hace la segunda.
+**Qué falta.** Reasignar es `devolver` + `asignar`: dos mutaciones, las dos
+existen desde la etapa 5, y la operación compuesta no existe en ninguna parte.
+Necesita además la pregunta que hoy nadie hace —«¿lo devolvió de verdad?»—,
+porque la devolución es un hecho físico y no un paso de formulario.
 
-No se resuelve en la etapa 5 porque son dos flujos distintos y ninguno de los
-dos es «entregar un kit»: reasignar necesita el paso de devolución previa, y
-offboarding necesita recoger **todos** los equipos de la persona, no entregar
-uno. Etapa 6, con las dos pantallas delante.
+No se arregla en la etapa 5: 5a y 5b primero. Al arreglarlo, el modal tiene que
+recibir el equipo de partida en vez de empezar de cero, y `Offboarding` es un
+tercer flujo distinto —recoger **todos** los equipos de una persona, no entregar
+uno— que hoy comparte modal con los otros dos por herencia del prototipo.
 
 ### El equipo perdido o robado mientras estaba asignado
 
