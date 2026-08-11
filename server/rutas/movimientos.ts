@@ -25,7 +25,8 @@ import { z } from 'zod';
 
 import * as repoEquipos from '../../db/repositorios/equipos.js';
 import * as repoMovimientos from '../../db/repositorios/movimientos.js';
-import { TransicionIlegal, type Operacion } from '../../db/transiciones.js';
+import { estadoEquipo } from '../../db/esquema.js';
+import { catalogoTransiciones, TransicionIlegal, type Operacion } from '../../db/transiciones.js';
 import { guardian } from '../autenticar.js';
 import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
 import { ruta } from '../permisos.js';
@@ -161,6 +162,30 @@ export function registrarRutasMovimientos(app: Express): void {
       // tiene `fecha_confirmacion`. Es el mismo hecho que el badge del
       // sidebar, y sale de la misma condición.
       res.json({ movimientos, traslado_abierto: traslado });
+    }),
+  );
+
+  /**
+   * Qué se puede hacer con un equipo según su estado, para que la interfaz
+   * pinte los botones.
+   *
+   * Sin esto, o no hay botones —seis operaciones que solo existen por `curl`, y
+   * un auxiliar que no encuentra cómo dar de baja un equipo acaba pidiendo que
+   * se lo cambien en la base, que es justo lo que cerrar el `PATCH` pretendía
+   * impedir— o los botones salen de una lista escrita a mano en el frontend,
+   * que es una segunda tabla de transiciones desincronizándose en silencio.
+   *
+   * Es estático: no depende de ningún equipo. Se pide una vez y sirve para
+   * todos.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/transiciones',
+    'autenticado',
+    guardian,
+    asincrono(async (_req, res) => {
+      res.json(catalogoTransiciones(estadoEquipo.enumValues));
     }),
   );
 

@@ -584,6 +584,217 @@ describe('entrega de un kit: asignación por equipo, y traslado si cambia de sed
 });
 
 // ---------------------------------------------------------------------------
+// El catálogo que pinta los botones tiene que decir la verdad
+// ---------------------------------------------------------------------------
+//
+// `GET /api/transiciones` es lo que la interfaz usa para saber qué botones
+// mostrar. Si mintiera, el fallo sería el peor de los dos posibles: un botón
+// que siempre da 409, o una operación legal sin botón — invisible, porque nadie
+// echa de menos lo que nunca vio.
+//
+// Por eso no basta con comprobar que el catálogo tiene seis entradas. Se
+// contrasta contra lo que los endpoints hacen de verdad: todo lo que el
+// catálogo declara ilegal desde un estado tiene que dar 409 al intentarlo.
+
+describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', () => {
+  const suite = ambito('catalogo');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+  let catalogo: {
+    operaciones: { operacion: string; etiqueta: string; requiere: string | null }[];
+    por_estado: Record<string, string[]>;
+    sin_operacion: string[];
+  };
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    empleado = await crearEmpleado(`${suite.prefijo}receptor`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+    catalogo = (await c.get('/api/transiciones')).cuerpo as typeof catalogo;
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  it('trae las seis operaciones, con etiqueta para el botón', () => {
+    assert.deepEqual(
+      catalogo.operaciones.map((o) => o.operacion).sort(),
+      ['asignar', 'baja', 'devolver', 'liberar', 'reservar', 'trasladar'],
+    );
+    for (const o of catalogo.operaciones) {
+      assert.ok(o.etiqueta && o.etiqueta.length > 2, `${o.operacion} sin etiqueta usable`);
+    }
+  });
+
+  it('cubre TODOS los estados del enum, incluso los que no tienen salida', () => {
+    // Un estado ausente del mapa dejaría a la interfaz sin saber qué pintar, y
+    // lo que hace un `?? []` es no pintar nada: una operación legal se
+    // volvería invisible sin que ningún test fallara.
+    const estados = Object.keys(catalogo.por_estado).sort();
+    assert.deepEqual(estados, [
+      'Asignado',
+      'De baja',
+      'Disponible',
+      'En mantenimiento',
+      'Reservado',
+    ]);
+    assert.deepEqual(catalogo.por_estado['De baja'], [], 'de "De baja" no sale nada');
+    assert.ok(catalogo.sin_operacion.includes('En mantenimiento'));
+  });
+
+  /**
+   * El contraste que importa: llevar un equipo a cada estado e intentar TODAS
+   * las operaciones que el catálogo declara ilegales desde ahí. Las seis menos
+   * las legales, una por una, y todas tienen que dar 409.
+   */
+  const LAS_SEIS = ['asignar', 'devolver', 'reservar', 'liberar', 'baja', 'trasladar'] as const;
+
+  async function comprobarIlegalesDesde(estado: string, id: string) {
+    const legales = catalogo.por_estado[estado];
+    const ilegales = LAS_SEIS.filter((op) => !legales.includes(op));
+    assert.ok(ilegales.length > 0, `${estado} no tendría nada que comprobar`);
+
+    for (const op of ilegales) {
+      const r = await c.post(`/api/equipos/${id}/${op}`, { empleado_id: empleado });
+      assert.equal(r.estado, 409, `${op} desde ${estado} debería ser ilegal y dio ${r.estado}`);
+
+      // Y el "puedes" del 409 es exactamente lo que el catálogo promete: los
+      // dos salen de `operacionesDesde`, así que si divergen es que hay dos
+      // fuentes de verdad donde debería haber una.
+      const cuerpo = r.cuerpo as { puedes: string[]; estado_actual: string };
+      assert.equal(cuerpo.estado_actual, estado);
+      assert.deepEqual([...cuerpo.puedes].sort(), [...legales].sort());
+    }
+    // Nada de lo anterior movió el equipo.
+    assert.equal(await estadoDe(id), estado);
+  }
+
+  it('desde Disponible', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}DISP`, sedeA);
+    creados.push(id);
+    await comprobarIlegalesDesde('Disponible', id);
+  });
+
+  it('desde Reservado', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}RES`, sedeA);
+    creados.push(id);
+    await c.post(`/api/equipos/${id}/reservar`, {});
+    await comprobarIlegalesDesde('Reservado', id);
+  });
+
+  it('desde Asignado', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}ASG`, sedeA);
+    creados.push(id);
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado });
+    await comprobarIlegalesDesde('Asignado', id);
+  });
+
+  it('desde De baja no se puede hacer absolutamente nada', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}BAJA2`, sedeA);
+    creados.push(id);
+    await c.post(`/api/equipos/${id}/baja`, {});
+    await comprobarIlegalesDesde('De baja', id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Offboarding: devolver lo de alguien, y desactivarlo al final
+// ---------------------------------------------------------------------------
+
+describe('offboarding: recoger los equipos y cerrar la ficha', () => {
+  const suite = ambito('offb');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let saliente: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    saliente = await crearEmpleado(`${suite.prefijo}saliente`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([saliente]);
+    await suite.limpiar();
+  });
+
+  it('la secuencia entera: devolver, el 409 mientras quede algo, y desactivar', async () => {
+    const uno = await crearEquipo(c, `${suite.prefijo}O1`, sedeA);
+    const dos = await crearEquipo(c, `${suite.prefijo}O2`, sedeA);
+    creados.push(uno, dos);
+    for (const id of [uno, dos]) {
+      assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: saliente })).estado, 200);
+    }
+
+    // `GET /api/empleados/:id/equipos` es de donde el modal saca la lista.
+    const lista = (await c.get(`/api/empleados/${saliente}/equipos`)).cuerpo as {
+      equipos: { id: string }[];
+    };
+    assert.deepEqual(lista.equipos.map((e) => e.id).sort(), [uno, dos].sort());
+
+    // Se devuelve solo uno: la persona se queda el otro por lo que sea.
+    assert.equal((await c.post(`/api/equipos/${uno}/devolver`, {})).estado, 200);
+    assert.equal(await estadoDe(uno), 'Disponible');
+
+    // Y aquí engancha el bloqueo de la etapa 3: todavía tiene uno.
+    const bloqueado = await c.patch(`/api/empleados/${saliente}`, { activo: false });
+    assert.equal(bloqueado.estado, 409);
+    const msg = (bloqueado.cuerpo as { error: string }).error;
+    assert.match(msg, /equipos a su nombre/i, `el mensaje no dice qué falta: ${msg}`);
+    assert.match(msg, /devolver/i, 'ni cuál es la salida');
+
+    // Se devuelve el segundo y ya no queda nada a su nombre.
+    assert.equal((await c.post(`/api/equipos/${dos}/devolver`, {})).estado, 200);
+    const vacia = (await c.get(`/api/empleados/${saliente}/equipos`)).cuerpo as {
+      equipos: unknown[];
+    };
+    assert.deepEqual(vacia.equipos, []);
+
+    const ok = await c.patch(`/api/empleados/${saliente}`, { activo: false });
+    assert.equal(ok.estado, 200, JSON.stringify(ok.cuerpo));
+    assert.equal((ok.cuerpo as { empleado: { activo: boolean } }).empleado.activo, false);
+  });
+
+  it('devolver algo que ya está Disponible da 409 y no toca a los demás', async () => {
+    // Es el fallo real dentro de una recogida: dos personas marcan el mismo
+    // equipo, o alguien lo devolvió por su cuenta hace un minuto.
+    const otro = await crearEmpleado(`${suite.prefijo}segundo`);
+    const a = await crearEquipo(c, `${suite.prefijo}P1`, sedeA);
+    const b = await crearEquipo(c, `${suite.prefijo}P2`, sedeA);
+    creados.push(a, b);
+    for (const id of [a, b]) await c.post(`/api/equipos/${id}/asignar`, { empleado_id: otro });
+
+    // Alguien devuelve `a` antes de que empiece la recogida.
+    await c.post(`/api/equipos/${a}/devolver`, {});
+
+    const estados: number[] = [];
+    for (const id of [a, b]) {
+      estados.push((await c.post(`/api/equipos/${id}/devolver`, {})).estado);
+    }
+    assert.deepEqual(estados, [409, 200], 'el 409 del primero no impide devolver el segundo');
+    assert.equal(await estadoDe(b), 'Disponible');
+
+    await borrarEquipos([a, b]);
+    creados.splice(creados.indexOf(a), 1);
+    creados.splice(creados.indexOf(b), 1);
+    await borrarEmpleados([otro]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Atomicidad: la conexión muere a mitad
 // ---------------------------------------------------------------------------
 

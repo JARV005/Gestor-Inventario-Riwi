@@ -47,6 +47,15 @@ export interface Transicion {
   requiere: 'empleado' | 'sede' | null;
   /** Para el 409. Explica la regla, no el nombre de la operación. */
   explicacion: string;
+  /**
+   * El texto del botón. Vive aquí y no en el frontend a propósito: si la
+   * interfaz tuviera su propia lista de operaciones con sus etiquetas, esa
+   * lista sería una segunda tabla de transiciones que se desincroniza en
+   * silencio — un botón para una operación retirada, o ninguno para una nueva.
+   */
+  etiqueta: string;
+  /** `true` si la operación no se puede deshacer y conviene confirmarla. */
+  irreversible?: boolean;
 }
 
 export const TRANSICIONES: Record<Operacion, Transicion> = {
@@ -55,6 +64,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: 'Asignado',
     movimiento: 'Asignación',
     requiere: 'empleado',
+    etiqueta: 'Asignar a alguien',
     explicacion:
       'Solo se puede asignar un equipo que esté disponible o reservado. Si ya está asignado a otra persona, primero hay que devolverlo.',
   },
@@ -64,6 +74,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: 'Disponible',
     movimiento: 'Devolución',
     requiere: null,
+    etiqueta: 'Registrar devolución',
     explicacion: 'Solo se puede devolver un equipo que esté asignado a alguien.',
   },
 
@@ -80,6 +91,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: null,
     movimiento: 'Traslado',
     requiere: 'sede',
+    etiqueta: 'Trasladar a otra sede',
     explicacion: 'Un equipo dado de baja no se traslada.',
   },
 
@@ -93,6 +105,8 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: 'De baja',
     movimiento: 'Baja',
     requiere: null,
+    etiqueta: 'Dar de baja',
+    irreversible: true,
     explicacion:
       'Un equipo asignado no se puede dar de baja: primero hay que devolverlo, para que quede constancia de que la persona ya no lo tiene.',
   },
@@ -102,6 +116,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: 'Reservado',
     movimiento: 'Reserva',
     requiere: null,
+    etiqueta: 'Reservar',
     explicacion: 'Solo se puede reservar un equipo disponible.',
   },
 
@@ -110,6 +125,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     hacia: 'Disponible',
     movimiento: 'Liberación',
     requiere: null,
+    etiqueta: 'Liberar la reserva',
     explicacion:
       'Solo se libera un equipo reservado. Si está asignado a alguien, la operación es devolverlo.',
   },
@@ -134,6 +150,39 @@ export function operacionesDesde(estado: EstadoEquipo): Operacion[] {
   return (Object.keys(TRANSICIONES) as Operacion[]).filter((op) =>
     TRANSICIONES[op].desde.includes(estado),
   );
+}
+
+/**
+ * La tabla entera, en forma serializable, para que la interfaz pinte los
+ * botones sin tener su propia copia.
+ *
+ * Esto es lo que impide el fallo que se veía venir: seis operaciones en la API
+ * que nadie puede ejecutar porque no hay botón, o —peor— botones pintados desde
+ * una lista escrita a mano en el frontend que se queda vieja. `por_estado` lo
+ * calcula `operacionesDesde`, la misma función que decide el `puedes` del 409.
+ *
+ * Se recorren los valores del enum y no una lista aparte: un estado nuevo
+ * aparece aquí solo, aunque sea con la lista vacía, y eso es información —
+ * significa que no hay forma de salir de él.
+ */
+export function catalogoTransiciones(estados: readonly EstadoEquipo[]) {
+  return {
+    operaciones: (Object.keys(TRANSICIONES) as Operacion[]).map((op) => ({
+      operacion: op,
+      etiqueta: TRANSICIONES[op].etiqueta,
+      desde: TRANSICIONES[op].desde,
+      hacia: TRANSICIONES[op].hacia,
+      requiere: TRANSICIONES[op].requiere,
+      explicacion: TRANSICIONES[op].explicacion,
+      irreversible: TRANSICIONES[op].irreversible ?? false,
+    })),
+    por_estado: Object.fromEntries(estados.map((e) => [e, operacionesDesde(e)])) as Record<
+      EstadoEquipo,
+      Operacion[]
+    >,
+    /** Estados a los que no llega ninguna operación. Ver arriba. */
+    sin_operacion: ESTADOS_SIN_OPERACION,
+  };
 }
 
 export class TransicionIlegal extends Error {
