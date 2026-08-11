@@ -71,6 +71,13 @@
       "when": 1786550400000,
       "tag": "0009_actas_instantanea_y_consecutivo",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786554000000,
+      "tag": "0010_acta_plantilla_version",
+      "breakpoints": true
     }
   ]
 }

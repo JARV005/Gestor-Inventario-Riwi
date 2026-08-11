@@ -577,13 +577,26 @@ export const actas = pgTable(
       dataType: () => 'bytea',
     })('pdf'),
     hash_sha256: text('hash_sha256'),
+    /**
+     * Con qué plantilla se generó el PDF (D26).
+     *
+     * El hash verifica los bytes guardados. **Recalcularlo** desde los datos
+     * —que es lo que hace útil «reproducible»— exige saber qué redacción los
+     * produjo: en cuanto se corrija una cláusula, las actas nuevas cambian de
+     * bytes y las viejas no.
+     */
+    plantilla_version: text('plantilla_version'),
     firmada: boolean('firmada').notNull().default(false),
     fecha_firma: timestamp('fecha_firma', { withTimezone: true }),
   },
   (t) => [
-    // O están el documento y su hash, o no está ninguno. Un PDF sin hash no se
-    // puede verificar; un hash sin PDF no verifica nada.
-    check('actas_pdf_con_hash', sql`(pdf IS NULL) = (hash_sha256 IS NULL)`),
+    // Las tres juntas o ninguna. Un PDF sin hash no se puede verificar; un hash
+    // sin PDF no verifica nada; y un PDF cuya plantilla no se sabe no se puede
+    // volver a comprobar.
+    check(
+      'actas_pdf_con_hash',
+      sql`(pdf IS NULL) = (hash_sha256 IS NULL) AND (pdf IS NULL) = (plantilla_version IS NULL)`,
+    ),
     index('idx_actas_empleado').on(t.empleado_id),
   ],
 );

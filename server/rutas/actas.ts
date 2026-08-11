@@ -49,6 +49,64 @@ export function registrarRutasActas(app: Express): void {
     }),
   );
 
+  /**
+   * El documento, en bytes. Antes de `/api/actas/:id` no hace falta —las rutas
+   * no chocan— pero sí antes de nada que capture `:id` de forma más amplia.
+   *
+   * `Content-Disposition: attachment`: el PDF se descarga, no se abre dentro de
+   * la página. Un visor embebido en la misma pantalla que lo emitió invita a
+   * darlo por firmado.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/actas/:id/pdf',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const doc = await repoActas.pdfDe(id);
+      if (!doc) {
+        // Distingue las dos causas: no existe, o existe sin documento (las
+        // emitidas en la 5a, antes de que hubiera PDF).
+        const acta = await repoActas.porId(id);
+        if (!acta) throw noEncontrado('Acta');
+        throw new ErrorHttp(
+          409,
+          'Esa acta se emitió antes de que existiera la generación de PDF y no tiene documento.',
+        );
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${doc.consecutivo}.pdf"`,
+      );
+      // Para poder comprobar la descarga sin abrir el fichero.
+      res.setHeader('X-Acta-Hash', doc.hash);
+      res.setHeader('X-Acta-Plantilla', doc.plantilla);
+      res.send(doc.pdf);
+    }),
+  );
+
+  /**
+   * «¿El documento guardado es el que estos datos producen?» — distinta de
+   * «¿los bytes están intactos?», que la responde el hash contra el binario.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/actas/:id/verificar',
+    'admin',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const r = await repoActas.recalcularHash(id);
+      if (!r) throw noEncontrado('Acta');
+      res.json({ ...r, coincide: r.hash_guardado === r.hash_recalculado });
+    }),
+  );
+
   ruta(
     app,
     'get',

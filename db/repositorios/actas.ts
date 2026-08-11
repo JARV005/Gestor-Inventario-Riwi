@@ -22,6 +22,7 @@
 
 import { and, desc, eq, sql } from 'drizzle-orm';
 
+import { generarPdfActa, PLANTILLA_VERSION, sha256 } from '../acta-pdf.js';
 import { db, type BD, type Ejecutor } from '../cliente.js';
 import {
   actas,
@@ -198,21 +199,56 @@ export async function emitir(
     const anio = new Date().getUTCFullYear();
     const consecutivo = await siguienteConsecutivo(tx, anio);
 
+    // La fecha se fija aquí y se usa para las dos cosas: la fila y el
+    // `CreationDate` del PDF. Si el PDF tomara `now()` por su cuenta, el
+    // documento no sería reproducible — regenerarlo mañana daría otros bytes y
+    // otro hash (D26).
+    const fecha = new Date();
+    const generadaPor = autor?.nombre ?? 'desconocido';
+
+    const cabecera = {
+      consecutivo,
+      tipo: datos.tipo,
+      fecha,
+      empleado_nombre: persona.nombre,
+      empleado_cedula: persona.cedula,
+      empleado_cargo: persona.cargo,
+      empleado_area: persona.area,
+      sede_nombre: persona.sede,
+      generada_por_nombre: generadaPor,
+    };
+
+    // El PDF se genera DENTRO de la transacción, con la misma instantánea que
+    // se está guardando. Generarlo después, en otra petición, abriría una
+    // ventana en la que el acta existe sin su documento — y el CHECK
+    // `actas_pdf_con_hash` obliga a que pdf, hash y plantilla vayan juntos.
+    const pdf = await generarPdfActa({
+      ...cabecera,
+      equipos: lineas.map((l) => ({
+        etiqueta: l.etiqueta ?? null,
+        serial: l.serial ?? null,
+        marca: l.marca ?? null,
+        modelo: l.modelo ?? null,
+        categoria: l.categoria,
+        condicion: l.condicion ?? null,
+        procesador: l.procesador ?? null,
+        ram: l.ram ?? null,
+        disco: l.disco ?? null,
+        sistema_operativo: l.sistema_operativo ?? null,
+      })),
+    });
+
     const [acta] = await tx
       .insert(actas)
       .values({
-        consecutivo,
-        tipo: datos.tipo,
+        ...cabecera,
         empleado_id: persona.id,
         generada_por: contexto.usuarioId,
-        empleado_nombre: persona.nombre,
-        empleado_cedula: persona.cedula,
-        empleado_cargo: persona.cargo,
-        empleado_area: persona.area,
-        sede_nombre: persona.sede,
-        generada_por_nombre: autor?.nombre ?? 'desconocido',
+        pdf,
+        hash_sha256: sha256(pdf),
+        plantilla_version: PLANTILLA_VERSION,
       })
-      .returning();
+      .returning({ id: actas.id, consecutivo: actas.consecutivo, hash_sha256: actas.hash_sha256 });
 
     // El UNIQUE sobre `movimiento_id` corta aquí un segundo acta sobre la misma
     // entrega. Se traduce a 409 en la capa HTTP.
@@ -267,6 +303,10 @@ export async function porId(id: string, bd: BD = db) {
       firmada: actas.firmada,
       fecha_firma: actas.fecha_firma,
       hash_sha256: actas.hash_sha256,
+      plantilla_version: actas.plantilla_version,
+      // NUNCA la columna `pdf`. Un `SELECT *` aquí traería el binario a memoria
+      // y de ahí a la respuesta JSON en cuanto alguien serialice el objeto. El
+      // documento sale por su propio endpoint, en bytes y con su Content-Type.
       tiene_pdf: sql<boolean>`(actas.pdf IS NOT NULL)`,
       created_at: actas.created_at,
     })
@@ -294,6 +334,70 @@ export async function porId(id: string, bd: BD = db) {
     .where(eq(actasEquipos.acta_id, id));
 
   return { ...acta, equipos: equiposDelActa };
+}
+
+/**
+ * El PDF de un acta, en bytes.
+ *
+ * **El único sitio de todo el repositorio donde se selecciona la columna
+ * `pdf`.** Se pide por id y de una en una: cualquier consulta que la traiga en
+ * lote —un listado, una exportación— se lleva megabytes a memoria por accidente
+ * y probablemente a una respuesta JSON.
+ */
+export async function pdfDe(
+  id: string,
+  bd: BD = db,
+): Promise<{ pdf: Buffer; hash: string; consecutivo: string; plantilla: string } | null> {
+  const [fila] = await bd
+    .select({
+      pdf: actas.pdf,
+      hash: actas.hash_sha256,
+      consecutivo: actas.consecutivo,
+      plantilla: actas.plantilla_version,
+    })
+    .from(actas)
+    .where(eq(actas.id, id));
+
+  if (!fila?.pdf || !fila.hash || !fila.plantilla) return null;
+  return { pdf: fila.pdf, hash: fila.hash, consecutivo: fila.consecutivo, plantilla: fila.plantilla };
+}
+
+/**
+ * Regenera el PDF de un acta desde su instantánea y devuelve el hash que da.
+ *
+ * Es lo que hace útil «reproducible» (D26): comparar esto con
+ * `actas.hash_sha256` responde «¿el documento guardado es el que estos datos
+ * producen?», que es una pregunta distinta de «¿los bytes guardados están
+ * intactos?» — esa la responde el hash contra el propio binario.
+ *
+ * Solo tiene sentido si la plantilla guardada es la de hoy: con otra redacción
+ * los bytes cambian y la comparación diría que no cuadra, cuando lo que pasa es
+ * que el documento se emitió antes del cambio. Por eso se devuelve también
+ * `misma_plantilla`.
+ */
+export async function recalcularHash(id: string, bd: BD = db) {
+  const acta = await porId(id, bd);
+  if (!acta) return null;
+
+  const pdf = await generarPdfActa({
+    consecutivo: acta.consecutivo,
+    tipo: acta.tipo,
+    fecha: new Date(acta.fecha),
+    empleado_nombre: acta.empleado_nombre,
+    empleado_cedula: acta.empleado_cedula,
+    empleado_cargo: acta.empleado_cargo,
+    empleado_area: acta.empleado_area,
+    sede_nombre: acta.sede_nombre,
+    generada_por_nombre: acta.generada_por_nombre,
+    equipos: acta.equipos,
+  });
+
+  return {
+    hash_guardado: acta.hash_sha256,
+    hash_recalculado: sha256(pdf),
+    plantilla_guardada: acta.plantilla_version,
+    misma_plantilla: acta.plantilla_version === PLANTILLA_VERSION,
+  };
 }
 
 /** Las actas emitidas, de la más nueva a la más vieja. */
