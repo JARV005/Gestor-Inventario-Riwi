@@ -62,6 +62,16 @@ Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
   rota desde la etapa 3, la base de tests acumulaba filas corrida a
   corrida, y la corrida siguiente moría por un choque de UNIQUE — un
   síntoma dos pasos por delante de la causa.
+- Un verificador que imprime «fallas: 1» y sale con código 0 está roto,
+  aunque su tabla esté bien. `ON_ERROR_STOP` de psql reacciona a errores de
+  SQL, no a una fila de resultado que diga que algo va mal. Los dos
+  verificadores terminan ahora en un `DO` que hace `RAISE` si hay alguna
+  falla; se comprobó inyectando una y viendo salir un 3. Ocurrió: la
+  migración 0010 rompió un caso del verificador de esquema y
+  `npm run db:verificar` siguió en verde durante toda la etapa 5, porque el
+  veredicto lo estaba leyendo una persona a ojo. Es el `# fail 0` con exit 1
+  de node:test por el otro lado — el resumen y el código de salida contando
+  cosas distintas.
 - La base de tests puede ir una migración por detrás de la de desarrollo, y
   el síntoma no lo parece: fallos que se leen como bugs de la aplicación
   (un 500 inesperado, un 200 donde debía haber 409). Antes de diagnosticar

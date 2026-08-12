@@ -418,9 +418,11 @@ BEGIN
     INSERT INTO resultado VALUES ('D14: borrar equipo con acta', 'rechazado', 'rechazado');
   END;
 
-  -- 25. D15: o están el PDF y su hash, o no está ninguno.
+  -- 25. D15 + D26: el PDF, su hash y su plantilla van los tres o ninguno.
   --     Un PDF sin hash no se puede verificar; un hash sin PDF no verifica
-  --     nada. Los dos lados, porque el CHECK es una equivalencia.
+  --     nada; y un PDF cuya plantilla no se sabe no se puede regenerar para
+  --     comprobarlo. Cada lado por separado, porque el CHECK es una doble
+  --     equivalencia y basta con que una de las dos se caiga.
   BEGIN
     UPDATE actas SET pdf = '\x255044462d'::bytea WHERE id = v_acta;
     INSERT INTO resultado VALUES ('D15: PDF sin hash', 'rechazado', 'ACEPTADO');
@@ -435,11 +437,29 @@ BEGIN
     INSERT INTO resultado VALUES ('D15: hash sin PDF', 'rechazado', 'rechazado');
   END;
 
+  -- El lado que la 0010 añadió, y que rompió este caso al cerrarse la etapa: el
+  -- par pdf+hash ya no basta.
   BEGIN
     UPDATE actas SET pdf = '\x255044462d'::bytea, hash_sha256 = 'abc123' WHERE id = v_acta;
-    INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'aceptado');
+    INSERT INTO resultado VALUES ('D26: PDF y hash sin plantilla', 'rechazado', 'ACEPTADO');
   EXCEPTION WHEN check_violation THEN
-    INSERT INTO resultado VALUES ('D15: PDF con su hash', 'aceptado', 'RECHAZADO');
+    INSERT INTO resultado VALUES ('D26: PDF y hash sin plantilla', 'rechazado', 'rechazado');
+  END;
+
+  BEGIN
+    UPDATE actas SET plantilla_version = '1-borrador' WHERE id = v_acta;
+    INSERT INTO resultado VALUES ('D26: plantilla sin PDF', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D26: plantilla sin PDF', 'rechazado', 'rechazado');
+  END;
+
+  BEGIN
+    UPDATE actas SET pdf = '\x255044462d'::bytea, hash_sha256 = 'abc123',
+                     plantilla_version = '1-borrador'
+     WHERE id = v_acta;
+    INSERT INTO resultado VALUES ('D15+D26: los tres juntos', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D15+D26: los tres juntos', 'aceptado', 'RECHAZADO');
   END;
 
   -- 27. D24: un acta no puede colgar del movimiento de OTRO equipo.
@@ -551,5 +571,24 @@ SELECT caso, esperado, obtenido,
 FROM resultado;
 
 SELECT count(*) FILTER (WHERE esperado <> obtenido) AS fallas FROM resultado;
+
+-- ---------------------------------------------------------------------------
+-- Y que el proceso FALLE si hay alguna. Ver la nota gemela en
+-- `verificar-datos.sql`: `ON_ERROR_STOP` no reacciona a una fila que diga que
+-- algo está mal, solo a un error de SQL. Este fichero imprimía «fallas: 1» y
+-- salía con código 0 — lo descubrí al cerrar la etapa 5, cuando la migración
+-- 0010 rompió el caso 25 y `npm run db:verificar` siguió en verde.
+--
+-- Va antes del ROLLBACK: la excepción aborta la transacción, que es justo lo
+-- que este fichero hace igualmente al terminar.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE n bigint;
+BEGIN
+  SELECT count(*) INTO n FROM resultado WHERE esperado <> obtenido;
+  IF n > 0 THEN
+    RAISE EXCEPTION 'verificar-esquema: % caso(s) en rojo. Ver la tabla de arriba.', n;
+  END IF;
+END $$;
 
 ROLLBACK;

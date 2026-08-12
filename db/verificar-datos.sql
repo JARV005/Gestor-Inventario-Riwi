@@ -483,4 +483,27 @@ SELECT (SELECT count(*) FROM equipos) AS equipos,
        -- y eso tiene que verse a simple vista.
        (SELECT count(*) FROM actas) AS actas;
 
+-- ---------------------------------------------------------------------------
+-- Y ahora, que el proceso FALLE si hay alguna falla.
+-- ---------------------------------------------------------------------------
+--
+-- Sin esto, psql imprime «fallas: 3» y sale con código 0: `ON_ERROR_STOP` solo
+-- reacciona a errores de SQL, no a una fila de resultado que diga que algo está
+-- mal. Durante toda la etapa 5 el veredicto lo he leído a ojo en la salida, y
+-- eso funciona hasta que alguien encadena `npm run db:verificar &&` en un
+-- script o deja de mirar. Se descubrió al cerrar la etapa: la migración 0010
+-- rompió un caso del verificador de esquema y el comando siguió saliendo en
+-- verde.
+--
+-- Es la misma clase de fallo que el `# fail 0` con exit 1 de node:test, por el
+-- otro lado: el resumen y el código de salida contando cosas distintas.
+DO $$
+DECLARE n bigint;
+BEGIN
+  SELECT count(*) INTO n FROM hallazgo WHERE filas <> 0;
+  IF n > 0 THEN
+    RAISE EXCEPTION 'verificar-datos: % comprobacion(es) en rojo. Ver la tabla de arriba.', n;
+  END IF;
+END $$;
+
 DROP TABLE hallazgo;

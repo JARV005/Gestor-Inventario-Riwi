@@ -4,33 +4,46 @@ Cosas detectadas al construir, que no se arreglan donde se encontraron. Cada
 una dice a qué etapa pertenece. **No es una lista de deseos**: si algo entra
 aquí es porque ya sabemos que hay que hacerlo.
 
----
+Revisado al cerrar la etapa 5: **no queda ninguna entrada de la etapa 5 sin
+cerrar**. Lo que quedaba abierto se reasignó a la etapa que le toca, y lo que se
+cerró está abajo, en Resueltos.
 
-## Etapa 3 — auth y API núcleo
-
-### Nadie escribe en `auditoria` salvo el desciframiento de BIOS
-
-La etapa 3 la llena solo en `GET /api/equipos/:id/bios`. El §5 la exige también
-para **toda escritura sobre `equipos`**, y eso todavía no ocurre: un `POST` o un
-`PATCH` no dejan rastro.
-
-Encaja mejor con la etapa 5, cuando existan las mutaciones de estado y haya un
-`antes`/`despues` que valga la pena guardar. La importación de la etapa 2
-tampoco escribió aquí; su rastro equivalente son `importaciones` y los 186
-movimientos `Alta`.
-
-**Medio cerrado en la etapa 5.** Las seis mutaciones y la confirmación de
-traslado escriben su fila de `auditoria` dentro de la misma transacción. Siguen
-sin dejar rastro `POST /api/equipos` (el alta, cuyo rastro hoy es su movimiento
-`Alta`) y `PATCH /api/equipos/:id` (la edición de la ficha, que desde la etapa 5
-ya no puede tocar estado, responsable ni sede). Cerrar los dos en la etapa 7,
-con el resto del endurecimiento.
+| Sección | Abiertas |
+|---|---|
+| Etapa 5c — el acta de varios equipos | 1 |
+| Etapa 6 — dashboard, bandeja y flujos que faltan | 4 |
+| Etapa 7 — endurecimiento | 3 |
+| Sin etapa: no son decisiones de quien programa | 2 |
+| **Total** | **10** |
 
 ---
 
-## Etapa 5 — movimientos y actas
+## Etapa 5c — el acta de varios equipos
 
-### El cuerpo del acta: escrito, y SIN REVISAR POR LEGAL
+### Una sola acta para toda la entrega
+
+La API ya acepta hasta 50 equipos por acta y la plantilla los imprime en lista
+(comprobado: cuatro caben en una página, ocho ocupan dos). Lo que emite de uno
+en uno es **`HandoverDocumentView`**, porque su selector es de un solo equipo y
+cambiarlo cambia lo que la pantalla muestra.
+
+Un onboarding entrega portátil, teclado, ratón y diadema el mismo día. Cuatro
+actas separadas para una entrega son cuatro números de consecutivo, cuatro
+firmas y cuatro papeles que archivar — fricción que devuelve a la gente al
+método anterior, que es el fallo que este proyecto existe para arreglar.
+
+Al hacerlo: el selector pasa a marcar varios de los equipos que la persona tiene
+a su nombre, igual que hace `OffboardingModal`. El servidor no necesita ningún
+cambio.
+
+---
+
+## Sin etapa — no son decisiones de quien programa
+
+Las dos esperan a una persona o a un hecho, no a que alguien escriba código.
+Ponerles número de etapa sería fingir que se pueden planificar.
+
+### El texto del acta está sin revisar por legal
 
 **Al día tras la 5b.** El acta se registra, se genera su PDF y se descarga desde
 `HandoverDocumentView`. El `TODO(5)` ya no existe en el código.
@@ -116,51 +129,6 @@ Tres cosas que hay que corregir al montarla, y que en el original estaban mal:
   firmante que no existe. Si el acta lleva número, tiene que salir de una
   secuencia real; el firmante, de la sesión.
 
-### BUG — «Reasignar» no reasigna: abre un modal que solo sabe asignar
-
-**Es un defecto, no una decisión abierta.** El botón existe, se pulsa, y la
-operación que promete no ocurre.
-
-`InventoryView` tiene un botón **Reasignar** sobre un equipo concreto, y
-`EmployeesView` tiene **Offboarding**. Los dos abren `OnboardingModal` sin
-pasarle nada, así que el asistente empieza de cero. Y como el asistente solo
-lista equipos `Disponible` o `Reservado` —los únicos que se pueden asignar—, el
-equipo desde el que se pulsó **no aparece en su desplegable**. Quien pulsa
-Reasignar sobre un portátil asignado se encuentra un formulario en el que ese
-portátil no está.
-
-**Qué falta.** Reasignar es `devolver` + `asignar`: dos mutaciones, las dos
-existen desde la etapa 5, y la operación compuesta no existe en ninguna parte.
-Necesita además la pregunta que hoy nadie hace —«¿lo devolvió de verdad?»—,
-porque la devolución es un hecho físico y no un paso de formulario.
-
-No se arregla en la etapa 5: 5a y 5b primero. Al arreglarlo, el modal tiene que
-recibir el equipo de partida en vez de empezar de cero.
-
-`Offboarding` era el tercer caso de este mismo bug y ya está cerrado: tiene su
-propio modal (`OffboardingModal`), que devuelve en vez de asignar.
-
-**Atenuante desde que existen los botones del detalle:** hoy la operación se
-puede hacer, aunque no desde este botón. Desde el detalle del equipo salen
-«Registrar devolución» y luego «Asignar a alguien», que son exactamente las dos
-mitades de reasignar. Lo que falta es el atajo, no la capacidad.
-
-### Etapa 5c — el acta de varios equipos desde la interfaz
-
-La API ya acepta hasta 50 equipos por acta y la plantilla los imprime en lista
-(comprobado: cuatro caben en una página, ocho ocupan dos). Lo que emite de uno
-en uno es **`HandoverDocumentView`**, porque su selector es de un solo equipo y
-cambiarlo cambia lo que la pantalla muestra.
-
-Un onboarding entrega portátil, teclado, ratón y diadema el mismo día. Cuatro
-actas separadas para una entrega son cuatro números de consecutivo, cuatro
-firmas y cuatro papeles que archivar — fricción que devuelve a la gente al
-método anterior, que es el fallo que este proyecto existe para arreglar.
-
-Al hacerlo: el selector pasa a marcar varios de los equipos que la persona tiene
-a su nombre, igual que hace `OffboardingModal`. El servidor no necesita ningún
-cambio.
-
 ### El equipo perdido o robado mientras estaba asignado
 
 **No resolver todavía.** Se anota porque va a aparecer, no porque haya que
@@ -182,20 +150,47 @@ motivo que sí acepta salir de `Asignado`, o si el flujo pasa por otro sitio
 —acta, denuncia, seguro— antes de tocar el inventario. La respuesta depende de
 qué haga la empresa con el papel, y eso no se puede adivinar desde aquí.
 
+---
+
+## Etapa 6 — dashboard, bandeja y flujos que faltan
+
+### BUG — «Reasignar» no reasigna: abre un modal que solo sabe asignar
+
+**Es un defecto, no una decisión abierta.** El botón existe, se pulsa, y la
+operación que promete no ocurre.
+
+`InventoryView` tiene un botón **Reasignar** sobre un equipo concreto. Abre
+`OnboardingModal` sin pasarle nada, así que el asistente empieza de cero. Y como
+el asistente solo lista equipos `Disponible` o `Reservado` —los únicos que se
+pueden asignar—, el equipo desde el que se pulsó **no aparece en su
+desplegable**. Quien pulsa Reasignar sobre un portátil asignado se encuentra un
+formulario en el que ese portátil no está.
+
+**Qué falta.** Reasignar es `devolver` + `asignar`: dos mutaciones, las dos
+existen desde la etapa 5, y la operación compuesta no existe en ninguna parte.
+Necesita además la pregunta que hoy nadie hace —«¿lo devolvió de verdad?»—,
+porque la devolución es un hecho físico y no un paso de formulario.
+
+`Offboarding` era el otro caso de este mismo bug y ya está cerrado: tiene su
+propio modal (`OffboardingModal`), que devuelve en vez de asignar.
+
+**Atenuante desde que existen los botones del detalle:** hoy la operación se
+puede hacer, aunque no desde este botón. Desde el detalle del equipo salen
+«Registrar devolución» y luego «Asignar a alguien», que son exactamente las dos
+mitades de reasignar. Lo que falta es el atajo, no la capacidad — por eso es
+etapa 6 y no un bloqueo.
+
 ### El importador dejará de poder reimportar
 
 Hoy la única forma de rehacer una carga es `npm run db:reset`, porque
-`movimientos` es append-only y no hay llave natural para reconciliar. Es
-aceptable mientras el único contenido sea la importación y la semilla.
+`movimientos` es append-only y no hay llave natural para reconciliar. Era
+aceptable mientras el único contenido fuese la importación y la semilla.
 
-En cuanto haya un movimiento hecho por una persona, `db:reset` destruye trabajo
-real y el importador tendrá que crecer: reconciliar por `importacion_id`, o
-importar solo lo que no existía. `importaciones.hash_sha256` ya permite
-detectar que el archivo cambió.
-
----
-
-## Etapa 6 — dashboard y bandeja
+**Ya no lo es.** Al cerrar la etapa 5, la base de desarrollo tiene 7 movimientos
+hechos por una persona desde la interfaz: `db:reset` ahora destruye trabajo
+real. El importador tendrá que crecer —reconciliar por `importacion_id`, o
+importar solo lo que no existía—, y `importaciones.hash_sha256` ya permite
+detectar que el archivo cambió. Sube de prioridad dentro de la etapa 6.
 
 ### `motivos_revision.recomendacion`
 
@@ -218,6 +213,18 @@ verlos.
 ---
 
 ## Etapa 7 — endurecimiento
+
+### El alta y la edición de ficha no dejan rastro en `auditoria`
+
+Venía de la etapa 3, donde solo escribía el desciframiento de BIOS. El §5 la
+exige para **toda escritura sobre `equipos`**.
+
+**Medio cerrado en la etapa 5:** las seis mutaciones y la confirmación de
+traslado escriben su fila dentro de la misma transacción, y también la emisión
+de actas. Siguen sin dejar rastro el alta —cuyo equivalente hoy es su movimiento
+`Alta`— y el `PATCH` de la ficha, que desde la 5 ya no puede tocar estado,
+responsable ni sede (D19), así que lo que se le escapa es marca, modelo, notas
+y costo. Cerrar los dos aquí, con el resto del endurecimiento.
 
 ### Rotar `ENCRYPTION_KEY` no tiene procedimiento
 
