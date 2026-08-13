@@ -157,7 +157,10 @@ export function App() {
 
           {/* Conectada: lee equipos, empleados y sedes por su cuenta. */}
           {activeTab === 'documents' && (
-            <HandoverDocumentView equipoSeleccionado={equipoParaActa} />
+            <HandoverDocumentView
+              equipoSeleccionado={equipoParaActa}
+              onActaEmitida={recargarResumen}
+            />
           )}
         </main>
       </div>

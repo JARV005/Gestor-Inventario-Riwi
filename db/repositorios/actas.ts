@@ -25,6 +25,12 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { generarPdfActa, PLANTILLA_VERSION, sha256 } from '../acta-pdf.js';
 import { db, type BD, type Ejecutor } from '../cliente.js';
 import {
+  TransicionIlegal,
+  type EstadoEquipo,
+  type Operacion,
+} from '../transiciones.js';
+import * as repoMovimientos from './movimientos.js';
+import {
   actas,
   actasConsecutivo,
   actasEquipos,
@@ -38,10 +44,33 @@ import * as repoAuditoria from './auditoria.js';
 
 export type TipoActa = 'Entrega' | 'Devolución';
 
+/**
+ * Los dos modos de emitir. **`firmar` es el de por defecto, y a propósito**: un
+ * modo que MUTA datos no puede ser el implícito. La pantalla lo manda siempre
+ * explícito; una petición vieja que no lo traiga se comporta como antes.
+ *
+ *   - `firmar`   — el acta documenta movimientos que YA existen. Es lo de la
+ *                  5a: primero la operación, después el papel.
+ *   - `ejecutar` — el acta **crea** los movimientos y los firma, todo en la
+ *                  misma transacción. El orden lógico se conserva —el
+ *                  movimiento sigue existiendo antes que su acta, dentro de la
+ *                  transacción— y desaparece el doble paso para quien entrega.
+ *
+ * Los dos caminos llegan al mismo sitio, y el manual —los botones del detalle
+ * del equipo— sigue intacto. No es uno sustituyendo al otro.
+ */
+export type ModoActa = 'firmar' | 'ejecutar';
+
 /** Qué movimiento documenta cada tipo de acta. */
 const MOVIMIENTO_DE: Record<TipoActa, 'Asignación' | 'Devolución'> = {
   Entrega: 'Asignación',
   Devolución: 'Devolución',
+};
+
+/** Y qué operación lo crea, en modo `ejecutar`. */
+const OPERACION_DE: Record<TipoActa, Operacion> = {
+  Entrega: 'asignar',
+  Devolución: 'devolver',
 };
 
 export class EmpleadoNoEncontrado extends Error {}
@@ -51,11 +80,54 @@ export class SinMovimientoQueDocumentar extends Error {}
 /** Ese movimiento ya lo cubre otra acta. */
 export class YaTieneActa extends Error {}
 
+/**
+ * En modo `ejecutar`, un equipo del acta no se puede mover.
+ *
+ * Envuelve a `TransicionIlegal` **añadiéndole de qué equipo se trata**. La
+ * excepción original sabe de operación y estado, pero no de equipo, y un 409
+ * que dice «no se puede asignar» sobre un acta de cuatro equipos obliga a
+ * adivinar cuál de los cuatro.
+ */
+export class EquipoNoSeDejaMover extends Error {
+  constructor(
+    readonly equipo_id: string,
+    readonly etiqueta: string,
+    readonly estado_actual: EstadoEquipo,
+    readonly puedes: Operacion[],
+    mensaje: string,
+  ) {
+    super(mensaje);
+  }
+}
+
+/**
+ * En modo `ejecutar` + Devolución, el equipo no está a nombre de esa persona.
+ *
+ * Sin esta comprobación, `mutar('devolver')` escribiría el movimiento con
+ * `empleado_origen_id` = quien lo tuviera de verdad, y el acta diría otra cosa:
+ * el grupo H de `verificar-datos` («actas cuya persona no es la del
+ * movimiento») se pondría rojo días después, lejos del acta que lo causó.
+ */
+export class NoEstaANombreDe extends Error {
+  constructor(
+    readonly equipo_id: string,
+    readonly etiqueta: string,
+    /** A nombre de quién figura hoy, o `null` si de nadie. */
+    readonly titular: string | null,
+    mensaje: string,
+  ) {
+    super(mensaje);
+  }
+}
+
 export interface DatosActa {
   tipo: TipoActa;
+  /** Ver `ModoActa`. Ausente = `firmar`. */
+  modo?: ModoActa;
   empleado_id: string;
   /** Los equipos que el acta cubre. Al menos uno. */
   equipos: string[];
+  observaciones?: string | null;
 }
 
 /**
@@ -87,12 +159,128 @@ async function siguienteConsecutivo(tx: Ejecutor, anio: number): Promise<string>
   return `ACT-${anio}-${String(fila.valor).padStart(4, '0')}`;
 }
 
+/** Los datos de la persona que el acta congela, y que sirven para los mensajes. */
+interface Persona {
+  id: string;
+  nombre: string;
+  cedula: string | null;
+  cargo: string | null;
+  area: string | null;
+  sede: string | null;
+}
+
+/** Modo `firmar`: el movimiento ya existe y hay que encontrarlo. */
+async function buscarMovimiento(
+  tx: Ejecutor,
+  tipoMov: 'Asignación' | 'Devolución',
+  equipoId: string,
+  nombreEq: string,
+  persona: Persona,
+): Promise<string> {
+  // El más reciente de su tipo CON ESA PERSONA. El filtro por persona no es
+  // adorno — un equipo que pasó de A a B tiene dos `Asignación`, y el acta de B
+  // no puede colgar de la de A.
+  const extremo = tipoMov === 'Asignación' ? 'empleado_destino_id' : 'empleado_origen_id';
+  const [mov] = await tx
+    .select({ id: movimientos.id })
+    .from(movimientos)
+    .where(
+      and(
+        eq(movimientos.equipo_id, equipoId),
+        eq(movimientos.tipo, tipoMov),
+        eq(movimientos[extremo], persona.id),
+      ),
+    )
+    .orderBy(desc(movimientos.fecha), desc(movimientos.created_at))
+    .limit(1);
+
+  if (!mov) {
+    throw new SinMovimientoQueDocumentar(
+      `No hay ninguna ${tipoMov.toLowerCase()} de ${nombreEq} a nombre de ` +
+        `${persona.nombre}. Un acta documenta algo que ya ocurrió: primero la ` +
+        `operación, después el papel. Si la entrega es ahora, emitir el acta en ` +
+        `modo «entregar ahora».`,
+    );
+  }
+  return mov.id;
+}
+
+/**
+ * Modo `ejecutar`: el acta CREA el movimiento y lo firma en la misma
+ * transacción.
+ *
+ * La operación la hace `mutar()`, sin copiar nada: las mismas reglas, la misma
+ * tabla de transiciones, la misma auditoría y el mismo `FOR UPDATE`. Reescribir
+ * aquí un `UPDATE equipos` sería un séptimo sitio donde olvidarse de algo.
+ *
+ * `mutar` abre su propia transacción, que anidada dentro de esta es un
+ * savepoint: si el tercer equipo de un acta de cuatro no se deja mover, la
+ * excepción sube y **el acta entera se deshace**. No hay actas a medias.
+ */
+async function ejecutarOperacion(
+  tx: Ejecutor,
+  tipo: TipoActa,
+  eq_: { id: string; estado: EstadoEquipo; empleado_id: string | null },
+  nombreEq: string,
+  persona: Persona,
+  contexto: { usuarioId: string; ip: string | null },
+  observaciones: string | null,
+): Promise<string> {
+  // Devolver exige que el equipo esté a nombre de ESA persona. Sin esto,
+  // `mutar` escribiría el movimiento con el titular real y el acta diría otra
+  // cosa: el grupo H se pondría rojo días después, lejos de su causa.
+  if (tipo === 'Devolución' && eq_.empleado_id !== persona.id) {
+    const titular = eq_.empleado_id
+      ? ((
+          await tx
+            .select({ nombre: empleados.nombre })
+            .from(empleados)
+            .where(eq(empleados.id, eq_.empleado_id))
+        )[0]?.nombre ?? null)
+      : null;
+
+    throw new NoEstaANombreDe(
+      eq_.id,
+      nombreEq,
+      titular,
+      titular
+        ? `${nombreEq} no está a nombre de ${persona.nombre}: figura a nombre de ${titular}. ` +
+          `Un acta de devolución la firma quien lo tenía.`
+        : `${nombreEq} no está asignado a nadie, así que ${persona.nombre} no puede devolverlo.`,
+    );
+  }
+
+  try {
+    const r = await repoMovimientos.mutar(
+      OPERACION_DE[tipo],
+      eq_.id,
+      { empleado_id: persona.id, observaciones },
+      contexto,
+      tx,
+    );
+    return r.movimiento.id;
+  } catch (e) {
+    if (e instanceof TransicionIlegal) {
+      throw new EquipoNoSeDejaMover(
+        eq_.id,
+        nombreEq,
+        e.estadoActual,
+        e.alternativas,
+        `${nombreEq} está "${e.estadoActual}" y no se puede ${OPERACION_DE[tipo]}. ` +
+          `${e.explicacion} No se emitió el acta: no hay actas a medias.`,
+      );
+    }
+    throw e;
+  }
+}
+
 export async function emitir(
   datos: DatosActa,
   contexto: { usuarioId: string; ip: string | null },
   bd: BD = db,
 ) {
   const tipoMov = MOVIMIENTO_DE[datos.tipo];
+  const modo: ModoActa = datos.modo ?? 'firmar';
 
   return bd.transaction(async (tx) => {
     // -----------------------------------------------------------------------
@@ -143,43 +331,35 @@ export async function emitir(
           ram: equipos.ram,
           disco: equipos.disco,
           sistema_operativo: equipos.sistema_operativo,
+          // No van a la instantánea —el acta no los imprime— pero hacen falta
+          // aquí para validar.
+          estado: equipos.estado,
+          empleado_id: equipos.empleado_id,
         })
         .from(equipos)
         .where(eq(equipos.id, equipoId))
         .for('update');
 
       if (!eq_) throw new EquipoNoEncontrado(equipoId);
+      const nombreEq = eq_.etiqueta ?? eq_.serial ?? eq_.categoria;
 
-      // El movimiento que este acta documenta: el más reciente de su tipo CON
-      // ESA PERSONA. El filtro por persona no es adorno — un equipo que pasó
-      // de A a B tiene dos `Asignación`, y el acta de B no puede colgar de la
-      // de A.
-      const extremo = tipoMov === 'Asignación' ? 'empleado_destino_id' : 'empleado_origen_id';
-      const [mov] = await tx
-        .select({ id: movimientos.id, fecha: movimientos.fecha })
-        .from(movimientos)
-        .where(
-          and(
-            eq(movimientos.equipo_id, equipoId),
-            eq(movimientos.tipo, tipoMov),
-            eq(movimientos[extremo], datos.empleado_id),
-          ),
-        )
-        .orderBy(desc(movimientos.fecha), desc(movimientos.created_at))
-        .limit(1);
-
-      if (!mov) {
-        throw new SinMovimientoQueDocumentar(
-          `No hay ninguna ${tipoMov.toLowerCase()} de ${eq_.etiqueta ?? eq_.categoria} ` +
-            `a nombre de ${persona.nombre}. Un acta documenta algo que ya ocurrió: ` +
-            `primero la operación, después el papel.`,
-        );
-      }
+      const movimientoId =
+        modo === 'ejecutar'
+          ? await ejecutarOperacion(
+              tx,
+              datos.tipo,
+              eq_,
+              nombreEq,
+              persona,
+              contexto,
+              datos.observaciones ?? null,
+            )
+          : await buscarMovimiento(tx, tipoMov, equipoId, nombreEq, persona);
 
       lineas.push({
         acta_id: '', // se rellena al insertar, cuando exista el id del acta
         equipo_id: equipoId,
-        movimiento_id: mov.id,
+        movimiento_id: movimientoId,
         etiqueta: eq_.etiqueta,
         serial: eq_.serial,
         marca: eq_.marca,
@@ -264,6 +444,10 @@ export async function emitir(
         despues: {
           consecutivo,
           tipo: datos.tipo,
+          // Qué camino se usó. Con los dos modos escribiendo el mismo tipo de
+          // acta, sin esto no habría forma de saber, mirando el rastro, si el
+          // movimiento lo creó el acta o lo firmó de antes.
+          modo,
           empleado_id: persona.id,
           equipos: lineas.map((l) => l.equipo_id),
           movimientos: lineas.map((l) => l.movimiento_id),
@@ -398,6 +582,58 @@ export async function recalcularHash(id: string, bd: BD = db) {
     plantilla_guardada: acta.plantilla_version,
     misma_plantilla: acta.plantilla_version === PLANTILLA_VERSION,
   };
+}
+
+/**
+ * Qué equipos se pueden FIRMAR hoy para esta persona: los que tienen un
+ * movimiento del tipo que toca, suyo, y todavía sin acta.
+ *
+ * Es la mitad del filtro de la pantalla que el cliente no puede calcular. Los
+ * otros dos casos —modo `ejecutar`— salen de datos que ya tiene: los
+ * disponibles para entregar, los que tiene a su nombre para devolver.
+ *
+ * **Solo el movimiento más reciente de cada equipo**, con `DISTINCT ON`. Es el
+ * mismo que elegiría `buscarMovimiento` al emitir: ofrecer uno más antiguo
+ * porque aquel no tiene acta llevaría a un 409 sin explicación posible —el acta
+ * se emitiría contra el nuevo, que sí la tiene.
+ */
+export async function firmables(empleadoId: string, tipo: TipoActa, bd: BD = db) {
+  const tipoMov = MOVIMIENTO_DE[tipo];
+  const extremo = tipoMov === 'Asignación' ? 'empleado_destino_id' : 'empleado_origen_id';
+
+  // SQL crudo con las tablas calificadas a mano: hay subconsulta correlacionada
+  // y `DISTINCT ON`, que drizzle no expresa. La regla de siempre.
+  const filas = await bd.execute<{
+    id: string;
+    etiqueta: string | null;
+    serial: string | null;
+    marca: string | null;
+    modelo: string | null;
+    categoria: string;
+    estado: string;
+    sede_id: string | null;
+    movimiento_id: string;
+    fecha: string;
+  }>(sql`
+    SELECT * FROM (
+      SELECT DISTINCT ON (movimientos.equipo_id)
+             equipos.id, equipos.etiqueta, equipos.serial, equipos.marca, equipos.modelo,
+             equipos.categoria::text AS categoria, equipos.estado::text AS estado,
+             equipos.sede_id,
+             movimientos.id AS movimiento_id, movimientos.fecha
+        FROM movimientos
+        JOIN equipos ON equipos.id = movimientos.equipo_id
+       WHERE movimientos.tipo = ${tipoMov}
+         AND movimientos.${sql.raw(extremo)} = ${empleadoId}
+       ORDER BY movimientos.equipo_id, movimientos.fecha DESC, movimientos.created_at DESC
+    ) ultimo
+    WHERE NOT EXISTS (
+      SELECT 1 FROM actas_equipos WHERE actas_equipos.movimiento_id = ultimo.movimiento_id
+    )
+    ORDER BY ultimo.fecha DESC
+  `);
+
+  return filas.rows;
 }
 
 /** Las actas emitidas, de la más nueva a la más vieja. */

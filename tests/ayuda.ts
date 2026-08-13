@@ -531,6 +531,71 @@ export async function matarConexionEnMedioDeConfirmar(
   }
 }
 
+/**
+ * El corte de la 5c: **entre crear el movimiento y firmar el acta**.
+ *
+ * Es la tercera transacción de dos escrituras del proyecto, y la que más se
+ * nota si se parte por la mitad: quedaría el equipo asignado y sin papel, o —al
+ * revés— un acta con número consecutivo gastado y sin operación detrás.
+ *
+ * Se reproduce a mano el modo `ejecutar`: UPDATE del equipo, INSERT del
+ * movimiento, y la conexión muere antes del INSERT del acta.
+ */
+export async function matarConexionEnMedioDeEmitir(
+  equipoId: string,
+  empleadoId: string,
+  usuarioId: string,
+): Promise<string> {
+  const cliente = new Client({ connectionString: process.env.DATABASE_URL });
+  cliente.on('error', () => {
+    /* la vamos a matar a propósito */
+  });
+  await cliente.connect();
+
+  try {
+    const { rows } = await cliente.query<{ pid: number }>('SELECT pg_backend_pid() AS pid');
+    const pid = rows[0].pid;
+
+    await cliente.query('BEGIN');
+    await cliente.query(
+      `UPDATE equipos SET estado = 'Asignado', empleado_id = $1 WHERE id = $2`,
+      [empleadoId, equipoId],
+    );
+    const { rows: movRows } = await cliente.query<{ id: string }>(
+      `INSERT INTO movimientos (equipo_id, tipo, usuario_app_id, empleado_destino_id)
+       VALUES ($1, 'Asignación', $2, $3) RETURNING id`,
+      [equipoId, usuarioId, empleadoId],
+    );
+
+    // Las dos primeras escrituras están hechas DENTRO de la transacción. Sin
+    // comprobarlo, el test pasaría igual si no hubieran hecho nada.
+    const dentro = await cliente.query<{ estado: string }>(
+      'SELECT estado FROM equipos WHERE id = $1',
+      [equipoId],
+    );
+    if (dentro.rows[0]?.estado !== 'Asignado' || !movRows[0]?.id) {
+      throw new Error('la operación no llegó a aplicarse dentro de la transacción');
+    }
+
+    await db.execute(sql`SELECT pg_terminate_backend(${pid})`);
+
+    // Y el acta que nunca llegará.
+    try {
+      await cliente.query(
+        `INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                            empleado_nombre, generada_por_nombre)
+         VALUES ('ACT-CORTE-9999', 'Entrega', $1, $2, 'x', 'y')`,
+        [empleadoId, usuarioId],
+      );
+      return 'el INSERT pasó: la conexión no murió';
+    } catch {
+      return 'conexión terminada';
+    }
+  } finally {
+    await cliente.end().catch(() => {});
+  }
+}
+
 /** La sede en la que la base dice que está el equipo. */
 export async function sedeDe(equipoId: string): Promise<string | null> {
   const r = await db.execute<{ sede_id: string | null }>(

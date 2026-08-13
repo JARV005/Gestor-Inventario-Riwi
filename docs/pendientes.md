@@ -10,31 +10,47 @@ cerró está abajo, en Resueltos.
 
 | Sección | Abiertas |
 |---|---|
-| Etapa 5c — el acta de varios equipos | 1 |
+| Etapa 5d — CRUDs y campos que BBL pidió | 4 |
 | Etapa 6 — dashboard, bandeja y flujos que faltan | 4 |
 | Etapa 7 — endurecimiento | 3 |
 | Sin etapa: no son decisiones de quien programa | 2 |
-| **Total** | **10** |
+| **Total** | **13** |
+
+La 5c se cerró: el acta ejecuta la operación, emite varios equipos de una vez y
+filtra según lo que se esté haciendo. Ver Resueltos.
 
 ---
 
-## Etapa 5c — el acta de varios equipos
+## Etapa 5d — lo que BBL pidió y no es del generador de actas
 
-### Una sola acta para toda la entrega
+### CRUD de colaboradores
 
-La API ya acepta hasta 50 equipos por acta y la plantilla los imprime en lista
-(comprobado: cuatro caben en una página, ocho ocupan dos). Lo que emite de uno
-en uno es **`HandoverDocumentView`**, porque su selector es de un solo equipo y
-cambiarlo cambia lo que la pantalla muestra.
+Crear y editar desde la interfaz. Desactivar ya existe, con su 409 de equipos a
+cargo. **Borrar no**, por lo mismo que los usuarios (D18): se desactiva.
 
-Un onboarding entrega portátil, teclado, ratón y diadema el mismo día. Cuatro
-actas separadas para una entrega son cuatro números de consecutivo, cuatro
-firmas y cuatro papeles que archivar — fricción que devuelve a la gente al
-método anterior, que es el fallo que este proyecto existe para arreglar.
+### CRUD de mantenimiento
 
-Al hacerlo: el selector pasa a marcar varios de los equipos que la persona tiene
-a su nombre, igual que hace `OffboardingModal`. El servidor no necesita ningún
-cambio.
+Hoy la vista solo lee. Falta registrar un parte, cambiar su estado y cerrarlo.
+Con una pregunta abierta que hay que decidir antes de escribir: **enviar un
+equipo a mantenimiento, ¿es una mutación con su movimiento, como las seis?** El
+estado `En mantenimiento` existe en el enum desde la 0000 y hoy **no hay forma
+de llegar a él** — `ESTADOS_SIN_OPERACION` lo dice desde la etapa 5.
+
+### `empresa` en colaboradores (RIWI / BBL Labs)
+
+Columna nueva, enum con `Sin clasificar` por defecto, y filtro en la vista.
+
+**El conteo de sin clasificar tiene que verse**, como la bandeja de revisión de
+equipos. Si es solo un valor más del desplegable, los 113 se quedan así para
+siempre: es el mismo mecanismo que dejó 37 equipos en «licencia OK» hasta que la
+bandeja los puso delante.
+
+### Dirección obligatoria para la sede Remoto
+
+Avisar, no bloquear: hay empleados ya cargados sin ella y un CHECK los dejaría
+sin poder editarse. Aviso visible en el formulario y en la ficha.
+
+---
 
 ---
 
@@ -250,6 +266,34 @@ cuyos campos cifrados no se pueden leer está restaurada solo a medias, y el
 ---
 
 ## Resueltos
+
+### ~~Etapa 5c — el acta de varios equipos, y el doble paso~~
+
+Cerrada. Tres cosas que eran una:
+
+- **El acta ejecuta la operación** (D27). `POST /api/actas` tiene modo
+  `ejecutar`, que crea los movimientos y los firma en la misma transacción
+  reutilizando `mutar()`. El camino manual —los botones del detalle— sigue
+  intacto: son dos caminos al mismo sitio.
+- **Varios equipos en una sola acta.** El selector pasó a casillas. Un
+  onboarding de portátil, teclado, ratón y diadema es un acta con un número, no
+  cuatro.
+- **El filtro depende de modo × tipo**, cuatro casos. Las dos celdas de `firmar`
+  las calcula el servidor, que es el único que sabe qué movimientos siguen sin
+  acta.
+
+Lo que NO se hizo, y está en D27: el acta no abre traslados. El asistente de
+entrega sí, y esa divergencia es deliberada.
+
+### ~~`notas` existía en el esquema y no había forma de escribirlo~~
+
+Cerrado con la 5c. Editable en el detalle del equipo y presente en el alta.
+
+Las notas que dejó el importador —`USUARIO RESPONSABLE de origen: "..."`, el
+único rastro de lo que decía la hoja sobre los responsables que no eran
+personas, y del que depende `verificar-datos.sql` §A— se muestran aparte, en
+solo lectura, y no entran en el cuadro de edición. Borrarlas sigue siendo
+posible, pero hay que marcar una casilla que dice lo que se pierde.
 
 ### ~~Los traslados abiertos desaparecieron de la interfaz~~
 

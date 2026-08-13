@@ -131,6 +131,15 @@ export interface NuevoEquipo {
   empleado_id?: string | null;
   /** Cadena, no `number`: `numeric(14,2)` no cabe en un `number` sin perder precisión. */
   costo?: string | null;
+  /**
+   * Texto libre. Existía en el esquema desde la 0000 y no había forma de
+   * escribirlo desde la aplicación: un equipo nuevo llegaba con contexto —de
+   * dónde salió, qué tiene raro— y ese contexto se perdía.
+   *
+   * Cuidado al editarlo: el importador dejó aquí el rastro de los responsables
+   * que no eran personas. Ver `NotasEquipo`.
+   */
+  notas?: string | null;
 }
 
 /**
@@ -160,6 +169,30 @@ export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 export type Operacion = 'asignar' | 'devolver' | 'trasladar' | 'baja' | 'reservar' | 'liberar';
 
 export type TipoActa = 'Entrega' | 'Devolución';
+
+/**
+ * Los dos caminos para emitir un acta (5c).
+ *
+ * `firmar` documenta operaciones que ya ocurrieron; `ejecutar` las hace y las
+ * firma a la vez. En pantalla no se llaman así: se llaman «entregar ahora» y
+ * «registrar una entrega ya hecha», porque quien lo usa no tiene por qué saber
+ * cómo funciona por dentro.
+ */
+export type ModoActa = 'firmar' | 'ejecutar';
+
+/** Un equipo con un movimiento suyo pendiente de firmar (`GET /api/actas/firmables`). */
+export interface EquipoFirmable {
+  id: string;
+  etiqueta: string | null;
+  serial: string | null;
+  marca: string | null;
+  modelo: string | null;
+  categoria: string;
+  estado: string;
+  sede_id: string | null;
+  movimiento_id: string;
+  fecha: string;
+}
 
 /**
  * Una línea de acta: **lo que el equipo era al firmar**, no lo que es ahora.

@@ -25,7 +25,7 @@
 import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
-import { db, type BD } from '../cliente.js';
+import { db, type BD, type Ejecutor } from '../cliente.js';
 import { empleados, equipos, movimientos, sedes, usuariosApp } from '../esquema.js';
 import {
   comprobarTransicion,
@@ -76,7 +76,11 @@ export async function mutar(
   equipoId: string,
   datos: DatosMutacion,
   contexto: { usuarioId: string; ip: string | null },
-  bd: BD = db,
+  // `Ejecutor` y no `BD`: desde la 5c, la emisión de un acta en modo «ejecutar»
+  // llama aquí DENTRO de su propia transacción. Drizzle convierte la anidada en
+  // un savepoint, así que un equipo que no se pueda mover aborta el acta entera
+  // en vez de dejarla a medias.
+  bd: Ejecutor = db,
 ) {
   return bd.transaction(async (tx) => {
     // FOR UPDATE: nadie más toca esta fila hasta que la transacción termine.

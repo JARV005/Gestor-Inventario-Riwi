@@ -26,6 +26,7 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
   const [sedeId, setSedeId] = useState('');
   const [empleadoId, setEmpleadoId] = useState('');
   const [costo, setCosto] = useState('');
+  const [notas, setNotas] = useState('');
   const [procesador, setProcesador] = useState('');
   const [ram, setRam] = useState('');
   const [disco, setDisco] = useState('');
@@ -67,6 +68,7 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
     setSedeId('');
     setEmpleadoId('');
     setCosto('');
+    setNotas('');
     setProcesador('');
     setRam('');
     setDisco('');
@@ -98,6 +100,7 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
         sede_id: sedeId || null,
         empleado_id: empleadoId || null,
         costo: costo || null,
+        notas: notas.trim() || null,
       });
 
       // Lo que ya NO se manda, y por qué:
@@ -227,6 +230,22 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
                 className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
               />
             </div>
+          </div>
+
+          {/* Notas: el campo existía en el esquema desde la 0000 y no había
+              forma de escribirlo al dar de alta. Un equipo nuevo llega con
+              contexto —de dónde salió, qué tiene raro— y ese contexto se
+              perdía. */}
+          <div>
+            <label className="block text-slate-700 font-semibold mb-1">Notas</label>
+            <textarea
+              value={notas}
+              onChange={(e) => setNotas(e.target.value)}
+              rows={2}
+              maxLength={2000}
+              placeholder="Lo que haga falta recordar de este equipo"
+              className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-slate-900 focus:outline-none focus:border-blue-600"
+            />
           </div>
 
           <div className="grid grid-cols-3 gap-3">

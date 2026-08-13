@@ -510,3 +510,74 @@ en verde. Ninguna comprobación sobre bytes lo habría encontrado. Es la lecció
 de la etapa 4a otra vez —los caminos se prueban ejecutándolos sobre el sistema
 completo— aplicada a un artefacto que hay que mirar. De ahí que el test cuente
 las páginas: 1 equipo → 1 página, 8 → 2.
+
+---
+
+## D27. El acta ejecuta la operación, y el asistente de entrega no es lo mismo
+
+`POST /api/actas` tiene dos modos, y el de por defecto es `firmar`.
+
+  - **`firmar`** — documenta movimientos que ya existen. Es lo de la 5a.
+  - **`ejecutar`** — crea los movimientos y los firma, en una sola transacción.
+
+**No se invierte la dirección.** El acta sigue colgando de un movimiento que
+existe antes que ella; lo que cambia es que ahora puede crearlo en el mismo
+instante. De eso dependen el grupo F2, la FK compuesta de `actas_equipos` y el
+grupo H, y ninguno se toca. Lo que desaparece es el doble paso para quien
+entrega: asignar y luego emitir eran dos pantallas para un solo hecho.
+
+`ejecutar` **reutiliza `mutar()`**, no copia nada: las mismas reglas, la misma
+tabla de transiciones, la misma auditoría, el mismo `FOR UPDATE`. Su transacción
+anidada es un savepoint, así que si el tercer equipo de un acta de cuatro no se
+deja mover, la excepción sube y el acta entera se deshace. No hay actas a medias
+ni equipos movidos sin papel.
+
+**`firmar` es el modo implícito a propósito**: un modo que muta datos no puede
+serlo. Una petición sin `modo` se comporta como antes de la 5c.
+
+### Dos validaciones que el modo `ejecutar` necesitaba
+
+**Devolver exige que el equipo esté a nombre de esa persona.** Sin ello,
+`mutar('devolver')` escribiría el movimiento con el titular real mientras el
+acta dice otro nombre, y el grupo H se pondría rojo días después, lejos de su
+causa. El 409 dice qué equipo y a nombre de quién figura.
+
+**El 409 de transición ilegal dice cuál de los equipos.** `TransicionIlegal`
+sabe de operación y de estado, pero no de equipo; sobre un acta de cuatro, un
+«no se puede asignar» a secas obliga a adivinar. Se envuelve con la etiqueta y
+se le añade el `puedes` del catálogo, igual que en las mutaciones.
+
+### El acta NO abre el traslado, y el asistente sí
+
+Aquí los dos caminos **divergen a propósito**, y queda escrito para que dentro
+de un año no parezca un descuido:
+
+  - `OnboardingModal` asigna **y** abre el traslado si el equipo está en otra
+    sede. Es un flujo operativo: describe lo que va a pasar.
+  - El acta en modo `ejecutar` solo asigna. Es un documento: dice lo que **ya**
+    pasó, y firmar la recepción de un equipo que todavía viaja mete en un papel
+    un hecho que no ha ocurrido.
+
+Cuando los elegidos están en otra sede que la persona, la pantalla lo avisa y no
+bloquea: puede haber ido a recogerlos, y eso el sistema no lo sabe.
+
+### El filtro de la pantalla son cuatro casos, no dos
+
+|  | Entrega | Devolución |
+|---|---|---|
+| **ejecutar** | Disponible o Reservado | los que tiene hoy |
+| **firmar** | los que ya tiene y cuya entrega no se firmó | los que devolvió y cuya devolución no se firmó |
+
+La celda que lo demuestra es `firmar + Entrega`: documentar una entrega que ya
+ocurrió necesita los equipos que la persona **ya tiene**, no los disponibles.
+Filtrar siempre por disponibles dejaría tres de los cuatro casos vacíos.
+
+Las dos celdas de `firmar` las calcula el servidor
+(`GET /api/actas/firmables`): saber qué movimientos siguen sin acta no está en
+ninguna lista que el navegador tenga. Y devuelve **solo el movimiento más
+reciente de cada equipo**, que es el mismo que elegiría al emitir: ofrecer uno
+más antiguo porque aquel no tiene acta llevaría a un 409 inexplicable.
+
+**En pantalla los modos no se llaman así.** Se llaman «entregar ahora» y
+«registrar una entrega ya hecha». Quien entrega un portátil no tiene por qué
+saber qué es firmar contra un movimiento.

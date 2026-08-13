@@ -20,10 +20,23 @@ const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 
 const esquemaEmitir = z.object({
   tipo: z.enum(['Entrega', 'Devolución']),
+  /**
+   * Ausente = `firmar`, y eso es deliberado: **un modo que muta datos no puede
+   * ser el implícito**. La pantalla lo manda siempre explícito; una petición
+   * que no lo traiga se comporta como antes de la 5c.
+   */
+  modo: z.enum(['firmar', 'ejecutar']).optional(),
   empleado_id: uuid,
   // Al menos uno: un acta sin equipos no documenta nada, y el tope evita que
   // una petición pida cinco mil bloqueos de fila en una sola transacción.
-  equipos: z.array(uuid).min(1, { message: 'un acta necesita al menos un equipo' }).max(50),
+  // Sin repetidos: el mismo equipo dos veces choca contra `actas_equipos_pk`
+  // a mitad de transacción, y es mejor decirlo antes de mover nada.
+  equipos: z
+    .array(uuid)
+    .min(1, { message: 'un acta necesita al menos un equipo' })
+    .max(50)
+    .refine((v) => new Set(v).size === v.length, { message: 'hay un equipo repetido' }),
+  observaciones: z.string().trim().max(2000).nullable().optional(),
 });
 
 function validar<T>(esquema: z.ZodType<T>, entrada: unknown): T {
@@ -46,6 +59,25 @@ export function registrarRutasActas(app: Express): void {
     asincrono(async (req, res) => {
       const f = validar(z.object({ empleado: uuid.optional() }), req.query);
       res.json({ actas: await repoActas.listar(f) });
+    }),
+  );
+
+  /**
+   * Qué equipos puede firmar hoy esta persona. Antes de `/api/actas/:id` para
+   * que «firmables» no se valide como un uuid.
+   */
+  ruta(
+    app,
+    'get',
+    '/api/actas/firmables',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const f = validar(
+        z.object({ empleado: uuid, tipo: z.enum(['Entrega', 'Devolución']) }),
+        req.query,
+      );
+      res.json({ equipos: await repoActas.firmables(f.empleado, f.tipo) });
     }),
   );
 
@@ -143,6 +175,27 @@ export function registrarRutasActas(app: Express): void {
         if (e instanceof repoActas.SinMovimientoQueDocumentar) {
           throw new ErrorHttp(409, e.message);
         }
+
+        // Los dos del modo `ejecutar`. Los dos dicen QUÉ EQUIPO: un 409 que
+        // solo dice que algo falló, sobre un acta de cuatro equipos, obliga a
+        // adivinar cuál de los cuatro.
+        if (e instanceof repoActas.EquipoNoSeDejaMover) {
+          throw new ErrorHttp(409, e.message, {
+            equipo_id: e.equipo_id,
+            etiqueta: e.etiqueta,
+            estado_actual: e.estado_actual,
+            // El mismo `puedes` que devuelven las mutaciones, del catálogo.
+            puedes: e.puedes,
+          });
+        }
+        if (e instanceof repoActas.NoEstaANombreDe) {
+          throw new ErrorHttp(409, e.message, {
+            equipo_id: e.equipo_id,
+            etiqueta: e.etiqueta,
+            titular: e.titular,
+          });
+        }
+
         if (e instanceof repoActas.EmpleadoNoEncontrado) throw noEncontrado('Empleado');
         if (e instanceof repoActas.EquipoNoEncontrado) throw noEncontrado('Equipo');
         throw e;

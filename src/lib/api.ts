@@ -12,10 +12,12 @@ import type {
   ActaResumen,
   CatalogoTransiciones,
   EmpleadoConConteo,
+  EquipoFirmable,
   EquipoConMotivos,
   EquipoResumen,
   MantenimientoConEquipo,
   Movimiento,
+  ModoActa,
   MovimientoConNombres,
   NuevoEquipo,
   Pagina,
@@ -148,6 +150,16 @@ export const api = {
 
   equipo: (id: string) => pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${id}`),
 
+  /**
+   * Editar la FICHA. `estado`, `empleado_id` y `sede_id` los rechaza el
+   * servidor con 409 (D19): esos salen de una operación, no de un formulario.
+   */
+  actualizarEquipo: (id: string, cambios: Partial<Omit<NuevoEquipo, 'estado'>>) =>
+    pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(cambios),
+    }),
+
   /** Los agregados del dashboard, contados en Postgres y no aquí. */
   resumenEquipos: () => pedir<ResumenEquipos>('/api/equipos/resumen'),
 
@@ -229,11 +241,24 @@ export const api = {
    * Emitir un acta sobre operaciones **que ya ocurrieron**. El servidor busca
    * el movimiento que documenta cada equipo y responde 409 si no existe.
    */
-  emitirActa: (datos: { tipo: TipoActa; empleado_id: string; equipos: string[] }) =>
+  emitirActa: (datos: {
+    tipo: TipoActa;
+    /** Siempre explícito desde la pantalla: el servidor asume `firmar` si falta. */
+    modo: ModoActa;
+    empleado_id: string;
+    equipos: string[];
+    observaciones?: string | null;
+  }) =>
     pedir<{ acta: ActaEmitida }>('/api/actas', {
       method: 'POST',
       body: JSON.stringify(datos),
     }),
+
+  /** Los equipos con una operación de esa persona pendiente de firmar. */
+  actasFirmables: (empleado: string, tipo: TipoActa) =>
+    pedir<{ equipos: EquipoFirmable[] }>(
+      `/api/actas/firmables${consulta({ empleado, tipo })}`,
+    ),
 
   acta: (id: string) => pedir<{ acta: ActaEmitida }>(`/api/actas/${id}`),
 

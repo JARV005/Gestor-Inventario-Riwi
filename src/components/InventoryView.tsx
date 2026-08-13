@@ -17,6 +17,7 @@ import type { CategoriaEquipo, EquipoConMotivos, EstadoEquipo, Sede } from '../t
 import { CATEGORIAS_EQUIPO, ESTADOS_EQUIPO, MOTIVOS } from '../types';
 import { api, ErrorApi, type ConteoMotivo } from '../lib/api';
 import { AccionesEquipo } from './AccionesEquipo';
+import { NotasEquipo } from './NotasEquipo';
 
 /**
  * La primera vista con datos reales.
@@ -533,12 +534,8 @@ const Detalle: React.FC<{
         ))}
       </dl>
 
-      {equipo.notas && (
-        <div>
-          <p className="text-xs text-ink-muted">Notas</p>
-          <p className="text-sm text-ink">{equipo.notas}</p>
-        </div>
-      )}
+      {/* Editables desde la 5c, con lo del importador protegido aparte. */}
+      <NotasEquipo equipo={equipo} onGuardado={onMutado} />
 
       {/* La clave BIOS y el serial de Windows no están aquí: no salen en ningún
           listado ni detalle (§5.2). Solo por GET /api/equipos/:id/bios, con rol

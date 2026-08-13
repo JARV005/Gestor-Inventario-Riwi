@@ -35,6 +35,8 @@ import {
   consecutivoActual,
   contarAuditoria,
   crearEmpleado,
+  estadoDe,
+  matarConexionEnMedioDeEmitir,
   movimientosDe,
   pdfEnLaBase,
   primeraSede,
@@ -304,6 +306,287 @@ describe('actas: emitir sobre lo que ya ocurrió', () => {
       assert.equal(a.equipos, 1);
       assert.ok(a.consecutivo.startsWith(`ACT-${ANIO}-`));
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Modo `ejecutar`: el acta crea la operación y la firma (5c)
+// ---------------------------------------------------------------------------
+
+describe('actas: el modo ejecutar crea el movimiento y lo firma a la vez', () => {
+  const suite = ambito('ejec');
+  let admin: UsuarioDePrueba;
+  let sede: string;
+  let ana: string;
+  let luis: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sede = await primeraSede();
+    ana = await crearEmpleado(`${suite.prefijo}ana`);
+    luis = await crearEmpleado(`${suite.prefijo}luis`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([ana, luis]);
+    await suite.limpiar();
+  });
+
+  async function equipo(etiqueta: string, categoria = 'Portátil'): Promise<string> {
+    const r = await c.post('/api/equipos', {
+      categoria,
+      etiqueta,
+      serial: `SN-${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    return id;
+  }
+
+  it('un kit de cuatro: una sola acta, cuatro asignaciones, todo en una transacción', async () => {
+    const kit = [
+      await equipo(`${suite.prefijo}K-PORT`),
+      await equipo(`${suite.prefijo}K-TECL`, 'Teclado'),
+      await equipo(`${suite.prefijo}K-MOUS`, 'Mouse'),
+      await equipo(`${suite.prefijo}K-DIAD`, 'Diadema'),
+    ];
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: kit,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const acta = (r.cuerpo as { acta: ActaLeida }).acta;
+
+    // Un acta, un consecutivo, cuatro líneas. Lo que 5c vino a arreglar: antes
+    // eran cuatro actas con cuatro números para una sola entrega.
+    assert.equal(acta.equipos.length, 4);
+
+    for (const id of kit) {
+      // La operación ocurrió de verdad, leída de la base.
+      assert.equal(await estadoDe(id), 'Asignado');
+      const movs = await movimientosDe(id);
+      const asignacion = movs.find((m) => m.tipo === 'Asignación');
+      assert.ok(asignacion, 'el acta creó la asignación');
+      assert.equal(asignacion.empleado_destino_id, ana);
+      // Y el acta cuelga de ESE movimiento, no de otro.
+      const linea = acta.equipos.find((l) => l.equipo_id === id);
+      assert.equal(linea?.movimiento_id, asignacion.id);
+    }
+  });
+
+  it('si un equipo del kit no se deja mover, NO se emite nada', async () => {
+    const bueno = await equipo(`${suite.prefijo}E-OK`);
+    const ocupado = await equipo(`${suite.prefijo}E-OCUP`);
+    // El del medio se lo lleva otra persona antes.
+    await c.post(`/api/equipos/${ocupado}/asignar`, { empleado_id: luis });
+    const tercero = await equipo(`${suite.prefijo}E-OK2`);
+
+    const actasAntes = (await c.get(`/api/actas?empleado=${ana}`)).cuerpo as { actas: unknown[] };
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [bueno, ocupado, tercero],
+    });
+
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as {
+      error: string;
+      etiqueta: string;
+      estado_actual: string;
+      puedes: string[];
+    };
+    // Dice CUÁL de los tres, no solo que algo falló.
+    assert.equal(cuerpo.etiqueta, `${suite.prefijo}E-OCUP`);
+    assert.equal(cuerpo.estado_actual, 'Asignado');
+    assert.ok(cuerpo.puedes.includes('devolver'), 'y qué se puede hacer con él');
+
+    // Nada a medias: ni el acta, ni las asignaciones de los que sí podían.
+    assert.equal(await estadoDe(bueno), 'Disponible', 'el primero no quedó asignado');
+    assert.equal(await estadoDe(tercero), 'Disponible', 'el tercero tampoco');
+    assert.equal((await movimientosDe(bueno)).length, 1, 'solo su Alta');
+    const actasDespues = (await c.get(`/api/actas?empleado=${ana}`)).cuerpo as { actas: unknown[] };
+    assert.equal(actasDespues.actas.length, actasAntes.actas.length, 'no se emitió acta');
+  });
+
+  it('devolver lo que está a nombre de otro: 409 diciendo de quién', async () => {
+    const id = await equipo(`${suite.prefijo}D-OTRO`);
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: luis });
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Devolución',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [id],
+    });
+
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as { error: string; titular: string; etiqueta: string };
+    assert.equal(cuerpo.etiqueta, `${suite.prefijo}D-OTRO`);
+    assert.match(cuerpo.titular, /luis/i, 'dice a nombre de quién figura');
+    assert.match(cuerpo.error, /figura a nombre de/i);
+
+    // Y el equipo sigue de Luis: nada se movió.
+    assert.equal(await estadoDe(id), 'Asignado');
+    assert.equal((await movimientosDe(id)).filter((m) => m.tipo === 'Devolución').length, 0);
+  });
+
+  /**
+   * El invariante que esta validación protege, comprobado desde el otro lado:
+   * la devolución legítima deja el movimiento con `empleado_origen_id` = la
+   * persona del acta, que es lo que el grupo H exige.
+   */
+  it('la devolución legítima deja el movimiento a nombre de quien firma', async () => {
+    const id = await equipo(`${suite.prefijo}D-OK`);
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana });
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Devolución',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [id],
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+
+    assert.equal(await estadoDe(id), 'Disponible');
+    const dev = (await movimientosDe(id)).find((m) => m.tipo === 'Devolución');
+    assert.equal(dev?.empleado_origen_id, ana);
+  });
+
+  it('sin modo, se comporta como antes: firmar', async () => {
+    // Un modo que muta datos no puede ser el implícito. Un equipo disponible y
+    // sin entrega previa tiene que dar el 409 de «no ocurrió», no asignarse.
+    const id = await equipo(`${suite.prefijo}SINMODO`);
+    const r = await c.post('/api/actas', { tipo: 'Entrega', empleado_id: ana, equipos: [id] });
+
+    assert.equal(r.estado, 409);
+    assert.match((r.cuerpo as { error: string }).error, /no hay ninguna asignación/i);
+    assert.equal(await estadoDe(id), 'Disponible', 'no movió nada');
+  });
+
+  it('el mismo equipo dos veces en el acta: 400 antes de mover nada', async () => {
+    const id = await equipo(`${suite.prefijo}REPE`);
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [id, id],
+    });
+    assert.equal(r.estado, 400);
+    assert.equal(await estadoDe(id), 'Disponible');
+  });
+
+  it('la auditoría dice por qué camino se emitió', async () => {
+    const id = await equipo(`${suite.prefijo}AUD5C`);
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [id],
+    });
+    const acta = (r.cuerpo as { acta: ActaLeida }).acta;
+
+    // Dos rastros por la misma petición: la mutación y la emisión.
+    assert.equal(await contarAuditoria(id, 'asignar'), 1, 'mutar() dejó el suyo');
+    const { filas } = await import('./ayuda.js').then((m) => m.auditoriaDe(acta.id, 'emitir_acta'));
+    assert.equal((filas[0].despues as { modo: string }).modo, 'ejecutar');
+  });
+
+  /**
+   * El corte, en la transacción nueva. Ver `matarConexionEnMedioDeEmitir`.
+   */
+  /** El del corte, compartido con el test siguiente. Por id y no por posición
+   *  en `creados`: insertar un test en medio movería el índice y el fallo
+   *  parecería del código. Ya pasó al escribir esta suite. */
+  let idDelCorte = '';
+
+  it('matar la conexión entre el movimiento y el acta no deja ni lo uno ni lo otro', async () => {
+    const id = await equipo(`${suite.prefijo}CORTE5C`);
+    idDelCorte = id;
+
+    const resultado = await matarConexionEnMedioDeEmitir(id, ana, admin.id);
+    assert.equal(resultado, 'conexión terminada', 'la conexión tenía que morir de verdad');
+
+    assert.equal(await estadoDe(id), 'Disponible', 'el equipo NO quedó asignado');
+    assert.equal((await movimientosDe(id)).length, 1, 'solo su Alta: no quedó movimiento suelto');
+    const actas = (await c.get(`/api/actas?empleado=${ana}`)).cuerpo as {
+      actas: { consecutivo: string }[];
+    };
+    assert.equal(
+      actas.actas.filter((a) => a.consecutivo === 'ACT-CORTE-9999').length,
+      0,
+      'no quedó acta suelta',
+    );
+  });
+
+  /**
+   * El filtro de la pantalla, por su lado del servidor. Los cuatro casos de la
+   * tabla modo × tipo dependen de esto para el modo `firmar`.
+   */
+  it('firmables ofrece lo pendiente de firmar, y deja de ofrecerlo al firmarlo', async () => {
+    const id = await equipo(`${suite.prefijo}FIRM`);
+    // Se asigna por el camino manual: queda una entrega sin papel.
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: luis });
+
+    const antes = (await c.get(`/api/actas/firmables?empleado=${luis}&tipo=Entrega`))
+      .cuerpo as { equipos: { id: string; movimiento_id: string }[] };
+    const mio = antes.equipos.find((e) => e.id === id);
+    assert.ok(mio, 'la entrega sin firmar tiene que ofrecerse');
+
+    // Y es el movimiento correcto: el mismo que elegiría al emitir.
+    const asignacion = (await movimientosDe(id)).find((m) => m.tipo === 'Asignación');
+    assert.equal(mio.movimiento_id, asignacion?.id);
+
+    // Se firma, y desaparece de la lista. Sin esto, la pantalla ofrecería una y
+    // otra vez algo que ya tiene acta y que daría 409.
+    assert.equal(
+      (await c.post('/api/actas', {
+        tipo: 'Entrega',
+        modo: 'firmar',
+        empleado_id: luis,
+        equipos: [id],
+      })).estado,
+      201,
+    );
+
+    const despues = (await c.get(`/api/actas/firmables?empleado=${luis}&tipo=Entrega`))
+      .cuerpo as { equipos: { id: string }[] };
+    assert.equal(
+      despues.equipos.filter((e) => e.id === id).length,
+      0,
+      'ya firmada: no se vuelve a ofrecer',
+    );
+  });
+
+  it('firmables no ofrece nada de una persona sin operaciones pendientes', async () => {
+    const r = (await c.get(`/api/actas/firmables?empleado=${ana}&tipo=Devolución`)).cuerpo as {
+      equipos: unknown[];
+    };
+    assert.deepEqual(r.equipos, []);
+  });
+
+  it('y después del corte el modo ejecutar sigue funcionando', async () => {
+    assert.ok(idDelCorte, 'el test del corte tiene que haber corrido antes');
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: ana,
+      equipos: [idDelCorte],
+    });
+    assert.equal(r.estado, 201, 'matar una conexión no puede dejar el pool inservible');
+    assert.equal(await estadoDe(idDelCorte), 'Asignado');
   });
 });
 

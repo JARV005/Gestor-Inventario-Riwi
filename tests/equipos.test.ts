@@ -163,6 +163,58 @@ describe('equipos: el alta escribe también su movimiento', () => {
     assert.equal(await estadoDe(id), 'Disponible', 'y el estado sigue donde estaba');
   });
 
+  /**
+   * Las notas del importador son el único rastro de lo que decía la hoja sobre
+   * los responsables que no eran personas, y `verificar-datos.sql` §A cuenta
+   * con ellas. Editar las notas no puede llevárselas por delante.
+   *
+   * Aquí se comprueba el contrato que la interfaz usa: el `PATCH` guarda lo que
+   * se le manda, así que quien parte y vuelve a unir el texto es `NotasEquipo`.
+   * Lo que este test fija es que la parte de origen SOBREVIVE a una edición
+   * hecha como la hace la vista.
+   */
+  it('editar las notas conserva el rastro del importador', async () => {
+    const r0 = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}NOTAS`,
+      estado: 'Disponible',
+      notas: 'USUARIO RESPONSABLE de origen: "POLIZA DE SEGURO"',
+    });
+    assert.equal(r0.estado, 201, JSON.stringify(r0.cuerpo));
+    const id = (r0.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+
+    // Lo que manda la vista al añadir una observación: las dos partes unidas.
+    const r = await c.patch(`/api/equipos/${id}`, {
+      notas: 'USUARIO RESPONSABLE de origen: "POLIZA DE SEGURO" | teclado en inglés',
+    });
+    assert.equal(r.estado, 200);
+
+    const { equipo } = (await c.get(`/api/equipos/${id}`)).cuerpo as {
+      equipo: { notas: string };
+    };
+    assert.match(equipo.notas, /POLIZA DE SEGURO/, 'el rastro del origen sigue ahí');
+    assert.match(equipo.notas, /teclado en inglés/);
+  });
+
+  it('las notas del alta llegan a la base', async () => {
+    // Existían en el esquema desde la 0000 y el formulario no podía escribirlas.
+    const r = await c.post('/api/equipos', {
+      categoria: 'Monitor',
+      etiqueta: `${suite.prefijo}NOTAS2`,
+      estado: 'Disponible',
+      notas: 'Llegó con el cable suelto',
+    });
+    assert.equal(r.estado, 201);
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+
+    const { equipo } = (await c.get(`/api/equipos/${id}`)).cuerpo as {
+      equipo: { notas: string | null };
+    };
+    assert.equal(equipo.notas, 'Llegó con el cable suelto');
+  });
+
   it('lo que el PATCH sí edita sigue funcionando', async () => {
     // Que el bloqueo de arriba no se haya llevado por delante la edición de la
     // ficha: sin esto, un `.omit()` de más pasaría los dos tests.
