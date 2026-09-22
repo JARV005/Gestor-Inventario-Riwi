@@ -14,9 +14,9 @@ cerró está abajo, en Resueltos.
 | Bandeja de revisión — 177 filas marcadas esperando a una persona | 1 |
 | Etapa 5f — el formato del acta | 3 |
 | Etapa 6 — dashboard, bandeja y flujos que faltan | 3 |
-| Etapa 7 — endurecimiento | 3 |
+| Etapa 7 — endurecimiento | 2 |
 | Sin etapa: no son decisiones de quien programa | 2 |
-| **Total** | **12** |
+| **Total** | **11** |
 
 La 5d se cerró con sus cuatro puntos **y sus pantallas**: los endpoints estaban
 desde antes, y un endpoint sin pantalla no es una etapa cerrada. Ver Resueltos.
@@ -321,17 +321,18 @@ verlos.
 
 ## Etapa 7 — endurecimiento
 
-### El alta y la edición de ficha no dejan rastro en `auditoria`
+### ~~El alta y la edición de ficha no dejan rastro en `auditoria`~~
 
-Venía de la etapa 3, donde solo escribía el desciframiento de BIOS. El §5 la
-exige para **toda escritura sobre `equipos`**.
+Cerrado al empezar la 5f-2, antes de tiempo: no esperaba a la etapa 7 porque
+toda la etapa 5 se apoya en que ninguna escritura queda sin auditar.
 
-**Medio cerrado en la etapa 5:** las seis mutaciones y la confirmación de
-traslado escriben su fila dentro de la misma transacción, y también la emisión
-de actas. Siguen sin dejar rastro el alta —cuyo equivalente hoy es su movimiento
-`Alta`— y el `PATCH` de la ficha, que desde la 5 ya no puede tocar estado,
-responsable ni sede (D19), así que lo que se le escapa es marca, modelo, notas
-y costo. Cerrar los dos aquí, con el resto del endurecimiento.
+Eran **cuatro** funciones y no las dos que decía esta entrada —`crear`,
+`actualizar`, `cerrarMotivo` y `fijarTenedor`—, y `db/repositorios/equipos.ts`
+no importaba siquiera el módulo. Las cuatro auditan ahora dentro de su
+transacción, y ninguna puede llamarse sin `ContextoEscritura`: quien escribe
+tiene que saber quién le llama.
+
+El detalle está arriba, en la sección de la etapa 5f.
 
 ### Rotar `ENCRYPTION_KEY` no tiene procedimiento
 
