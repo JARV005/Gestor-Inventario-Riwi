@@ -4,53 +4,170 @@ Cosas detectadas al construir, que no se arreglan donde se encontraron. Cada
 una dice a qué etapa pertenece. **No es una lista de deseos**: si algo entra
 aquí es porque ya sabemos que hay que hacerlo.
 
-Revisado al cerrar la etapa 5: **no queda ninguna entrada de la etapa 5 sin
+Revisado al cerrar la etapa 5d: **no queda ninguna entrada de la etapa 5 sin
 cerrar**. Lo que quedaba abierto se reasignó a la etapa que le toca, y lo que se
 cerró está abajo, en Resueltos.
 
 | Sección | Abiertas |
 |---|---|
-| Etapa 5d — CRUDs y campos que BBL pidió | 4 |
-| Etapa 6 — dashboard, bandeja y flujos que faltan | 4 |
+| Etapa 5e — la base se reconstruye desde los dos archivos nuevos | 0 |
+| Bandeja de revisión — 177 filas marcadas esperando a una persona | 1 |
+| Etapa 5f — el formato del acta | 3 |
+| Etapa 6 — dashboard, bandeja y flujos que faltan | 3 |
 | Etapa 7 — endurecimiento | 3 |
 | Sin etapa: no son decisiones de quien programa | 2 |
-| **Total** | **13** |
+| **Total** | **12** |
 
-La 5c se cerró: el acta ejecuta la operación, emite varios equipos de una vez y
-filtra según lo que se esté haciendo. Ver Resueltos.
+La 5d se cerró con sus cuatro puntos **y sus pantallas**: los endpoints estaban
+desde antes, y un endpoint sin pantalla no es una etapa cerrada. Ver Resueltos.
+La 5e abre con lo suyo propio en `decisiones-05.md`, no aquí: sus decisiones no
+son cosas detectadas al construir, son el encargo.
+
+---
+
+## Etapa 5f — el formato del acta
+
+### El texto de devolución espera aprobación de BBL
+
+**Es lo único de la 5f-1 que no está cerrado**, y no se puede cerrar aquí: no
+existe formato de devolución aprobado. El de entrega sí, y se adaptó lo mínimo.
+Mientras tanto, `plantilla_version` de las devoluciones dice `1-borrador` y el
+PDF lo lleva escrito en rojo en el pie.
+
+Esto es lo que BBL tiene que mirar. Las cláusulas 7.1–7.9 del formato aprobado
+están escritas para quien **recibe** y asume custodia; copiadas tal cual a una
+devolución dirían que la persona sigue obligada a custodiar equipos que acaba de
+entregar.
+
+**Qué se conservó, adaptado:**
+
+| Devolución | Sale de | Cambio |
+|---|---|---|
+| 1. Cese de la custodia | 7.1.a | Invertida: la original obliga a custodiar, aquí esa obligación **termina** |
+| 2. Estado de los activos devueltos | 7.2.b y 7.2.c | Las dos únicas del formato aprobado que hablan de devolver y no de recibir |
+| 3. Confidencialidad y tratamiento de la información | 7.7 | **Sin cambios.** Es la única obligación que sobrevive intacta: no termina al entregar el portátil |
+| 4. Responsabilidad por daño detectado en la recepción | 7.8 | Acotada a lo que aparezca en la verificación técnica, en vez de a pérdida y robo durante la custodia |
+
+**Qué se dejó fuera, y por qué:** 7.3 (custodia física y transporte), 7.4 (uso
+permitido), 7.5 (contraseñas), 7.6 (instalación de software) y 7.9 (no
+devolución). Las cinco hablan de una custodia que acaba de terminar, o —la
+última— de que el equipo no se devolvió, cuando el documento existe justamente
+porque sí se devolvió.
+
+**No se inventó ninguna cláusula nueva.** Cada una de las cuatro sale de una de
+las nueve.
+
+Y tres cambios más, que se ven al abrir el PDF:
+
+- La sección 6 certifica **recepción**, no entrega, y dice que la verificación
+  técnica es posterior.
+- El orden de las firmas se invierte: en una devolución quien entrega es el
+  usuario.
+- «Accesorios entregados» pasa a «Accesorios devueltos».
+
+Falta además decidir si una devolución necesita su propia lista de chequeo
+—borrado de datos, recuperación de la clave de BitLocker, cierre de cuenta—. En
+la 5f-2 se dejó **fuera** a propósito: inventar cuatro items para un documento
+legal es exactamente lo que no debe hacer quien programa. Hoy la devolución
+tiene siete secciones en vez de ocho.
+
+### ~~Escribir en `equipos` sin dejar rastro en `auditoria`~~
+
+Cerrado al empezar la 5f-2, antes del consecutivo.
+
+Eran **cuatro** funciones y no dos: `crear`, `actualizar`, `cerrarMotivo` y
+`fijarTenedor`. Ninguna de las cuatro auditaba, y `db/repositorios/equipos.ts`
+no importaba siquiera el módulo. Las cuatro escriben ahora en `auditoria`
+dentro de la misma transacción, con el patrón de `mutar`, y ninguna puede
+llamarse sin `ContextoEscritura` — quien escribe tiene que saber quién le
+llama.
+
+`actualizar` guarda solo los campos que de verdad cambiaron: volcar la fila
+entera haría que editar una nota registrara treinta columnas idénticas y que
+nadie viera de un vistazo qué se tocó.
+
+**La red que lo sostiene, en dos capas**, porque ninguna basta sola:
+
+- `api.test.ts` recorre `db/repositorios/equipos.ts`, busca las tres formas de
+  escribir con drizzle y exige que cada función que escriba mencione
+  `repoAuditoria.registrar`. Estático a propósito: un caso que ejercitara los
+  cuatro endpoints comprobaría los cuatro que existen hoy; este se pone rojo
+  con el quinto que alguien escriba. Falsificado retirando la auditoría de
+  `fijarTenedor`: falla nombrándola.
+- `equipos.test.ts` comprueba que la fila **llega** a `auditoria` al cerrar un
+  motivo y al fijar un tenedor. Sin esta, una llamada dentro de un `if` que
+  nunca se cumple pasaría la primera capa.
+
+El caso estático lleva además una guarda contra sí mismo: si detecta menos de
+cuatro funciones que escriben, falla. Sin ella, renombrar la tabla o cambiar de
+ORM lo dejaría en verde sin comprobar nada.
+
+### El acta dejó de imprimir el estado del equipo
+
+Lo destapó un test al ponerse rojo: «cambiar cualquier dato cambia el hash»
+fallaba al cambiar `condicion`, porque **el formato aprobado no tiene columna
+para el estado del equipo**. La plantilla anterior sí lo imprimía.
+
+No es un fallo del generador: es lo que BBL aprobó. La sección 4 tiene seis
+columnas fijas —tipo, marca/modelo, serie, propietario, accesorios y
+comentarios— y ninguna es el estado.
+
+Dos salidas, y ninguna se tomó porque las dos son decisión de BBL: que el
+estado vaya en «Comentarios» cuando exista, o que el acta no lo diga y se
+consulte en el inventario. Rellenar «Comentarios» por nuestra cuenta sería
+escribir en un documento legal algo que nadie pidió.
+
+### El `0000` está sin mirar con el número delante
+
+No bloquea: el sistema funciona así y es lo que se pidió. Queda anotado porque
+Johan quiere verlo en pantalla antes de que se emita la primera acta real, por si
+prefiere que la primera sea la `0001`.
+
+**La ventana se cierra con la primera acta.** Mientras las series estén vacías es
+un cambio de una línea; con actas emitidas deja de serlo, porque renumerar
+documentos firmados no es una opción y habría que convivir con dos criterios a la
+vez.
+
+Hoy las series están vacías: `actas_consecutivo` no tiene ninguna fila en
+desarrollo.
+
+### ~~El prefijo de `Sin clasificar` es `SC`~~
+
+Cerrado en la 5f-2 con **D42**: no hay prefijo porque no hay serie. Una persona
+sin empresa no puede recibir un acta, el formulario lo dice y ofrece el
+desplegable de dos opciones, y la API responde 409 a quien llegue por otro
+camino. El razonamiento con el que puse `SC` miraba al sistema —«que no
+bloquee»— en vez de al papel: `SC-0000` en la cabecera no le dice nada a quien
+firma.
+
+### El logo de BBL es de 176 × 98 px
+
+Sin prioridad. Se extrajo del PDF de referencia porque no hay archivo suelto, y
+a la escala a la que va en el acta da **200 dpi**: suficiente para una marca
+plana de dos colores, blando bajo lupa. Si algún día BBL encuentra el original
+vectorial, sustituirlo es cambiar el fichero de `assets/logos/` **y subir
+`plantilla_version`** (D39) — los bytes del logo están dentro del hash.
 
 ---
 
-## Etapa 5d — lo que BBL pidió y no es del generador de actas
+## Bandeja de revisión — no es deuda de código
 
-### CRUD de colaboradores
+### 177 de 305 filas marcadas, y ya se pueden cerrar
 
-Crear y editar desde la interfaz. Desactivar ya existe, con su 409 de equipos a
-cargo. **Borrar no**, por lo mismo que los usuarios (D18): se desactiva.
+La 5e dejó la bandeja con 27 bloques. **No es una entrada de trabajo de
+programación**: el mecanismo está terminado —cada motivo se cierra desde la
+ficha, y el último baja la marca— y lo que falta es que alguien mire los datos.
 
-### CRUD de mantenimiento
+Se apunta aquí porque un número así se normaliza si nadie lo escribe en ninguna
+parte, y porque los tres bloques grandes son de una sola tarde:
 
-Hoy la vista solo lee. Falta registrar un parte, cambiar su estado y cerrarlo.
-Con una pregunta abierta que hay que decidir antes de escribir: **enviar un
-equipo a mantenimiento, ¿es una mutación con su movimiento, como las seis?** El
-estado `En mantenimiento` existe en el enum desde la 0000 y hoy **no hay forma
-de llegar a él** — `ESTADOS_SIN_OPERACION` lo dice desde la etapa 5.
+- `SECRETO_NO_ES_SECRETO` (114) — recuperar las claves de Windows reales, o
+  confirmar que esos equipos no tienen.
+- `LICENCIA_OK` (37) — clasificar los 37 «OK» como RETAIL, OEM, Sin licencia o
+  No aplica. Es el bloque que la etapa 2 ya identificó y sigue igual.
+- `SIN_SERIAL` (27) — leer el serial de la etiqueta física.
 
-### `empresa` en colaboradores (RIWI / BBL Labs)
-
-Columna nueva, enum con `Sin clasificar` por defecto, y filtro en la vista.
-
-**El conteo de sin clasificar tiene que verse**, como la bandeja de revisión de
-equipos. Si es solo un valor más del desplegable, los 113 se quedan así para
-siempre: es el mismo mecanismo que dejó 37 equipos en «licencia OK» hasta que la
-bandeja los puso delante.
-
-### Dirección obligatoria para la sede Remoto
-
-Avisar, no bloquear: hay empleados ya cargados sin ella y un CHECK los dejaría
-sin poder editarse. Aviso visible en el formulario y en la ficha.
-
----
+Los tres suman 178 de los 296 motivos. El resto son bloques de menos de 25.
 
 ---
 
@@ -59,17 +176,17 @@ sin poder editarse. Aviso visible en el formulario y en la ficha.
 Las dos esperan a una persona o a un hecho, no a que alguien escriba código.
 Ponerles número de etapa sería fingir que se pueden planificar.
 
-### El texto del acta está sin revisar por legal
+### ~~El texto del acta está sin revisar por legal~~ — la mitad, cerrada
 
-**Al día tras la 5b.** El acta se registra, se genera su PDF y se descarga desde
-`HandoverDocumentView`. El `TODO(5)` ya no existe en el código.
+**BBL aprobó el formato de ENTREGA.** El texto ya no es un borrador escrito a
+partir de la plantilla del prototipo: son las nueve cláusulas del formato que
+BBL trajo, literales, y viven en `db/acta-formato.ts` con
+`PLANTILLA_VERSION.Entrega = '1'`. El aviso de borrador desapareció de las actas
+de entrega.
 
-**Lo que queda no es código.** Las cláusulas de `db/acta-pdf.ts` son un borrador
-escrito a partir de la plantilla de abajo, y nadie de la organización las ha
-revisado. Mientras `PLANTILLA_VERSION` diga `borrador`, el PDF lo imprime en su
-pie y la vista lo avisa en pantalla. Cambiar esa constante quita el aviso de los
-dos sitios a la vez, y **es lo último que hay que hacer**, cuando quien vaya a
-firmar el acta haya dado el visto bueno.
+**La otra mitad sigue abierta** y está arriba, en la 5f: no hay formato de
+devolución aprobado, así que se adaptó del de entrega y sus actas siguen
+diciendo `1-borrador` con el aviso en rojo.
 
 Hay dos actas de ejemplo con datos inventados en `data/origen/`
 (`acta-ejemplo-entrega.pdf` y `acta-ejemplo-devolucion.pdf`) para poder
@@ -170,32 +287,6 @@ qué haga la empresa con el papel, y eso no se puede adivinar desde aquí.
 
 ## Etapa 6 — dashboard, bandeja y flujos que faltan
 
-### BUG — «Reasignar» no reasigna: abre un modal que solo sabe asignar
-
-**Es un defecto, no una decisión abierta.** El botón existe, se pulsa, y la
-operación que promete no ocurre.
-
-`InventoryView` tiene un botón **Reasignar** sobre un equipo concreto. Abre
-`OnboardingModal` sin pasarle nada, así que el asistente empieza de cero. Y como
-el asistente solo lista equipos `Disponible` o `Reservado` —los únicos que se
-pueden asignar—, el equipo desde el que se pulsó **no aparece en su
-desplegable**. Quien pulsa Reasignar sobre un portátil asignado se encuentra un
-formulario en el que ese portátil no está.
-
-**Qué falta.** Reasignar es `devolver` + `asignar`: dos mutaciones, las dos
-existen desde la etapa 5, y la operación compuesta no existe en ninguna parte.
-Necesita además la pregunta que hoy nadie hace —«¿lo devolvió de verdad?»—,
-porque la devolución es un hecho físico y no un paso de formulario.
-
-`Offboarding` era el otro caso de este mismo bug y ya está cerrado: tiene su
-propio modal (`OffboardingModal`), que devuelve en vez de asignar.
-
-**Atenuante desde que existen los botones del detalle:** hoy la operación se
-puede hacer, aunque no desde este botón. Desde el detalle del equipo salen
-«Registrar devolución» y luego «Asignar a alguien», que son exactamente las dos
-mitades de reasignar. Lo que falta es el atajo, no la capacidad — por eso es
-etapa 6 y no un bloqueo.
-
 ### El importador dejará de poder reimportar
 
 Hoy la única forma de rehacer una carga es `npm run db:reset`, porque
@@ -266,6 +357,57 @@ cuyos campos cifrados no se pueden leer está restaurada solo a medias, y el
 ---
 
 ## Resueltos
+
+### ~~BUG — «Reasignar» no reasigna~~
+
+Cerrado. Era el último defecto marcado como BUG.
+
+`reasignar` es la **undécima operación** y la única compuesta: `devolver` +
+`asignar`, las dos en la misma transacción y **con sus dos movimientos**. Un
+atajo que escribiera uno solo —«Reasignación»— se comería la devolución, y el
+historial es lo único que justifica el proyecto.
+
+La composición va como **campo de la tabla de transiciones** (`compuesta`), no
+como un `if` en el endpoint: es la misma lección que `disparo`. Quien lea la
+fila ve que son dos movimientos, y `mutar` los ejecuta porque lo dice la tabla.
+Cada mitad pasa por su comprobación de transición, su `FOR UPDATE`, su
+movimiento y su fila de auditoría.
+
+Tres cosas que el atajo NO se salta:
+
+- **La pregunta.** «El equipo ya volvió de X» es una casilla que hay que marcar
+  antes de que el desplegable se active. Devolver es un hecho físico, no un paso
+  de formulario, y sin la casilla el historial afirmaría una entrega que quizá
+  no ocurrió.
+- **La persona distinta.** Reasignar a quien ya lo tiene da 400 y no escribe
+  nada: serían dos movimientos que no cuentan nada.
+- **La atomicidad.** Si la segunda mitad falla, la primera se deshace. Hay un
+  caso que lo prueba con un empleado inexistente: el equipo NO se queda
+  devuelto a medias.
+
+Y se retiraron los dos cabos muertos: `handleReasignar` en `App`, que abría el
+asistente de onboarding, y la prop `onReasignar` de `InventoryView`, que ya no
+la usaba nadie desde que la vista se reescribió.
+
+### ~~Etapa 5d — lo que BBL pidió y no es del generador de actas~~
+
+Los cuatro, con pantalla:
+
+- **CRUD de colaboradores.** Alta y edición en `EmployeesView`, con su
+  formulario. Borrar sigue sin existir (D18): se desactiva, y ese botón ya
+  estaba.
+- **CRUD de mantenimiento.** `MaintenanceView` deja de ser de solo lectura:
+  abre partes con buscador de equipo, mueve el parte entre los tres estados
+  abiertos y lo cierra preguntando el desenlace, sin valor por defecto (D29).
+- **`empresa` en colaboradores**, con filtro y **el conteo de «Sin clasificar»
+  arriba y de un clic**, no escondido en un desplegable.
+- **Dirección para la sede Remoto**: aviso en la tarjeta y en el formulario. La
+  condición es `sede.ciudad IS NULL`, no el nombre «Remoto» — vale para
+  cualquier sede que tampoco sea una oficina.
+
+Y una cosa que no estaba en la lista y salió al conectar las pantallas: el
+catálogo ofrecía «Enviar a mantenimiento» como botón y esa ruta no existía. Ver
+D29, subsección «El catálogo prometía un botón que no existía».
 
 ### ~~Etapa 5c — el acta de varios equipos, y el doble paso~~
 

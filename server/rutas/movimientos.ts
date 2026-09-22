@@ -1,5 +1,5 @@
 /**
- * Las seis mutaciones de estado de un equipo, y su historial. Etapa 5.
+ * Las seis mutaciones directas de estado de un equipo, y su historial. Etapa 5.
  *
  *   POST /api/equipos/:id/asignar    Disponible|Reservado -> Asignado
  *   POST /api/equipos/:id/devolver   Asignado             -> Disponible
@@ -8,6 +8,10 @@
  *   POST /api/equipos/:id/baja       Disponible|Reservado|En mantenimiento -> De baja
  *   POST /api/equipos/:id/trasladar  no cambia el estado; abre el traslado
  *   GET  /api/equipos/:id/historial  con nombres, no con UUIDs
+ *
+ * `enviar_mantenimiento` y `retornar_mantenimiento` NO están aquí: las
+ * dispara el flujo de partes (D29), y por eso llevan `disparo: 'parte'` en
+ * la tabla. El bucle de abajo registra solo las directas.
  *
  * Y el cierre del traslado, que es lo único que se puede tocar de un
  * movimiento ya escrito:
@@ -25,8 +29,13 @@ import { z } from 'zod';
 
 import * as repoEquipos from '../../db/repositorios/equipos.js';
 import * as repoMovimientos from '../../db/repositorios/movimientos.js';
-import { estadoEquipo } from '../../db/esquema.js';
-import { catalogoTransiciones, TransicionIlegal, type Operacion } from '../../db/transiciones.js';
+import { estadoEquipo, prestatario } from '../../db/esquema.js';
+import {
+  catalogoTransiciones,
+  OPERACIONES_DIRECTAS,
+  TransicionIlegal,
+  type Operacion,
+} from '../../db/transiciones.js';
 import { guardian } from '../autenticar.js';
 import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
 import { ruta } from '../permisos.js';
@@ -38,6 +47,9 @@ const uuid = z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-
 const esquemaMutacion = z.object({
   empleado_id: uuid.nullable().optional(),
   sede_destino_id: uuid.nullable().optional(),
+  // El valor sale del enum de la base, no de una lista escrita aquí: es la
+  // misma razón por la que `Operacion` dejó de estar copiado en el frontend.
+  prestado_a: z.enum(prestatario.enumValues).nullable().optional(),
   observaciones: z.string().trim().max(2000).nullable().optional(),
   transportadora: z.string().trim().max(120).nullable().optional(),
   guia: z.string().trim().max(120).nullable().optional(),
@@ -90,7 +102,7 @@ function traducir(e: unknown): never {
   throw e;
 }
 
-/** Registra las seis. Idénticas salvo la operación: no hay seis copias. */
+/** Registra las directas. Idénticas salvo la operación: no hay seis copias. */
 function registrarMutacion(app: Express, operacion: Operacion): void {
   ruta(
     app,
@@ -122,14 +134,10 @@ function registrarMutacion(app: Express, operacion: Operacion): void {
 }
 
 export function registrarRutasMovimientos(app: Express): void {
-  for (const op of [
-    'asignar',
-    'devolver',
-    'reservar',
-    'liberar',
-    'baja',
-    'trasladar',
-  ] as const satisfies readonly Operacion[]) {
+  // La lista sale de la tabla, no de aquí. Escrita a mano, añadir una
+  // operación con `disparo: 'directa'` y olvidarse de esta línea daría un 404
+  // en un botón que el propio catálogo dice que existe.
+  for (const op of OPERACIONES_DIRECTAS) {
     registrarMutacion(app, op);
   }
 

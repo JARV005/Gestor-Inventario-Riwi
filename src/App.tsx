@@ -74,7 +74,6 @@ export function App() {
   };
 
   const handleSolicitarMantenimiento = () => setActiveTab('maintenance');
-  const handleReasignar = () => setIsOnboardingModalOpen(true);
 
   /**
    * Un estado sin filas no viene en `por_estado` —`GROUP BY` no devuelve grupos
@@ -136,7 +135,6 @@ export function App() {
               onOpenNewDeviceModal={() => setIsNewDeviceModalOpen(true)}
               onGenerarActa={handleGenerarActa}
               onSolicitarMantenimiento={handleSolicitarMantenimiento}
-              onReasignar={handleReasignar}
               onEquipoMutado={recargarResumen}
             />
           )}

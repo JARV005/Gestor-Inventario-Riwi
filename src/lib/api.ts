@@ -11,12 +11,18 @@ import type {
   ActaEmitida,
   ActaResumen,
   CatalogoTransiciones,
+  DatosEmpleado,
+  EstadoParteAbierto,
+  Mantenimiento,
   EmpleadoConConteo,
   EquipoFirmable,
   EquipoConMotivos,
   EquipoResumen,
   MantenimientoConEquipo,
+  CierreEnBloque,
+  ItemChequeo,
   Movimiento,
+  Prestatario,
   ModoActa,
   MovimientoConNombres,
   NuevoEquipo,
@@ -105,6 +111,8 @@ export interface FiltrosEquipos {
   estado?: string;
   categoria?: string;
   sede?: string;
+  /** Incluye lo que esa empresa tiene PRESTADO, no solo lo suyo (D31). */
+  empresa?: string;
   q?: string;
   motivo?: string;
   pagina?: number;
@@ -134,7 +142,12 @@ export const api = {
       if (v !== undefined && v !== '' && v !== null) p.set(k, String(v));
     }
     const cadena = p.toString();
-    return pedir<Pagina<EquipoConMotivos> & { conteos: ConteoMotivo[] }>(
+    return pedir<
+      Pagina<EquipoConMotivos> & {
+        conteos: ConteoMotivo[];
+        conteos_empresa: Record<string, number>;
+      }
+    >(
       `/api/equipos/revision${cadena ? `?${cadena}` : ''}`,
     );
   },
@@ -145,8 +158,23 @@ export const api = {
       if (v !== undefined && v !== '' && v !== null) p.set(k, String(v));
     }
     const cadena = p.toString();
-    return pedir<Pagina<EquipoConMotivos>>(`/api/equipos${cadena ? `?${cadena}` : ''}`);
+    return pedir<Pagina<EquipoConMotivos> & { conteos_empresa: Record<string, number> }>(
+      `/api/equipos${cadena ? `?${cadena}` : ''}`,
+    );
   },
+
+  /** Cerrar un motivo de la bandeja. Con el último, la marca baja sola. */
+  cerrarMotivo: (equipoId: string, codigo: string) =>
+    pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${equipoId}/motivos/${codigo}`, {
+      method: 'DELETE',
+    }),
+
+  /** Quién tiene en la mano un equipo prestado. Solo si está Prestado. */
+  fijarTenedor: (equipoId: string, empleado_id: string | null) =>
+    pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${equipoId}/tenedor`, {
+      method: 'POST',
+      body: JSON.stringify({ empleado_id }),
+    }),
 
   equipo: (id: string) => pedir<{ equipo: EquipoConMotivos }>(`/api/equipos/${id}`),
 
@@ -173,8 +201,78 @@ export const api = {
       body: JSON.stringify(datos),
     }),
 
-  empleados: (f: { q?: string; sede?: string; activo?: boolean; pagina?: number; porPagina?: number } = {}) =>
-    pedir<Pagina<EmpleadoConConteo>>(`/api/empleados${consulta(f)}`),
+  /**
+   * El listado trae además `conteos_empresa`, con las tres claves siempre —
+   * incluida «Sin clasificar» en cero si no queda ninguna. Es lo que hace que
+   * las 113 sin revisar se vean sin ir a buscarlas (D28).
+   */
+  empleados: (
+    f: {
+      q?: string;
+      sede?: string;
+      empresa?: string;
+      activo?: boolean;
+      pagina?: number;
+      porPagina?: number;
+    } = {},
+  ) =>
+    pedir<Pagina<EmpleadoConConteo> & { conteos_empresa: Record<string, number> }>(
+      `/api/empleados${consulta(f)}`,
+    ),
+
+  crearEmpleado: (datos: DatosEmpleado) =>
+    pedir<{ empleado: EmpleadoConConteo }>('/api/empleados', {
+      method: 'POST',
+      body: JSON.stringify(datos),
+    }),
+
+  /**
+   * Cierra un motivo en todo su bloque. Devuelve cuántas entraron y, con
+   * nombre, las que no.
+   */
+  cerrarMotivoEnBloque: (motivo: string, nota: string | null) =>
+    pedir<CierreEnBloque>('/api/equipos/revision/cerrar-en-bloque', {
+      method: 'POST',
+      body: JSON.stringify({ motivo, nota }),
+    }),
+
+  actualizarEmpleado: (id: string, cambios: Partial<DatosEmpleado>) =>
+    pedir<{ empleado: EmpleadoConConteo }>(`/api/empleados/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(cambios),
+    }),
+
+  /**
+   * Abrir un parte manda el equipo al taller: las dos cosas en una sola
+   * transacción del lado del servidor (D29).
+   */
+  abrirParte: (datos: {
+    equipo_id: string;
+    tipo: string;
+    descripcion?: string | null;
+    responsable?: string | null;
+    proveedor?: string | null;
+  }) =>
+    pedir<{ parte: Mantenimiento }>('/api/mantenimientos', {
+      method: 'POST',
+      body: JSON.stringify(datos),
+    }),
+
+  actualizarParte: (
+    id: string,
+    cambios: { estado?: EstadoParteAbierto; descripcion?: string | null; proveedor?: string | null; costo?: string | null },
+  ) =>
+    pedir<{ parte: Mantenimiento }>(`/api/mantenimientos/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(cambios),
+    }),
+
+  /** Cerrar es un gesto: cierra el parte y saca el equipo del taller. */
+  cerrarParte: (id: string, desenlace: 'retorno' | 'baja') =>
+    pedir<{ parte: Mantenimiento }>(`/api/mantenimientos/${id}/cerrar`, {
+      method: 'POST',
+      body: JSON.stringify({ desenlace }),
+    }),
 
   equiposDe: (id: string) =>
     pedir<{ equipos: EquipoResumen[] }>(`/api/empleados/${id}/equipos`),
@@ -222,7 +320,27 @@ export const api = {
    * diferencia entre ellas está en el servidor, no aquí: si esta capa supiera
    * qué hace cada una, sería otra copia de la tabla de transiciones.
    */
-  operacionSimple: (equipoId: string, operacion: 'reservar' | 'liberar' | 'baja') =>
+  /**
+   * Reasignar es `devolver` + `asignar`: dos movimientos en una transacción.
+   * La composición la decide la tabla del servidor, no esta llamada.
+   */
+  reasignar: (equipoId: string, empleado_id: string, observaciones?: string | null) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/reasignar`,
+      { method: 'POST', body: JSON.stringify({ empleado_id, observaciones }) },
+    ),
+
+  /** Prestar exige a quién. El servidor responde 400 si falta (D32). */
+  prestar: (equipoId: string, prestado_a: Prestatario) =>
+    pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
+      `/api/equipos/${equipoId}/prestar`,
+      { method: 'POST', body: JSON.stringify({ prestado_a }) },
+    ),
+
+  operacionSimple: (
+    equipoId: string,
+    operacion: 'reservar' | 'liberar' | 'baja' | 'recuperar_prestamo',
+  ) =>
     pedir<{ equipo: EquipoConMotivos; movimiento: Movimiento }>(
       `/api/equipos/${equipoId}/${operacion}`,
       { method: 'POST', body: '{}' },
@@ -248,6 +366,12 @@ export const api = {
     empleado_id: string;
     equipos: string[];
     observaciones?: string | null;
+    /**
+     * La sección 5 (D41). Los cuatro items van SIEMPRE en las entregas, con
+     * `instalado: null` en lo que nadie contestó: el PDF pinta las cuatro
+     * filas y la instantánea tiene que decir lo mismo que el documento.
+     */
+    chequeo?: ItemChequeo[] | null;
   }) =>
     pedir<{ acta: ActaEmitida }>('/api/actas', {
       method: 'POST',

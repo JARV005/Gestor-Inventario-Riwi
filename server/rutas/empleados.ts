@@ -9,7 +9,7 @@ import type { Express } from 'express';
 import { z } from 'zod';
 
 import * as repoEmpleados from '../../db/repositorios/empleados.js';
-import { estadoEmpleado } from '../../db/esquema.js';
+import { empresaEmpleado, estadoEmpleado } from '../../db/esquema.js';
 import { guardian } from '../autenticar.js';
 import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
 import { ruta } from '../permisos.js';
@@ -28,6 +28,7 @@ const campos = z.object({
   estado: z.enum(estadoEmpleado.enumValues).optional(),
   telefono: z.string().trim().max(60).nullable().optional(),
   direccion: z.string().trim().max(300).nullable().optional(),
+  empresa: z.enum(empresaEmpleado.enumValues).optional(),
   activo: z.boolean().optional(),
 });
 
@@ -37,6 +38,7 @@ const esquemaActualizar = campos.partial();
 const esquemaFiltros = z.object({
   q: z.string().trim().max(120).optional(),
   sede: uuid.optional(),
+  empresa: z.enum(empresaEmpleado.enumValues).optional(),
   activo: z
     .enum(['true', 'false'])
     .transform((v) => v === 'true')
@@ -63,7 +65,15 @@ export function registrarRutasEmpleados(app: Express): void {
     'autenticado',
     guardian,
     asincrono(async (req, res) => {
-      res.json(await repoEmpleados.listar(validar(esquemaFiltros, req.query)));
+      const f = validar(esquemaFiltros, req.query);
+      // El conteo por empresa viaja con el listado, igual que los conteos por
+      // motivo de la bandeja: es lo que hace que las «Sin clasificar» se vean
+      // sin tener que ir a buscarlas (D28).
+      const [pagina, conteos] = await Promise.all([
+        repoEmpleados.listar(f),
+        repoEmpleados.conteoPorEmpresa(),
+      ]);
+      res.json({ ...pagina, conteos_empresa: conteos });
     }),
   );
 

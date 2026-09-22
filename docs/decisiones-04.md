@@ -581,3 +581,156 @@ más antiguo porque aquel no tiene acta llevaría a un 409 inexplicable.
 **En pantalla los modos no se llaman así.** Se llaman «entregar ahora» y
 «registrar una entrega ya hecha». Quien entrega un portátil no tiene por qué
 saber qué es firmar contra un movimiento.
+
+---
+
+## D28. `empresa` en empleados, y por qué el conteo tiene que verse
+
+Columna nueva con enum `RIWI` / `BBL Labs` / `Sin clasificar`, y los 113
+cargados del Excel quedan en la tercera.
+
+**`Sin clasificar` no es un hueco de datos: es una tarea pendiente.** Nadie ha
+dicho todavía de quién es cada persona, y poner `RIWI` por defecto sería
+inventarlo para 113 filas de golpe — la regla 3 del proyecto.
+
+Lo que evita que se queden así para siempre no es la columna, es que **el conteo
+se vea**, como la bandeja de revisión de equipos. Un valor más en un desplegable
+no lo mira nadie: es el mismo mecanismo que dejó 37 equipos en «licencia OK»
+hasta que la bandeja los puso delante. Por eso `GET /api/empleados` devuelve
+`conteos_empresa` junto al listado, con las tres claves siempre —incluida
+`Sin clasificar` en cero si algún día no queda ninguna—, y la vista lo pinta
+arriba con un filtro de un clic.
+
+Que la clave no desaparezca al llegar a cero importa: `GROUP BY` no devuelve
+grupos vacíos, y sin rellenarla la interfaz no podría distinguir «ninguna» de
+«no se pudo contar».
+
+---
+
+## D29. Mantenimiento: dos operaciones más, y cerrar es un solo gesto
+
+`Envío a mantenimiento` y `Retorno de mantenimiento` son la **séptima y octava
+operación**, con su movimiento, y las dispara el flujo de partes.
+
+La alternativa —que el parte cambiara `equipos.estado` por su cuenta— reabriría
+exactamente la puerta que D19 cerró: un equipo cambiando de estado sin dejar
+movimiento. Cerrar el `PATCH` de equipos costó una decisión entera; dejar entrar
+lo mismo por la puerta del taller sería deshacerla.
+
+**Con esto `ESTADOS_SIN_OPERACION` queda vacío**, y ese es el criterio de que el
+modelo está completo: cada estado del enum tiene entrada y salida. Hubo dos
+huecos, `Reservado` (D17) y `En mantenimiento`, y los dos se descubrieron tarde.
+La constante se queda aunque esté vacía, con un caso que la comprueba: es lo que
+hará visible el tercero.
+
+`Asignado` queda fuera de `enviar_mantenimiento`, igual que en `baja` y por el
+mismo argumento: un equipo que se va al taller no está en las manos de la
+persona a la que figura asignado.
+
+### Cerrar el parte devuelve el equipo — un gesto, no dos
+
+Era la pregunta abierta, y la respuesta estaba en el enum desde la 0000:
+**`Completado` y `Devuelto` ya eran estados distintos**. El taller termina antes
+de que el equipo vuelva al armario, y ese paso intermedio ya tiene su propio
+estado. No hace falta un segundo botón: hace falta que el que existe no deje el
+equipo a medias.
+
+Así que cerrar cierra el parte **y** saca el equipo del taller, en la misma
+transacción. Un equipo que vuelve y se queda en `En mantenimiento` porque
+alguien cerró el parte sin devolverlo es un equipo perdido con pasos extra: el
+inventario diría que está en el taller, el taller diría que lo entregó, y nadie
+sabría cuál de los dos mira mal.
+
+**Dos desenlaces, y `desenlace` es obligatorio sin valor por defecto.** La
+pregunta «¿volvió, o no tenía arreglo?» solo la puede contestar quien lo tiene
+delante:
+
+  - `retorno` → `Retorno de mantenimiento`, el equipo queda `Disponible`.
+  - `baja` → `Baja`, el equipo queda `De baja`, y el parte cierra como
+    `Baja tras revisión` (valor nuevo del enum, 0011).
+
+El segundo existe porque sin él, dar de baja un equipo irreparable obligaría a
+cerrarlo como devuelto —dejando un portátil muerto en `Disponible`— y darlo de
+baja después. El inventario se puede leer en ese minuto.
+
+`PATCH /api/mantenimientos/:id` **rechaza `estado: 'Devuelto'` con 409** y dice
+por dónde va: cerrar mueve el equipo, y no puede entrar por una ruta cuyo nombre
+no lo diga.
+
+Y un parte cerrado no se reabre. Si el equipo vuelve al taller, se abre otro:
+`idx_mantenimientos_abierto` garantiza que solo haya uno abierto por equipo, la
+misma forma que el traslado abierto (D13).
+
+---
+
+### El catálogo prometía un botón que no existía
+
+Descubierto al conectar las pantallas, no al escribir el servidor. Va aquí y no
+como decisión propia porque es la misma de D29 terminada: las dos operaciones
+las dispara el flujo de partes, y eso hasta ahora estaba escrito en prosa.
+
+`AccionesEquipo` no lee prosa. Pinta un botón por cada operación de
+`catalogo.por_estado[estado]`, y `por_estado` sale de `TRANSICIONES`. Así que
+todo equipo `Disponible` mostraba **«Enviar a mantenimiento», y pulsarlo daba
+404**: la ruta no existía, porque el bucle de `registrarRutasMovimientos`
+llevaba las seis escritas a mano.
+
+Tres cosas que debían coincidir estaban en tres sitios:
+
+| Hecho | Dónde vivía |
+|---|---|
+| la operación existe y es legal desde X | `TRANSICIONES` |
+| la operación tiene endpoint | lista literal en `registrarRutasMovimientos` |
+| la operación se pinta como botón | «todo lo de `por_estado`», en el cliente |
+
+`disparo: 'directa' | 'parte'` las vuelve una sola. El bucle de rutas recorre
+`OPERACIONES_DIRECTAS`, derivada del campo; el catálogo lo expone; y
+`AccionesEquipo` parte `por_estado` en las que pinta como botón y las que
+anuncia con una frase que dice dónde se hacen. **Las de `parte` se siguen
+enseñando**: callarlas dejaría `En mantenimiento` sin explicación visible desde
+el equipo, que es el hueco contrario y no mejor.
+
+El caso que lo habría cazado está en `movimientos.test.ts`: recorre el catálogo
+y comprueba que cada `directa` responde algo distinto de 404 y que cada `parte`
+responde 404. Se comprobó por los dos lados desincronizando a mano el catálogo
+de las rutas, y sale en rojo con el nombre de la operación en el mensaje.
+
+### El tipo `Operacion` del frontend era una copia, y se separó en silencio
+
+`src/types.ts` tenía las seis escritas a mano. La 5d añadió dos a la tabla y esa
+copia no se enteró: `tsc --noEmit` siguió en verde mientras el servidor devolvía
+ocho y el cliente creía en seis. Ahora se re-exporta de `db/transiciones.ts`.
+
+Lo llamativo es que el aviso ya estaba puesto, en el propio fichero que falló:
+el comentario de `Transicion.etiqueta` explica que una lista de operaciones en
+el frontend «sería una segunda tabla de transiciones que se desincroniza en
+silencio». Lo decía de las etiquetas. Ocurrió en el tipo.
+
+**Lo que falló no fue el criterio, fue el alcance.** `src/types.ts` declara en su
+cabecera que se deriva del esquema y no se escribe a mano; `Operacion` era la
+única excepción y nadie la contó como tal.
+
+### Y un 409 que no se alcanzaba
+
+`PATCH /api/mantenimientos/:id` con `estado: 'Devuelto'` debía dar 409 diciendo
+que cerrar va por su ruta. Daba **400**: la validación de zod corría antes, y
+`esquemaActualizar` solo admite los tres estados abiertos, así que el 409 moría
+sin ejecutarse. Otra vez código correcto e inalcanzable. La comprobación va
+ahora antes de validar, y cubre los **dos** estados de cierre —`Baja tras
+revisión` tenía el mismo problema y no estaba probado.
+
+---
+
+## D30. La dirección de la sede Remoto se avisa, no se exige
+
+Un colaborador en sede Remoto necesita dirección: no hay oficina a la que
+mandarle el equipo. Pero **no va como CHECK**.
+
+Hay empleados ya cargados del Excel sin dirección, y una constraint los dejaría
+sin poder editarse ni siquiera para corregir otra cosa —el `UPDATE` fallaría por
+un campo que quien edita quizá no conoce—. Peor: convertiría un dato que falta
+en un bloqueo para arreglar el resto de la ficha.
+
+El aviso va en el formulario y en la ficha, que es donde alguien puede hacer
+algo al respecto. Es la misma forma que el aviso de «equipo en otra sede» al
+emitir un acta (D27): decir lo que falta sin impedir el trabajo.

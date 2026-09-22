@@ -23,8 +23,11 @@ import {
   Cliente,
   comprobarBaseDeTest,
   contarEquiposConEtiqueta,
+  contarAuditoria,
   crearEmpleado,
   estadoDe,
+  licenciaTipoDe,
+  marcarEquipo,
   movimientosDe,
   primeraSede,
   type Servidor,
@@ -349,5 +352,409 @@ describe('equipos: el resumen cuenta en Postgres', () => {
       despues.por_estado.find((e) => e.estado === 'Disponible')?.equipos ?? 0,
       disponiblesAntes + 1,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// La bandeja se vacía: cerrar motivos y fijar quién tiene un préstamo (5e)
+// ---------------------------------------------------------------------------
+//
+// Los casos se escriben desde `docs/decisiones-05.md`, no desde el código: D31
+// dice que el filtro de una empresa incluye lo que tiene PRESTADO, y el encargo
+// de la interfaz dice que `PROPIEDAD_AMBIGUA` y `RESPONSABLE_EN_CONFLICTO`
+// tienen que ser resolubles y no solo visibles.
+
+describe('bandeja: los motivos se cierran, y el último baja la marca', () => {
+  const suite = ambito('bandeja');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    empleado = await crearEmpleado(`${suite.prefijo}tenedor`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  /** Un equipo con los motivos que se le pidan, ya marcado. */
+  const marcado = async (etiqueta: string, motivos: string[], serial?: string) => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta,
+      serial: serial ?? `SN-${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sedeA,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    await marcarEquipo(id, motivos);
+    return id;
+  };
+
+  it('cerrar un motivo de varios lo quita y deja la marca puesta', async () => {
+    const id = await marcado(`${suite.prefijo}B1`, ['PROPIEDAD_AMBIGUA', 'SIN_MARCA']);
+
+    const r = await c.pedir('DELETE', `/api/equipos/${id}/motivos/PROPIEDAD_AMBIGUA`);
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const { equipo } = r.cuerpo as {
+      equipo: { motivos_revision: string[]; requiere_revision: boolean };
+    };
+    assert.deepEqual(equipo.motivos_revision, ['SIN_MARCA']);
+    assert.equal(equipo.requiere_revision, true, 'queda uno: la marca sigue');
+
+    // El caso estático de `api.test.ts` comprueba que la LLAMADA está escrita.
+    // Este comprueba que la fila LLEGA. Hacen falta los dos: una llamada dentro
+    // de un  que nunca se cumple pasaría el primero y fallaría este.
+    assert.equal(await contarAuditoria(id, 'cerrar_motivo'), 1);
+  });
+
+  it('cerrar el ULTIMO baja la marca, que es el mismo hecho', async () => {
+    const id = await marcado(`${suite.prefijo}B2`, ['PROPIEDAD_AMBIGUA']);
+
+    const r = await c.pedir('DELETE', `/api/equipos/${id}/motivos/PROPIEDAD_AMBIGUA`);
+    assert.equal(r.estado, 200);
+
+    const { equipo } = r.cuerpo as {
+      equipo: { motivos_revision: string[]; requiere_revision: boolean };
+    };
+    assert.deepEqual(equipo.motivos_revision, []);
+    assert.equal(equipo.requiere_revision, false, 'sin motivos no hay marca (0006)');
+  });
+
+  it('cerrar un motivo que no esta puesto: 409, no un 200 que no hizo nada', async () => {
+    const id = await marcado(`${suite.prefijo}B3`, ['SIN_MARCA']);
+    const r = await c.pedir('DELETE', `/api/equipos/${id}/motivos/PROPIEDAD_AMBIGUA`);
+    assert.equal(r.estado, 409);
+  });
+
+  it('un codigo inventado: 400, y no un cero silencioso', async () => {
+    const id = await marcado(`${suite.prefijo}B4`, ['SIN_MARCA']);
+    const r = await c.pedir('DELETE', `/api/equipos/${id}/motivos/NO_EXISTE`);
+    assert.equal(r.estado, 400);
+  });
+
+  /**
+   * El caso que impide cerrar la limpieza en falso, y viene de la etapa 2: la
+   * marca es lo que saca la fila del índice único parcial. Bajarla con el
+   * duplicado todavía dentro tiene que rebotar en Postgres, no aquí.
+   */
+  it('no se cierra el ultimo motivo si el duplicado sigue ahi', async () => {
+    const choque = `SN-${suite.prefijo}CHOQUE`;
+    const uno = await marcado(`${suite.prefijo}B5a`, ['SERIAL_DUPLICADO'], choque);
+    const dos = await marcado(`${suite.prefijo}B5b`, ['SERIAL_DUPLICADO'], choque);
+
+    // El primero sí puede salir: mientras el otro siga marcado, el índice solo
+    // ve una fila limpia con ese serial.
+    assert.equal(
+      (await c.pedir('DELETE', `/api/equipos/${uno}/motivos/SERIAL_DUPLICADO`)).estado,
+      200,
+    );
+    // El segundo no: dejarlo salir pondría dos filas limpias con el mismo
+    // serial, que es justo lo que el índice existe para impedir.
+    const r = await c.pedir('DELETE', `/api/equipos/${dos}/motivos/SERIAL_DUPLICADO`);
+    assert.notEqual(r.estado, 200, `el segundo no deberia poder cerrarse, dio ${r.estado}`);
+  });
+
+  it('fijar quien tiene un equipo prestado, y solo si esta prestado', async () => {
+    const id = await marcado(`${suite.prefijo}B6`, ['RESPONSABLE_EN_CONFLICTO']);
+
+    // Disponible: no aplica, y el 409 dice cuál es la operación buena.
+    const antes = await c.post(`/api/equipos/${id}/tenedor`, { empleado_id: empleado });
+    assert.equal(antes.estado, 409);
+    assert.match((antes.cuerpo as { error: string }).error, /asignar/i);
+
+    assert.equal((await c.post(`/api/equipos/${id}/prestar`, { prestado_a: 'ISF' })).estado, 200);
+
+    const r = await c.post(`/api/equipos/${id}/tenedor`, { empleado_id: empleado });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    const { equipo } = r.cuerpo as { equipo: { empleado_id: string | null; estado: string } };
+    assert.equal(equipo.empleado_id, empleado);
+    assert.equal(equipo.estado, 'Prestado', 'fijar el tenedor NO mueve el estado');
+
+    // Y se puede volver a dejar sin decidir.
+    const vacia = await c.post(`/api/equipos/${id}/tenedor`, { empleado_id: null });
+    assert.equal((vacia.cuerpo as { equipo: { empleado_id: null } }).equipo.empleado_id, null);
+
+    // Dos escrituras, dos filas. Y el 409 de antes NO escribió ninguna:
+    // auditar un intento rechazado diría que alguien cambió algo.
+    assert.equal(await contarAuditoria(id, 'fijar_tenedor'), 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D31: la empresa que TIENE un equipo también lo ve
+// ---------------------------------------------------------------------------
+
+describe('equipos: el filtro por empresa incluye lo prestado (D31)', () => {
+  const suite = ambito('empresafiltro');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await suite.limpiar();
+  });
+
+  it('sale en la lista del dueno Y en la de quien lo tiene', async () => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}PRESTADO`,
+      serial: `SN-${suite.prefijo}PRESTADO`,
+      estado: 'Disponible',
+      sede_id: sedeA,
+      empresa: 'BBL Labs',
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+
+    assert.equal((await c.post(`/api/equipos/${id}/prestar`, { prestado_a: 'RIWI' })).estado, 200);
+
+    const saleEn = async (empresa: string) => {
+      const p = await c.get(
+        `/api/equipos?empresa=${encodeURIComponent(empresa)}&q=${suite.prefijo}PRESTADO`,
+      );
+      return (p.cuerpo as { filas: { id: string }[] }).filas.some((f) => f.id === id);
+    };
+
+    assert.ok(await saleEn('BBL Labs'), 'el dueno tiene que verlo');
+    assert.ok(await saleEn('RIWI'), 'quien lo tiene en la mano, tambien: es lo que D31 compro');
+    assert.ok(!(await saleEn('Sin clasificar')), 'y nadie mas');
+  });
+
+  it('los conteos por empresa vienen con el listado y traen las tres claves', async () => {
+    const p = await c.get('/api/equipos?porPagina=1');
+    const { conteos_empresa } = p.cuerpo as { conteos_empresa: Record<string, number> };
+    for (const clave of ['RIWI', 'BBL Labs', 'Sin clasificar']) {
+      assert.ok(
+        clave in conteos_empresa,
+        `falta la clave "${clave}": GROUP BY no devuelve grupos vacios, y sin rellenarlos ` +
+          `la interfaz no distingue "ninguno" de "no se pudo contar"`,
+      );
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Cerrar un motivo en todo su bloque
+// ---------------------------------------------------------------------------
+
+describe('bandeja: un motivo se cierra en todo su bloque', () => {
+  const suite = ambito('bloque');
+  let admin: UsuarioDePrueba;
+  let tecnico: UsuarioDePrueba;
+  let sede: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  /** Suficientes para que «en bloque» signifique algo y no sea un cierre suelto. */
+  const CUANTOS = 6;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    tecnico = await suite.crearUsuario({ sufijo: 'tec', rol: 'tecnico' });
+    sede = await primeraSede();
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await suite.limpiar();
+  });
+
+  async function equipoMarcado(etiqueta: string, motivos: string[], serial?: string) {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}${etiqueta}`,
+      serial: serial ?? `SN-${suite.prefijo}${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    // Sin motivos NO se marca: `marcarEquipo([])` pondría la marca sin ninguna
+    // fila que la justifique, que es lo que el CONSTRAINT TRIGGER de la 0006
+    // impide. Este equipo existe para ocupar el serial, no para estar marcado.
+    if (motivos.length > 0) await marcarEquipo(id, motivos);
+    return id;
+  }
+
+  it('un técnico no puede cerrar un bloque entero', async () => {
+    const otro = nuevo();
+    await otro.entrar(tecnico.email, tecnico.password);
+    const r = await otro.post('/api/equipos/revision/cerrar-en-bloque', {
+      motivo: 'LICENCIA_OK',
+    });
+    // El permiso es proporcional al alcance: cerrar uno es `autenticado`,
+    // cerrar cientos de una vez no.
+    assert.equal(r.estado, 403, JSON.stringify(r.cuerpo));
+  });
+
+  it('cierra el bloque completo y deja constancia en las notas', async () => {
+    const ids: string[] = [];
+    for (let i = 0; i < CUANTOS; i++) {
+      ids.push(await equipoMarcado(`B${i}`, ['LICENCIA_OK']));
+    }
+
+    // Una fila con DOS motivos: cerrar uno no debe bajarle la marca, porque el
+    // otro sigue pendiente. Sin este caso, un cierre en bloque que desmarcara
+    // todo lo tocado pasaría igual.
+    const conDos = await equipoMarcado('BDOS', ['LICENCIA_OK', 'SIN_SERIAL']);
+
+    const NOTA = 'Licencia verificada como correcta el 2026-09-22 por Johan';
+    const r = await c.post('/api/equipos/revision/cerrar-en-bloque', {
+      motivo: 'LICENCIA_OK',
+      nota: NOTA,
+    });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const res = r.cuerpo as {
+      cerrados: number;
+      fallidos: { equipo_id: string; problema: string | null }[];
+    };
+    assert.equal(res.fallidos.length, 0, JSON.stringify(res.fallidos));
+    // `>=` y no `===`: la base de tests es compartida y otra suite puede
+    // haber dejado filas con este motivo. Lo que se afirma es que las nuestras
+    // entraron, y eso se comprueba fila a fila abajo.
+    assert.ok(res.cerrados >= CUANTOS + 1, `cerró ${res.cerrados}`);
+
+    for (const id of ids) {
+      const eq_ = (await c.get(`/api/equipos/${id}`)).cuerpo as {
+        equipo: { motivos_revision: string[]; requiere_revision: boolean; notas: string | null };
+      };
+      assert.deepEqual(eq_.equipo.motivos_revision, [], 'quedó un motivo sin cerrar');
+      // Cerrar el último motivo baja la marca: son el mismo hecho, y lo dice el
+      // CONSTRAINT TRIGGER de la 0006.
+      assert.equal(eq_.equipo.requiere_revision, false);
+      // La constancia: un NULL sin más y un NULL con constancia de que se
+      // revisó se leen igual dentro de un año, y no son lo mismo.
+      assert.match(eq_.equipo.notas ?? '', /Licencia verificada como correcta/);
+      // Y el tipo NO se inventó. Es la mitad que importa: cerrar el motivo no
+      // es rellenar el dato.
+      assert.equal(await licenciaTipoDe(id), null);
+      // Toda escritura sobre `equipos` deja rastro (§5), también en bloque.
+      assert.equal(await contarAuditoria(id, 'cerrar_motivo'), 1);
+    }
+
+    // La fila con dos motivos perdió uno y sigue marcada por el otro.
+    const dos = (await c.get(`/api/equipos/${conDos}`)).cuerpo as {
+      equipo: { motivos_revision: string[]; requiere_revision: boolean };
+    };
+    assert.deepEqual(dos.equipo.motivos_revision, ['SIN_SERIAL']);
+    assert.equal(dos.equipo.requiere_revision, true);
+  });
+
+  /**
+   * El caso que justifica los savepoints, y el que un cierre en bloque ingenuo
+   * rompería: una fila del bloque NO puede cerrarse.
+   *
+   * Dos equipos comparten serial. Mientras están marcados, el índice único
+   * parcial de `serial` no les aplica; al cerrar el último motivo de uno, la
+   * marca baja y el índice vuelve a exigir unicidad sobre esa fila. Postgres
+   * rechaza **esa**, y con una sola transacción envolvente se llevaría por
+   * delante a todas las demás del bloque.
+   */
+  it('una fila que no se deja cerrar no tumba el resto del bloque', async () => {
+    const SERIAL = `SN-${suite.prefijo}CHOQUE`;
+    // ORDEN: primero el MARCADO y después el limpio.
+    //
+    // Al revés no se puede montar el escenario: el índice único parcial sí
+    // aplica a la fila sin marca, así que crear el limpio primero hace que la
+    // API rechace el segundo con un 409 y el caso no llegue a existir. Marcado
+    // primero, queda fuera del índice y el limpio entra sin problema.
+    const choca = await equipoMarcado('CHOCA', ['MARCADOR_EN_CAMPO_TECNICO'], SERIAL);
+    await equipoMarcado('LIMPIO', [], SERIAL);
+    // Y dos más con el mismo motivo que sí pueden cerrarse.
+    const buenos = [
+      await equipoMarcado('OK1', ['MARCADOR_EN_CAMPO_TECNICO']),
+      await equipoMarcado('OK2', ['MARCADOR_EN_CAMPO_TECNICO']),
+    ];
+
+    const r = await c.post('/api/equipos/revision/cerrar-en-bloque', {
+      motivo: 'MARCADOR_EN_CAMPO_TECNICO',
+    });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const res = r.cuerpo as {
+      cerrados: number;
+      fallidos: { equipo_id: string; etiqueta: string | null; problema: string | null }[];
+    };
+
+    // La que choca viene con NOMBRE, no como un número: un recuento de fallos
+    // sin nombres obliga a buscarlos a mano.
+    const fallida = res.fallidos.find((f) => f.equipo_id === choca);
+    assert.ok(fallida, `esperaba ${choca} entre los fallidos: ${JSON.stringify(res.fallidos)}`);
+    assert.ok(fallida.problema, 'el fallo tiene que decir por qué');
+
+    // Y las otras dos entraron. Es la propiedad de los savepoints: el rechazo
+    // se queda en su fila.
+    for (const id of buenos) {
+      const eq_ = (await c.get(`/api/equipos/${id}`)).cuerpo as {
+        equipo: { motivos_revision: string[] };
+      };
+      assert.deepEqual(eq_.equipo.motivos_revision, [], 'una fila buena se fue con la mala');
+    }
+
+    // La que falló sigue marcada: no se cerró en falso.
+    const sigue = (await c.get(`/api/equipos/${choca}`)).cuerpo as {
+      equipo: { motivos_revision: string[]; requiere_revision: boolean; notas: string | null };
+    };
+    assert.deepEqual(sigue.equipo.motivos_revision, ['MARCADOR_EN_CAMPO_TECNICO']);
+    assert.equal(sigue.equipo.requiere_revision, true);
+  });
+
+  it('la nota no se escribe en las filas que no se pudieron cerrar', async () => {
+    const SERIAL = `SN-${suite.prefijo}CHOQUE2`;
+    // Mismo orden que arriba, y por lo mismo.
+    const choca = await equipoMarcado('CHOCA2', ['ESTADO_NO_APLICA'], SERIAL);
+    await equipoMarcado('LIMPIO2', [], SERIAL);
+
+    const r = await c.post('/api/equipos/revision/cerrar-en-bloque', {
+      motivo: 'ESTADO_NO_APLICA',
+      nota: 'NOTA QUE NO DEBE QUEDAR',
+    });
+    assert.equal(r.estado, 200);
+    assert.ok(
+      (r.cuerpo as { fallidos: { equipo_id: string }[] }).fallidos.some(
+        (f) => f.equipo_id === choca,
+      ),
+    );
+
+    // La nota va en la misma transacción que el cierre, así que al deshacerse
+    // el cierre se deshace la nota. Sin esto, una fila seguiría marcada Y con
+    // una constancia diciendo que se revisó y se resolvió.
+    const eq_ = (await c.get(`/api/equipos/${choca}`)).cuerpo as {
+      equipo: { notas: string | null };
+    };
+    assert.doesNotMatch(eq_.equipo.notas ?? '', /NOTA QUE NO DEBE QUEDAR/);
+  });
+
+  it('un motivo que no existe es 400, no un bloque vacío en silencio', async () => {
+    const r = await c.post('/api/equipos/revision/cerrar-en-bloque', {
+      motivo: 'MOTIVO_INVENTADO',
+    });
+    assert.equal(r.estado, 400, JSON.stringify(r.cuerpo));
   });
 });

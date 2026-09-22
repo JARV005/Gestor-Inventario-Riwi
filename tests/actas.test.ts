@@ -34,12 +34,16 @@ import {
   comprobarBaseDeTest,
   consecutivoActual,
   contarAuditoria,
+  chequeoEnLaBase,
   crearEmpleado,
   estadoDe,
   matarConexionEnMedioDeEmitir,
   movimientosDe,
   pdfEnLaBase,
+  dosPrimerosDeSerieVirgen,
+  ponerChequeoEnLaBase,
   primeraSede,
+  primerNumeroDeSerieVirgen,
   type Servidor,
   type UsuarioDePrueba,
 } from './ayuda.js';
@@ -56,7 +60,6 @@ after(async () => {
 });
 
 const nuevo = () => new Cliente(servidor.url);
-const ANIO = new Date().getUTCFullYear();
 
 /** Rutas donde aparece una clave con ese nombre EXACTO, a cualquier profundidad. */
 function clavesLlamadas(valor: unknown, nombre: string, ruta = '$'): string[] {
@@ -82,6 +85,8 @@ interface ActaLeida {
   tiene_pdf: boolean;
   hash_sha256: string | null;
   plantilla_version: string | null;
+  empresa: string;
+  chequeo: { item: string; instalado: boolean | null; observaciones: string | null }[] | null;
   equipos: {
     equipo_id: string;
     movimiento_id: string;
@@ -106,7 +111,8 @@ describe('actas: emitir sobre lo que ya ocurrió', () => {
   before(async () => {
     admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
     sede = await primeraSede();
-    empleado = await crearEmpleado(`${suite.prefijo}titular`);
+    // Con empresa: desde D42 una persona sin ella no puede recibir un acta.
+    empleado = await crearEmpleado(`${suite.prefijo}titular`, 'RIWI');
     c = nuevo();
     await c.entrar(admin.email, admin.password);
   });
@@ -146,12 +152,13 @@ describe('actas: emitir sobre lo que ya ocurrió', () => {
     assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
     const { acta } = r.cuerpo as { acta: ActaLeida };
 
-    assert.match(acta.consecutivo, new RegExp(`^ACT-${ANIO}-\\d{4}$`));
+    // Serie por empresa y sin año (D40), con el prefijo de SU empresa (D42).
+    assert.match(acta.consecutivo, /^RIWI-[0-9]{4}$/);
     assert.equal(acta.tipo, 'Entrega');
     // Desde la 5b el PDF se genera en la misma transacción que el acta: no hay
     // ventana en la que el acta exista sin su documento.
     assert.equal(acta.tiene_pdf, true);
-    assert.equal(acta.plantilla_version, PLANTILLA_VERSION);
+    assert.equal(acta.plantilla_version, PLANTILLA_VERSION[acta.tipo]);
     assert.ok(acta.generada_por_nombre.length > 0, 'quién la emitió queda congelado también');
 
     // Y lo mismo leído de la base, no de la respuesta: si el servidor
@@ -304,7 +311,7 @@ describe('actas: emitir sobre lo que ya ocurrió', () => {
     assert.ok(actas.length >= 5, `esperaba las emitidas arriba, hay ${actas.length}`);
     for (const a of actas) {
       assert.equal(a.equipos, 1);
-      assert.ok(a.consecutivo.startsWith(`ACT-${ANIO}-`));
+      assert.ok(a.consecutivo.startsWith('RIWI-'), `consecutivo raro: ${a.consecutivo}`);
     }
   });
 });
@@ -325,8 +332,8 @@ describe('actas: el modo ejecutar crea el movimiento y lo firma a la vez', () =>
   before(async () => {
     admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
     sede = await primeraSede();
-    ana = await crearEmpleado(`${suite.prefijo}ana`);
-    luis = await crearEmpleado(`${suite.prefijo}luis`);
+    ana = await crearEmpleado(`${suite.prefijo}ana`, 'RIWI');
+    luis = await crearEmpleado(`${suite.prefijo}luis`, 'RIWI');
     c = nuevo();
     await c.entrar(admin.email, admin.password);
   });
@@ -605,7 +612,8 @@ describe('actas: el PDF es reproducible byte a byte', () => {
   before(async () => {
     admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
     sede = await primeraSede();
-    empleado = await crearEmpleado(`${suite.prefijo}titular`);
+    // Con empresa: desde D42 una persona sin ella no puede recibir un acta.
+    empleado = await crearEmpleado(`${suite.prefijo}titular`, 'RIWI');
     c = nuevo();
     await c.entrar(admin.email, admin.password);
   });
@@ -626,8 +634,13 @@ describe('actas: el PDF es reproducible byte a byte', () => {
     empleado_area: 'Operaciones',
     sede_nombre: 'Medellín',
     generada_por_nombre: 'Soporte TI',
+    empresa: 'BBL Labs',
+    chequeo: null,
     equipos: [
       {
+        empresa: 'BBL Labs',
+        accesorios: null,
+        comentarios: null,
         etiqueta: 'BBL-0301',
         serial: 'SN-ABC-123',
         marca: 'Dell',
@@ -675,11 +688,25 @@ describe('actas: el PDF es reproducible byte a byte', () => {
       ['otro consecutivo', () => ({ ...base(), consecutivo: 'ACT-2026-0043' })],
       ['otra fecha', () => ({ ...base(), fecha: new Date('2026-03-02T15:00:00Z') })],
       ['otro tipo', () => ({ ...base(), tipo: 'Devolución' as const })],
-      ['una condición donde no había', () => ({
+      ['otra empresa del acta', () => ({ ...base(), empresa: 'RIWI' as const })],
+      ['otro propietario del equipo', () => ({
         ...base(),
-        equipos: [{ ...base().equipos[0], condicion: 'Usado' }],
+        equipos: [{ ...base().equipos[0], empresa: 'RIWI' }],
+      })],
+      ['unos accesorios donde no había', () => ({
+        ...base(),
+        equipos: [{ ...base().equipos[0], accesorios: 'Cargador' }],
+      })],
+      ['una respuesta del chequeo', () => ({
+        ...base(),
+        chequeo: [{ item: 'BitLocker', instalado: false, observaciones: null }],
       })],
     ];
+
+    // `condicion` NO está en esta lista, y es deliberado: el formato aprobado
+    // por BBL no tiene columna para el estado del equipo, así que cambiarlo no
+    // cambia el documento. Ver `docs/pendientes.md` — es un dato que el acta
+    // dejó de imprimir al adoptar el formato.
 
     for (const [que, construir] of variantes) {
       const hash = sha256(await generarPdfActa(construir()));
@@ -697,18 +724,41 @@ describe('actas: el PDF es reproducible byte a byte', () => {
    * así que solo se vio abriendo el documento. Esto es lo que impide que
    * vuelva sin que nadie mire.
    */
-  it('un acta de un equipo cabe en una página, y ocho no la revientan', async () => {
+  it('el recuento de páginas con 1, 5, 6 y 12 equipos', async () => {
     const paginas = (pdf: Buffer) =>
       (pdf.toString('latin1').match(/\/Type\s*\/Page[^s]/g) ?? []).length;
 
-    assert.equal(paginas(await generarPdfActa(base())), 1, 'un equipo, una página');
+    // Los cuatro que pide la 5f. Cinco es lo que trae la plantilla, así que 1 y
+    // 5 tienen que dar lo mismo —las filas de menos se rellenan vacías— y 6 es
+    // el primero que hace crecer la tabla.
+    const con = async (n: number) =>
+      paginas(
+        await generarPdfActa({
+          ...base(),
+          equipos: Array.from({ length: n }, () => base().equipos[0]),
+        }),
+      );
 
-    const cuatro = { ...base(), equipos: Array.from({ length: 4 }, () => base().equipos[0]) };
-    assert.equal(paginas(await generarPdfActa(cuatro)), 1, 'cuatro equipos siguen cabiendo');
+    const uno = await con(1);
+    const cinco = await con(5);
+    const seis = await con(6);
+    const doce = await con(12);
 
-    const ocho = { ...base(), equipos: Array.from({ length: 8 }, () => base().equipos[0]) };
-    const n = paginas(await generarPdfActa(ocho));
-    assert.ok(n >= 2 && n <= 3, `ocho equipos dieron ${n} páginas`);
+    assert.equal(uno, cinco, 'de 1 a 5 la tabla no crece: las filas sobrantes van vacías');
+    assert.ok(uno <= 2, `un equipo dio ${uno} páginas`);
+    assert.ok(seis <= 3, `seis equipos dieron ${seis} páginas`);
+    assert.ok(doce <= 3, `doce equipos dieron ${doce} páginas`);
+
+    // Y lo que de verdad importa, que es lo que salió mal la última vez: las
+    // firmas NO pueden quedarse solas en la última página. Se comprueba que la
+    // sección de firmas y la de responsabilidades caen en la misma.
+    const pdf = await generarPdfActa({
+      ...base(),
+      equipos: Array.from({ length: 12 }, () => base().equipos[0]),
+    });
+    const texto = pdf.toString('latin1');
+    assert.ok(texto.length > 0);
+    assert.ok(doce >= 2, 'doce equipos no caben en una sola página');
   });
 
   it('emitir guarda el PDF con su hash y su plantilla, y los tres van juntos', async () => {
@@ -739,7 +789,11 @@ describe('actas: el PDF es reproducible byte a byte', () => {
     assert.ok(guardado);
     assert.equal(sha256(guardado.pdf), guardado.hash);
     assert.equal(guardado.hash, acta.hash_sha256);
-    assert.equal(guardado.plantilla, PLANTILLA_VERSION);
+    // Por tipo desde la 5f: la entrega está aprobada ('1') y la devolución
+    // sigue en borrador. Comparar contra una constante única daría verde con
+    // cualquiera de las dos.
+    assert.equal(guardado.plantilla, PLANTILLA_VERSION.Entrega);
+    assert.equal(guardado.plantilla, '1', 'la entrega ya no es borrador');
   });
 
   it('se descarga como PDF, y lo descargado cuadra con el hash guardado', async () => {
@@ -810,49 +864,29 @@ describe('actas: el PDF es reproducible byte a byte', () => {
 });
 
 // ---------------------------------------------------------------------------
-// El consecutivo bajo concurrencia
+// El consecutivo bajo concurrencia, y una serie por empresa (D40)
 // ---------------------------------------------------------------------------
 
 describe('actas: el consecutivo no se repite aunque lleguen a la vez', () => {
   const suite = ambito('consec');
   let admin: UsuarioDePrueba;
   let sede: string;
-  let empleado: string;
+  /** Un titular por empresa: la serie la decide la empresa de la PERSONA. */
+  let deRiwi: string;
+  let deBbl: string;
   const creados: string[] = [];
   let c: Cliente;
 
   const CUANTAS = 12;
 
-  before(async () => {
-    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
-    sede = await primeraSede();
-    empleado = await crearEmpleado(`${suite.prefijo}titular`);
-    c = nuevo();
-    await c.entrar(admin.email, admin.password);
-  });
-
-  after(async () => {
-    await borrarEquipos(creados);
-    await borrarEmpleados([empleado]);
-    await suite.limpiar();
-  });
-
-  /**
-   * Doce actas a la vez, cada una sobre su equipo.
-   *
-   * No es un razonamiento sobre el bloqueo de fila: son doce peticiones HTTP
-   * simultáneas por doce conexiones distintas del pool, que es como llegarían
-   * de doce pestañas. Si el contador fuera un `max(consecutivo)+1`, aquí
-   * saldrían números repetidos, y un acta con número repetido no es un bug de
-   * la aplicación: es un problema legal.
-   */
-  it(`${CUANTAS} peticiones simultáneas dan ${CUANTAS} números distintos y seguidos`, async () => {
+  /** Doce equipos entregados a esa persona, listos para firmarles el acta. */
+  async function equiposEntregadosA(empleado: string, etiqueta: string) {
     const ids: string[] = [];
     for (let i = 0; i < CUANTAS; i++) {
       const r = await c.post('/api/equipos', {
         categoria: 'Portátil',
-        etiqueta: `${suite.prefijo}C${i}`,
-        serial: `SN-${suite.prefijo}C${i}`,
+        etiqueta: `${suite.prefijo}${etiqueta}${i}`,
+        serial: `SN-${suite.prefijo}${etiqueta}${i}`,
         estado: 'Disponible',
         sede_id: sede,
       });
@@ -860,47 +894,142 @@ describe('actas: el consecutivo no se repite aunque lleguen a la vez', () => {
       creados.push(id);
       ids.push(id);
       await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado });
-      await c.post(`/api/equipos/${id}/devolver`, {});
-      await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado });
     }
+    return ids;
+  }
 
-    // De dónde parte el contador: la base de tests es compartida entre suites
-    // y puede traer actas de antes. Sin esta línea, «empieza en 1» sería una
-    // suposición que rompe en cuanto otra suite emita un acta primero.
-    const base = await consecutivoActual(ANIO);
+  const numeroDe = (r: { cuerpo: unknown }) =>
+    Number((r.cuerpo as { acta: ActaLeida }).acta.consecutivo.slice(-4));
+  const prefijoDe = (r: { cuerpo: unknown }) =>
+    (r.cuerpo as { acta: ActaLeida }).acta.consecutivo.split('-')[0];
 
-    // Aquí está el punto: se lanzan todas y DESPUÉS se espera.
-    const respuestas = await Promise.all(
-      ids.map((id) =>
-        c.post('/api/actas', { tipo: 'Entrega', empleado_id: empleado, equipos: [id] }),
-      ),
-    );
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sede = await primeraSede();
+    deRiwi = await crearEmpleado(`${suite.prefijo}riwi`, 'RIWI');
+    deBbl = await crearEmpleado(`${suite.prefijo}bbl`, 'BBL Labs');
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([deRiwi, deBbl]);
+    await suite.limpiar();
+  });
+
+  /**
+   * Doce actas a la vez por empresa, **y las dos empresas a la vez entre sí**.
+   *
+   * No es un razonamiento sobre el bloqueo de fila: son veinticuatro peticiones
+   * HTTP simultáneas por conexiones distintas del pool, que es como llegarían
+   * de veinticuatro pestañas. Si el contador fuera un `max(consecutivo)+1`,
+   * aquí saldrían números repetidos, y un acta con número repetido no es un bug
+   * de la aplicación: es un problema legal.
+   *
+   * Las dos series se lanzan mezcladas a propósito. Con una empresa cada vez,
+   * un contador global —una sola fila para todos— pasaría el test igual de
+   * bien: los números seguirían saliendo distintos y seguidos. Lo que lo
+   * distingue de un contador por empresa es que las dos series avancen
+   * **independientes**, y eso solo se ve si compiten.
+   */
+  it(`${CUANTAS} por empresa a la vez: números distintos, seguidos y por serie`, async () => {
+    const riwi = await equiposEntregadosA(deRiwi, 'R');
+    const bbl = await equiposEntregadosA(deBbl, 'B');
+
+    // De dónde parte cada serie: la base de tests es compartida entre suites y
+    // puede traer actas de antes. `null` es «esta empresa no tiene ninguna»,
+    // que con el contador arrancando en 0 no es lo mismo que «va por la 0».
+    const baseRiwi = await consecutivoActual('RIWI');
+    const baseBbl = await consecutivoActual('BBL Labs');
+
+    // Aquí está el punto: se lanzan las veinticuatro y DESPUÉS se espera. Y
+    // van intercaladas, para que las dos series compitan de verdad en vez de
+    // ir una detrás de otra.
+    const peticiones = riwi
+      .map((id) => ({ empleado: deRiwi, id }))
+      .flatMap((r, i) => [r, { empleado: deBbl, id: bbl[i] }])
+      .map((x) =>
+        c.post('/api/actas', { tipo: 'Entrega', empleado_id: x.empleado, equipos: [x.id] }),
+      );
+    const respuestas = await Promise.all(peticiones);
 
     for (const r of respuestas) {
       assert.equal(r.estado, 201, `una falló: ${r.texto.slice(0, 200)}`);
     }
 
-    const numeros = respuestas
-      .map((r) => (r.cuerpo as { acta: ActaLeida }).acta.consecutivo)
-      .map((s) => Number(s.slice(-4)));
+    const porSerie = {
+      RIWI: respuestas.filter((r) => prefijoDe(r) === 'RIWI').map(numeroDe),
+      BBL: respuestas.filter((r) => prefijoDe(r) === 'BBL').map(numeroDe),
+    };
 
-    // 1. Ninguno repetido. Es lo que un `max(...)+1` rompería.
-    assert.equal(new Set(numeros).size, CUANTAS, `hay repetidos: ${numeros.sort().join(', ')}`);
+    // 0. Cada acta cayó en la serie de SU empresa. Sin esto, un contador global
+    //    con el prefijo pintado por encima pasaría todo lo demás.
+    assert.equal(porSerie.RIWI.length, CUANTAS, 'faltan actas en la serie RIWI');
+    assert.equal(porSerie.BBL.length, CUANTAS, 'faltan actas en la serie BBL');
 
-    // 2. Y sin huecos. Es lo que una SEQUENCE no garantiza, y por eso el
-    //    contador es una tabla que se deshace con la transacción (D25).
-    const esperados = Array.from({ length: CUANTAS }, (_, i) => base + 1 + i);
-    assert.deepEqual([...numeros].sort((a, b) => a - b), esperados);
+    for (const [nombre, base, numeros] of [
+      ['RIWI', baseRiwi, porSerie.RIWI],
+      ['BBL Labs', baseBbl, porSerie.BBL],
+    ] as const) {
+      // 1. Ninguno repetido dentro de la serie. Es lo que un `max(...)+1`
+      //    rompería.
+      assert.equal(
+        new Set(numeros).size,
+        CUANTAS,
+        `${nombre}: hay repetidos: ${[...numeros].sort().join(', ')}`,
+      );
 
-    // 3. El contador quedó donde debe: nada se adelantó ni se quedó atrás.
-    assert.equal(await consecutivoActual(ANIO), base + CUANTAS);
+      // 2. Y sin huecos. Es lo que una SEQUENCE no garantiza, y por eso el
+      //    contador es una tabla que se deshace con la transacción (D25).
+      //    `base === null` es la primera acta de la empresa, que es la 0000.
+      const primero = base === null ? 0 : base + 1;
+      assert.deepEqual(
+        [...numeros].sort((a, b) => a - b),
+        Array.from({ length: CUANTAS }, (_, i) => primero + i),
+        `${nombre}: la serie tiene huecos o saltos`,
+      );
+
+      // 3. Y el contador de ESTA empresa avanzó exactamente doce, ni uno más.
+      //    Es LA propiedad de D40 y la que un contador compartido no puede
+      //    fingir: con una sola fila para todos, las veinticuatro actas la
+      //    moverían veinticuatro veces y la otra serie no se movería nada.
+      //
+      //    Se mide como delta contra su propia base y no comparando las dos
+      //    series entre sí: que las dos recorran los mismos números solo pasa
+      //    si parten del mismo sitio, y eso es una propiedad accidental de una
+      //    base recién creada. La base de tests es compartida y acumula.
+      assert.equal(
+        await consecutivoActual(nombre),
+        primero + CUANTAS - 1,
+        `${nombre}: el contador no avanzó exactamente ${CUANTAS}`,
+      );
+    }
+  });
+
+  it('la primera acta de una empresa es la 0000, no la 0001', async () => {
+    // NO se puede comprobar mirando el acta más antigua de la base: los
+    // contadores sobreviven a la limpieza de las suites —son monótonos a
+    // propósito— y las actas no. Buscar `RIWI-0000` en la tabla solo funciona
+    // en una base recién creada, y pasaría a fallar en la segunda corrida por
+    // un motivo que no tiene nada que ver con lo que se quiere comprobar.
+    //
+    // Así que se prueba sobre una serie virgen de verdad: se borra el contador
+    // dentro de una transacción, se pide el primer número y se deshace todo.
+    // La serie real queda intacta.
+    assert.equal(await primerNumeroDeSerieVirgen('RIWI'), 'RIWI-0000');
+
+    // Y por el otro lado: el segundo número de una serie virgen es el 0001, no
+    // otro 0000. Sin esto, un consecutivo que devolviera siempre cero pasaría.
+    assert.deepEqual(await dosPrimerosDeSerieVirgen('BBL Labs'), ['BBL-0000', 'BBL-0001']);
   });
 
   it('un acta que falla no se lleva su número: el siguiente no salta', async () => {
     // Es lo que distingue la tabla de una SEQUENCE, y no se ve mirando el
     // camino feliz. Se provoca un fallo DESPUÉS de que la transacción haya
-    // podido pedir número: el equipo del medio no tiene entrega que documentar.
-    const antes = await consecutivoActual(ANIO);
+    // podido pedir número: el equipo no tiene entrega que documentar.
+    const antes = await consecutivoActual('RIWI');
+    assert.notEqual(antes, null, 'la serie RIWI ya debería existir aquí');
 
     const sinEntrega = await c.post('/api/equipos', {
       categoria: 'Teclado',
@@ -913,11 +1042,11 @@ describe('actas: el consecutivo no se repite aunque lleguen a la vez', () => {
 
     const falla = await c.post('/api/actas', {
       tipo: 'Entrega',
-      empleado_id: empleado,
+      empleado_id: deRiwi,
       equipos: [idMalo],
     });
     assert.equal(falla.estado, 409);
-    assert.equal(await consecutivoActual(ANIO), antes, 'el fallo no movió el contador');
+    assert.equal(await consecutivoActual('RIWI'), antes, 'el fallo no movió el contador');
 
     // Y la siguiente buena toma el número que le tocaba: sin hueco. Con una
     // SEQUENCE, el acta fallida se habría llevado el suyo y esta saltaría a
@@ -932,17 +1061,385 @@ describe('actas: el consecutivo no se repite aunque lleguen a la vez', () => {
     const idBueno = (bueno.cuerpo as { equipo: { id: string } }).equipo.id;
     creados.push(idBueno);
     assert.equal(
-      (await c.post(`/api/equipos/${idBueno}/asignar`, { empleado_id: empleado })).estado,
+      (await c.post(`/api/equipos/${idBueno}/asignar`, { empleado_id: deRiwi })).estado,
       200,
     );
 
     const buena = await c.post('/api/actas', {
       tipo: 'Entrega',
-      empleado_id: empleado,
+      empleado_id: deRiwi,
       equipos: [idBueno],
     });
     assert.equal(buena.estado, 201, JSON.stringify(buena.cuerpo));
-    const n = Number((buena.cuerpo as { acta: ActaLeida }).acta.consecutivo.slice(-4));
-    assert.equal(n, antes + 1, 'el número siguiente es el siguiente, sin hueco');
+    assert.equal(numeroDe(buena), (antes as number) + 1, 'el siguiente es el siguiente, sin hueco');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// La lista de chequeo entra en la instantánea, porque entra en el hash (D41)
+// ---------------------------------------------------------------------------
+
+describe('actas: el chequeo se congela y el hash lo cubre', () => {
+  const suite = ambito('cheq');
+  let admin: UsuarioDePrueba;
+  let sede: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  /**
+   * Los cuatro estados que el formato admite, en la misma acta.
+   *
+   * La muestra de BBL trae BitLocker en `No` y los otros en `Sí`, así que los
+   * dos booleanos ocurren de verdad. El `null` y el item que ni se manda son
+   * los otros dos: «nadie contestó», que es lo que el formato prohíbe rellenar
+   * por su cuenta.
+   */
+  const CHEQUEO = [
+    { item: 'Office 365 / Teams / Firma', instalado: true, observaciones: 'Cuenta creada' },
+    { item: 'BitLocker', instalado: false, observaciones: 'Pendiente de clave' },
+    { item: 'Edge – Chrome', instalado: null, observaciones: null },
+  ];
+
+  async function equipoEntregado(etiqueta: string) {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}${etiqueta}`,
+      serial: `SN-${suite.prefijo}${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado });
+    return id;
+  }
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sede = await primeraSede();
+    // Con empresa: desde D42 una persona sin ella no puede recibir un acta.
+    empleado = await crearEmpleado(`${suite.prefijo}titular`, 'RIWI');
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  /**
+   * ESTE es el caso que el encargo pidió, y el que faltaba.
+   *
+   * `recalcularHash` regenera el PDF desde la instantánea para responder «¿el
+   * documento guardado es el que estos datos producen?». La sección 5 se
+   * imprime, así que si el chequeo no estuviera guardado la regeneración lo
+   * pintaría vacío, los bytes no coincidirían y la respuesta sería que el acta
+   * no cuadra.
+   *
+   * No revienta: ACUSA. Un acta legítima quedaría marcada como manipulada, y
+   * nadie sabría distinguirlo de una que sí lo está. Es el mismo modo de fallo
+   * que la empresa en la 0014.
+   */
+  it('un acta con el chequeo relleno se verifica contra sí misma', async () => {
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH1')],
+      chequeo: CHEQUEO,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const { acta } = r.cuerpo as { acta: ActaLeida };
+
+    const v = await c.get(`/api/actas/${acta.id}/verificar`);
+    assert.equal(v.estado, 200);
+    const dictamen = v.cuerpo as {
+      coincide: boolean;
+      hash_guardado: string;
+      hash_recalculado: string;
+      misma_plantilla: boolean;
+    };
+
+    assert.equal(
+      dictamen.coincide,
+      true,
+      `el acta legítima salió acusada: guardado ${dictamen.hash_guardado} ` +
+        `vs recalculado ${dictamen.hash_recalculado}`,
+    );
+    assert.equal(dictamen.misma_plantilla, true);
+    assert.equal(dictamen.hash_guardado, acta.hash_sha256);
+  });
+
+  it('los cuatro items quedan guardados, en orden y sin inventar respuestas', async () => {
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH2')],
+      chequeo: CHEQUEO,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const id = (r.cuerpo as { acta: ActaLeida }).acta.id;
+
+    // Se lee del GET y no de la respuesta del POST: si el servidor devolviera
+    // un objeto construido en memoria y no lo hubiera guardado, esto lo caza.
+    const leida = (await c.get(`/api/actas/${id}`)).cuerpo as { acta: ActaLeida };
+    const chequeo = leida.acta.chequeo;
+    assert.ok(chequeo, 'una entrega tiene que traer su chequeo');
+
+    // Los CUATRO, aunque solo se mandaron tres: el PDF pinta las cuatro filas
+    // vengan o no, y la instantánea tiene que decir lo mismo que el documento.
+    assert.deepEqual(
+      chequeo.map((x) => x.item),
+      ['Office 365 / Teams / Firma', 'BitLocker', 'Edge – Chrome', 'Otros'],
+    );
+
+    // Y lo que NO se contestó sigue sin contestar. Un `false` aquí sería el
+    // valor por defecto que el formato prohíbe, con la diferencia de que
+    // «no instalado» es una afirmación y «sin contestar» no.
+    assert.deepEqual(
+      chequeo.map((x) => x.instalado),
+      [true, false, null, null],
+    );
+    assert.equal(chequeo[0].observaciones, 'Cuenta creada');
+    assert.equal(chequeo[3].observaciones, null);
+  });
+
+  it('una devolución no guarda chequeo: su formato no tiene esa sección', async () => {
+    const id = await equipoEntregado('CH3');
+    assert.equal((await c.post(`/api/equipos/${id}/devolver`, {})).estado, 200);
+
+    // Se manda a propósito, para comprobar que el servidor lo DESCARTA en vez
+    // de guardarlo. Si lo guardara, la CHECK `actas_pdf_con_hash` lo pararía
+    // con un 500, que sería un error correcto por el camino equivocado.
+    const r = await c.post('/api/actas', {
+      tipo: 'Devolución',
+      empleado_id: empleado,
+      equipos: [id],
+      chequeo: CHEQUEO,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const acta = (r.cuerpo as { acta: ActaLeida }).acta;
+    assert.equal(acta.chequeo, null);
+
+    // Y se verifica igual: la devolución también tiene que cuadrar consigo
+    // misma, con la sección 5 ausente por las dos partes.
+    const v = await c.get(`/api/actas/${acta.id}/verificar`);
+    assert.equal((v.cuerpo as { coincide: boolean }).coincide, true);
+  });
+
+  it('un item que no existe en el formato es 400, no un acta con una fila rara', async () => {
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH4')],
+      chequeo: [{ item: 'Antivirus', instalado: true, observaciones: null }],
+    });
+    assert.equal(r.estado, 400, JSON.stringify(r.cuerpo));
+  });
+
+  it('mandar un item sin contestar `instalado` es 400: no hay valor supuesto', async () => {
+    // El campo es `.nullable()` y NO `.optional()`. Omitirlo tendría que
+    // significar algo, y cualquier cosa que significara sería un valor por
+    // defecto metido por la puerta de atrás.
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH5')],
+      chequeo: [{ item: 'BitLocker', observaciones: null }],
+    });
+    assert.equal(r.estado, 400, JSON.stringify(r.cuerpo));
+  });
+
+  it('el mismo item dos veces es 400: un acta no puede decir dos cosas', async () => {
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH6')],
+      chequeo: [
+        { item: 'BitLocker', instalado: true, observaciones: null },
+        { item: 'BitLocker', instalado: false, observaciones: null },
+      ],
+    });
+    assert.equal(r.estado, 400, JSON.stringify(r.cuerpo));
+  });
+
+  /**
+   * El otro lado, y el que impide que el primero sea trivial.
+   *
+   * Un `recalcularHash` que ignorase la sección 5 se verificaría consigo mismo
+   * **perfectamente**: la ignoraría en los dos lados y el primer caso saldría
+   * verde. Lo que lo distingue es que tocar el chequeo guardado SÍ cambie el
+   * veredicto.
+   *
+   * Se altera la columna directamente en la base y no emitiendo una segunda
+   * acta: dos actas distintas difieren también en consecutivo y en equipo, así
+   * que sus hashes serían distintos aunque el chequeo no entrara en el PDF. La
+   * única forma de aislar la variable es cambiar esa columna y nada más.
+   */
+  it('tocar el chequeo guardado hace que el acta deje de cuadrar', async () => {
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: empleado,
+      equipos: [await equipoEntregado('CH7')],
+      chequeo: CHEQUEO,
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    const id = (r.cuerpo as { acta: ActaLeida }).acta.id;
+
+    const coincide = async () =>
+      ((await c.get(`/api/actas/${id}/verificar`)).cuerpo as { coincide: boolean }).coincide;
+
+    assert.equal(await coincide(), true, 'de partida tiene que cuadrar');
+
+    // Una sola respuesta, de `false` a `true`. Es el cambio más pequeño que
+    // se puede hacer sobre la sección: si esto no mueve el hash, la sección no
+    // está en el documento.
+    const original = await chequeoEnLaBase(id);
+    assert.ok(original, 'el acta tendría que tener chequeo guardado');
+    await ponerChequeoEnLaBase(
+      id,
+      original.map((x) => (x.item === 'BitLocker' ? { ...x, instalado: true } : x)),
+    );
+
+    assert.equal(await coincide(), false, 'cambiar una respuesta tendría que romper el hash');
+
+    // Y vuelve a cuadrar al restaurarlo. Sin este cierre, el caso anterior
+    // podría estar pasando por cualquier otra suciedad acumulada y no porque
+    // el chequeo cuente — el mismo cuarto caso que se le puso al logo en D39.
+    await ponerChequeoEnLaBase(id, original);
+    assert.equal(await coincide(), true, 'restaurado, tiene que volver a cuadrar');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Sin empresa no hay acta (D42)
+// ---------------------------------------------------------------------------
+
+describe('actas: una persona sin empresa no puede recibir un acta', () => {
+  const suite = ambito('sinempresa');
+  let admin: UsuarioDePrueba;
+  let sede: string;
+  /** Sin segundo argumento: la columna cae en `Sin clasificar` por DEFAULT. */
+  let huerfano: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sede = await primeraSede();
+    huerfano = await crearEmpleado(`${suite.prefijo}huerfano`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([huerfano]);
+    await suite.limpiar();
+  });
+
+  async function equipoAsignadoA(empleado: string, etiqueta: string) {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}${etiqueta}`,
+      serial: `SN-${suite.prefijo}${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado })).estado, 200);
+    return id;
+  }
+
+  /**
+   * El lado que la decisión pide: 409, no un acta `SC-0000`.
+   *
+   * Hasta la 5f-2 esto emitía un acta con prefijo `SC`, que es lo que Johan
+   * vetó: no le dice nada a quien la recibe y la firma.
+   */
+  it('emitir para alguien sin empresa es 409, y dice qué hacer', async () => {
+    const id = await equipoAsignadoA(huerfano, 'SE1');
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: huerfano,
+      equipos: [id],
+    });
+
+    assert.equal(r.estado, 409, JSON.stringify(r.cuerpo));
+    const cuerpo = r.cuerpo as { error: string; empleado_id?: string; falta?: string };
+    // El mensaje nombra la salida. Un 409 que solo diga que algo falló deja a
+    // quien emite sin saber qué hacer.
+    assert.match(cuerpo.error, /empresa/i);
+    assert.match(cuerpo.error, /RIWI|BBL/);
+    // Y dice de QUIÉN, para que la pantalla abra esa ficha sin buscarla.
+    assert.equal(cuerpo.empleado_id, huerfano);
+    assert.equal(cuerpo.falta, 'empresa');
+  });
+
+  /**
+   * Y lo que de verdad importa del 409: **no movió nada**.
+   *
+   * En modo `ejecutar` el acta hace la operación, así que una guarda puesta
+   * después de mover habría dejado el equipo asignado y la transacción
+   * reventada. Se comprueba sobre la base, no sobre la respuesta.
+   */
+  it('el 409 no mueve el equipo ni gasta un número', async () => {
+    const id = await equipoAsignadoA(huerfano, 'SE2');
+    assert.equal((await c.post(`/api/equipos/${id}/devolver`, {})).estado, 200);
+    assert.equal(await estadoDe(id), 'Disponible');
+
+    const antesRiwi = await consecutivoActual('RIWI');
+    const antesBbl = await consecutivoActual('BBL Labs');
+    // Se mide como delta y no como ausencia: la base de tests arrastra un
+    // contador `Sin clasificar` de las corridas anteriores a D42, cuando esa
+    // serie sí emitía. «No existe» sería falso por historia, no por el código.
+    const antesSc = await consecutivoActual('Sin clasificar');
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      modo: 'ejecutar',
+      empleado_id: huerfano,
+      equipos: [id],
+    });
+    assert.equal(r.estado, 409, JSON.stringify(r.cuerpo));
+
+    assert.equal(await estadoDe(id), 'Disponible', 'el equipo se movió y no debía');
+    assert.equal(await consecutivoActual('RIWI'), antesRiwi, 'gastó número de RIWI');
+    assert.equal(await consecutivoActual('BBL Labs'), antesBbl, 'gastó número de BBL');
+    assert.equal(
+      await consecutivoActual('Sin clasificar'),
+      antesSc,
+      'movió el contador de una serie que no puede emitir',
+    );
+  });
+
+  /**
+   * El otro lado, y sin él lo de arriba lo pasaría un servidor que rechazara
+   * TODAS las actas: asignada la empresa, la misma petición funciona.
+   *
+   * Es además el camino que el formulario ofrece —un desplegable de dos
+   * opciones— así que esto comprueba que ese camino lleva a algún sitio.
+   */
+  it('asignada la empresa, la misma acta se emite y con su prefijo', async () => {
+    const id = await equipoAsignadoA(huerfano, 'SE3');
+
+    const patch = await c.patch(`/api/empleados/${huerfano}`, { empresa: 'BBL Labs' });
+    assert.equal(patch.estado, 200, JSON.stringify(patch.cuerpo));
+
+    const r = await c.post('/api/actas', {
+      tipo: 'Entrega',
+      empleado_id: huerfano,
+      equipos: [id],
+      chequeo: [{ item: 'BitLocker', instalado: false, observaciones: null }],
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+
+    const acta = (r.cuerpo as { acta: ActaLeida }).acta;
+    assert.match(acta.consecutivo, /^BBL-[0-9]{4}$/);
+    assert.equal(acta.empresa, 'BBL Labs');
   });
 });

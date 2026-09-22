@@ -3,6 +3,7 @@ import { AlertTriangle, Download, FileSignature, Printer, User, Laptop } from 'l
 
 import type {
   ActaEmitida,
+  ItemChequeo,
   ActaResumen,
   EmpleadoConConteo,
   EquipoConMotivos,
@@ -12,8 +13,10 @@ import type {
   Sede,
   TipoActa,
 } from '../types';
+import { CHEQUEO_ITEMS, EMPRESAS_QUE_EMITEN, type EmpresaQueEmite } from '../types';
 import { api, ErrorApi } from '../lib/api';
 import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
+import { FormularioEmpleado } from './EmployeesView';
 
 /**
  * El acta de entrega: se consulta, se emite y se descarga.
@@ -78,6 +81,12 @@ const ETIQUETA_MODO: Record<TipoActa, Record<ModoActa, { titulo: string; detalle
   },
 };
 
+/** Los cuatro items sin contestar. Se usa al montar y al terminar un acta. */
+const chequeoEnBlanco = (): Record<string, ItemChequeo> =>
+  Object.fromEntries(
+    CHEQUEO_ITEMS.map((item) => [item, { item, instalado: null, observaciones: null }]),
+  );
+
 export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
   equipoSeleccionado,
   onActaEmitida,
@@ -121,6 +130,23 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
    * ocurrió. En pantalla no se llaman así — ver `ETIQUETA_MODO`.
    */
   const [modo, setModo] = useState<ModoActa>('ejecutar');
+  /**
+   * La sección 5 del acta (D41). **Ningún item arranca contestado.**
+   *
+   * `instalado: null` es «nadie contestó» y se imprime como casilla en blanco.
+   * Un checkbox premarcado en un documento legal es una afirmación que no hizo
+   * nadie, y quien firma no tiene por qué darse cuenta de que la puso el
+   * programa.
+   */
+  const [chequeo, setChequeo] = useState<Record<string, ItemChequeo>>(() => chequeoEnBlanco());
+
+  /** El aviso de cédula abre la ficha aquí mismo, sin salir del acta. */
+  const [editandoFicha, setEditandoFicha] = useState(false);
+
+  /** El desplegable del aviso de empresa (D42). Sin preselección. */
+  const [empresaNueva, setEmpresaNueva] = useState<EmpresaQueEmite | ''>('');
+  const [asignandoEmpresa, setAsignandoEmpresa] = useState(false);
+
   const [emitiendo, setEmitiendo] = useState(false);
   const [errorEmitir, setErrorEmitir] = useState<string | null>(null);
   const [emitida, setEmitida] = useState<ActaEmitida | null>(null);
@@ -308,6 +334,33 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
       ? elegidos.filter((e) => e.sede_id && e.sede_id !== empleado.sede_id)
       : [];
 
+  /**
+   * La persona no tiene empresa, así que su acta no tiene remitente (D42).
+   *
+   * A diferencia de la cédula —que avisa y deja emitir con el hueco en blanco—
+   * esto **bloquea**, porque la API responde 409: dejar el botón activo sería
+   * ofrecer una acción que no puede funcionar. El 409 sigue estando para quien
+   * llegue por otro camino; esto es solo no mentir en pantalla.
+   */
+  const faltaEmpresa = empleado !== null && empleado.empresa === 'Sin clasificar';
+
+  const asignarEmpresa = async () => {
+    if (!empleado || !empresaNueva) return;
+    setAsignandoEmpresa(true);
+    setErrorEmitir(null);
+    try {
+      await api.actualizarEmpleado(empleado.id, { empresa: empresaNueva });
+      setEmpresaNueva('');
+      // Se recarga la lista: la empresa decide el logo y el prefijo, y los dos
+      // se leen de la instantánea al emitir.
+      await cargar();
+    } catch (e) {
+      setErrorEmitir(e instanceof ErrorApi ? e.message : 'No se pudo asignar la empresa.');
+    } finally {
+      setAsignandoEmpresa(false);
+    }
+  };
+
   const alternar = (id: string) =>
     setSeleccionados((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
 
@@ -321,9 +374,17 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
         modo, // siempre explícito: el servidor asume `firmar` si falta
         empleado_id: empleadoId,
         equipos: seleccionados,
+        // Solo en entregas: el formato de devolución no tiene sección 5. Se
+        // manda lo contestado tal cual, `null` incluido — el servidor no
+        // rellena lo que falte y nosotros tampoco.
+        chequeo: tipo === 'Entrega' ? CHEQUEO_ITEMS.map((i) => chequeo[i]) : null,
       });
       setEmitida(r.acta);
       setSeleccionados([]);
+      // En blanco para la siguiente. Heredar las respuestas del acta anterior
+      // sería el valor por defecto otra vez, con la agravante de que vendría de
+      // otra persona y otro equipo.
+      setChequeo(chequeoEnBlanco());
       await cargarHistorial(empleadoId);
       // Lo elegible ha cambiado: lo que se acaba de entregar ya no está
       // disponible, y lo que se acaba de firmar ya no está pendiente.
@@ -593,6 +654,187 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             movimiento existen desde aquí; las cláusulas y el PDF, en la 5b.
             --------------------------------------------------------------- */}
         <div className="border border-line rounded-lg p-4 space-y-3 print:hidden">
+          {/* ---------------------------------------------------------------
+              Sección 5 del formato: la lista de chequeo (D41).
+
+              Solo en entregas — el formato de devolución no la tiene. Los
+              cuatro items salen de `CHEQUEO_ITEMS`, que es la misma constante
+              con la que el PDF pinta las filas: si mañana BBL cambia la lista,
+              el formulario y el documento cambian juntos o no cambia ninguno.
+
+              NINGUNO ARRANCA CONTESTADO, y no hay opción «sin contestar» que
+              pulsar: sin respuesta es el estado inicial, y se ve porque no hay
+              nada marcado. Poner un «Sí» por defecto —o un «No»— metería en un
+              documento legal una afirmación que no hizo nadie.
+              --------------------------------------------------------------- */}
+          {tipo === 'Entrega' && (
+            <div className="space-y-2">
+              <div>
+                <p className="text-sm font-semibold text-ink">Lista de chequeo</p>
+                <p className="text-xs text-ink-muted">
+                  Va impresa en el acta. Lo que se deje sin contestar sale en blanco, que es
+                  distinto de un «No».
+                </p>
+              </div>
+
+              <ul className="space-y-1.5">
+                {CHEQUEO_ITEMS.map((item) => {
+                  const dato = chequeo[item];
+                  const marcar = (instalado: boolean | null) =>
+                    setChequeo((p) => ({ ...p, [item]: { ...p[item], instalado } }));
+
+                  return (
+                    <li
+                      key={item}
+                      className="flex flex-col sm:flex-row sm:items-center gap-2 border border-line rounded-lg px-3 py-2"
+                    >
+                      <span className="text-xs text-ink flex-1 min-w-0">{item}</span>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        {([true, false] as const).map((v) => (
+                          <button
+                            key={String(v)}
+                            type="button"
+                            aria-pressed={dato.instalado === v}
+                            onClick={() => marcar(dato.instalado === v ? null : v)}
+                            className={`px-2.5 py-1 text-xs font-semibold rounded-md border ${
+                              dato.instalado === v
+                                ? v
+                                  ? 'bg-ok/15 border-ok/50 text-ok'
+                                  : 'bg-danger/15 border-danger/50 text-danger'
+                                : 'border-line text-ink-muted hover:border-ink-muted'
+                            }`}
+                          >
+                            {v ? 'Sí' : 'No'}
+                          </button>
+                        ))}
+                        {/* El estado sin contestar se NOMBRA cuando lo está, en
+                            vez de ser un botón más. Así se distingue de un «No»
+                            sin ofrecer una tercera respuesta que el formato no
+                            tiene. */}
+                        {dato.instalado === null && (
+                          <span className="text-[10px] text-ink-muted italic pl-1">
+                            sin contestar
+                          </span>
+                        )}
+                      </div>
+
+                      <input
+                        type="text"
+                        value={dato.observaciones ?? ''}
+                        onChange={(e) =>
+                          setChequeo((p) => ({
+                            ...p,
+                            [item]: { ...p[item], observaciones: e.target.value || null },
+                          }))
+                        }
+                        placeholder="Observaciones"
+                        className="w-full sm:w-52 px-2 py-1 text-xs border border-line rounded-md bg-surface text-ink focus:outline-none focus:border-brand shrink-0"
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {/* ---------------------------------------------------------------
+              Sin empresa no hay acta (D42).
+
+              BLOQUEA, y es la diferencia con el aviso de cédula de abajo: una
+              cédula que falta deja un hueco en el documento, pero una empresa
+              que falta deja el documento sin remitente — no se sabe qué logo
+              lleva ni de qué serie es su número. `SC-0000` en la cabecera de un
+              documento legal no le dice nada a quien lo firma.
+
+              Y se arregla aquí, con dos opciones en un desplegable. Es un dato
+              que quien emite sabe de memoria; mandarlo a Colaboradores por esto
+              perdería los equipos ya seleccionados.
+              --------------------------------------------------------------- */}
+          {faltaEmpresa && empleado && (
+            <div className="text-xs bg-danger/10 border border-danger/40 rounded-lg px-3 py-2 space-y-2">
+              <p className="text-ink flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-danger" />
+                <span>
+                  <strong>{empleado.nombre}</strong> no tiene empresa asignada. El acta no puede
+                  emitirse sin saber de quién es: la empresa decide el logo del encabezado y la
+                  serie del número de documento.
+                </span>
+              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <select
+                  value={empresaNueva}
+                  onChange={(e) => setEmpresaNueva(e.target.value as EmpresaQueEmite | '')}
+                  className="px-2 py-1 text-xs border border-line rounded-md bg-surface text-ink focus:outline-none focus:border-brand"
+                >
+                  {/* Sin preselección: elegir por alguien de quién es un equipo
+                      es exactamente lo que no debe hacer el programa. */}
+                  <option value="">Elegir empresa…</option>
+                  {EMPRESAS_QUE_EMITEN.map((e) => (
+                    <option key={e} value={e}>
+                      {e}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => void asignarEmpresa()}
+                  disabled={!empresaNueva || asignandoEmpresa}
+                  className="px-2.5 py-1 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold rounded-md"
+                >
+                  {asignandoEmpresa ? 'Asignando…' : 'Asignar y continuar'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ---------------------------------------------------------------
+              La sección 3 del formato pide número de documento, y `cedula`
+              casi no viene en los Excel.
+
+              AVISA, NO BLOQUEA. El acta se emite igual con el hueco en blanco,
+              como en la muestra aprobada por BBL: negarse a emitirla por un
+              dato que quizá nadie tenga a mano convertiría una molestia en un
+              tapón. Pero es un dato de un minuto si quien emite tiene delante a
+              la persona, así que la ficha se abre AQUÍ y no en otra pantalla:
+              irse a Colaboradores perdería los equipos ya seleccionados.
+              --------------------------------------------------------------- */}
+          {empleado && !empleado.cedula && (
+            <div className="text-xs bg-warn/10 border border-warn/40 rounded-lg px-3 py-2 space-y-2">
+              <p className="text-ink flex items-start gap-1.5">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-warn" />
+                <span>
+                  <strong>{empleado.nombre}</strong> no tiene número de documento registrado. El
+                  acta se emite igual y ese campo saldrá en blanco.
+                </span>
+              </p>
+              {!editandoFicha && (
+                <button
+                  type="button"
+                  onClick={() => setEditandoFicha(true)}
+                  className="underline text-brand font-semibold"
+                >
+                  Añadir la cédula ahora
+                </button>
+              )}
+            </div>
+          )}
+
+          {editandoFicha && empleado && (
+            <FormularioEmpleado
+              empleado={empleado}
+              sedes={sedes}
+              onCerrar={() => setEditandoFicha(false)}
+              onGuardado={async () => {
+                setEditandoFicha(false);
+                // Se recarga la lista para que el acta congele la cédula nueva:
+                // la instantánea se copia al emitir, así que si el estado local
+                // siguiera sin ella, el PDF saldría con el hueco igualmente.
+                await cargar();
+              }}
+            />
+          )}
+
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div>
               <p className="text-sm font-semibold text-ink">Registrar el acta</p>
@@ -604,7 +846,7 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             </div>
             <button
               onClick={() => void emitir()}
-              disabled={emitiendo || !empleadoId || seleccionados.length === 0}
+              disabled={emitiendo || !empleadoId || seleccionados.length === 0 || faltaEmpresa}
               className="px-4 py-2 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shrink-0"
             >
               <FileSignature className="w-4 h-4" />

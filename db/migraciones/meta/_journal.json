@@ -78,6 +78,41 @@
       "when": 1786554000000,
       "tag": "0010_acta_plantilla_version",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1786557600000,
+      "tag": "0011_empresa_y_mantenimiento",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786561200000,
+      "tag": "0012_prestamos",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786564800000,
+      "tag": "0013_prestatario_es_implicacion",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786568400000,
+      "tag": "0014_acta_empresa",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1786572000000,
+      "tag": "0015_consecutivo_por_empresa_y_chequeo",
+      "breakpoints": true
     }
   ]
 }

@@ -10,7 +10,10 @@ ni autenticación. El objetivo es construirle el backend por debajo y reusar la 
 `docs/plan-migracion-v1.md` — esquema de BD, endpoints, reglas del importador,
 requisitos de seguridad y el orden de las 7 etapas. Es la fuente de verdad.
 Si algo de este archivo contradice ese documento, gana ese documento.
-Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
+Ahora gana `docs/decisiones-01.md`; sobre ese `docs/decisiones-04.md`, sobre
+esos `docs/decisiones-05.md` (etapa 5e: la base se reconstruye desde
+`INVENTARIO-RIWI.xlsx` e `INVENTARIO-BBL.xlsx`), y sobre todos
+`docs/decisiones-06.md` (etapa 5f: el formato del acta aprobado por BBL).
 
 ## Stack
 
@@ -52,6 +55,31 @@ Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
   filas sintéticas, y **debe pasar en una BD vacía**.
   `db/verificar-datos.sql` comprueba que lo cargado las cumple, y no.
   Si un caso del primero necesita datos dentro, está mal escrito.
+- Un test puede **pasar** sin comprobar lo que dice comprobar, y manifestarse
+  como un fallo intermitente. Una comprobación de seguridad que falla «a veces»
+  no es flake: es que la manipulación no siempre ocurre. Antes de silenciar un
+  rojo intermitente, verificar que el caso negativo se construye igual en todas
+  las corridas. Ocurrió: el test de la cookie con sid alterado usaba
+  `m.replace(ch, …)`, que sustituye la primera aparición del carácter en todo
+  el trozo; cuando el sid empezaba por `A` —1 de cada 64— cambiaba la `A` de
+  `%3A` y mandaba `%3a`, que el servidor decodifica igual. Las otras 63 veces
+  pasaba sin alterar nada que importara. Todos los fallos anteriores del
+  proyecto se escondían en un rojo; este se escondía en un verde.
+- `node --test` sobre un fichero suelto sale con **exit 0 aunque haya un
+  `not ok`**: un hook roto imprime `not ok` en la suite y `# fail 0` en el
+  resumen, y el proceso termina bien. Solo `npm test` es criterio.
+- Un caso de prueba escrito a partir del código comprueba el código, no la
+  decisión. La CHECK de `prestado_a` se escribió como equivalencia cuando D34
+  decidía lo contrario —un equipo puede estar prestado sin que el archivo diga a
+  quién—, y su caso del verificador salía verde porque estaba escrito desde la
+  constraint. Salió a la luz al importar, no al probar. **Cuando una decisión
+  esté documentada, el caso se escribe desde el documento y cita cuál.**
+- Antes de atribuir un fallo a los datos de origen, descartar que lo haya
+  fabricado el propio código. «Dos personas con la misma cédula» no estaba en el
+  Excel: la fabricó el detector de bloques duplicados al absorber filas de más y
+  arrastrar la cédula de una ficha a otra. Era la explicación cómoda —encajaba
+  con todo lo demás que traen esos archivos— y habría quedado documentada como
+  un hecho falso sobre el inventario.
 - Un test que solo cubre el camino que ya funciona no es evidencia. Cada
   invariante se prueba por sus dos lados: que acepte lo que debe aceptar
   y que rechace lo que debe rechazar.
@@ -122,6 +150,15 @@ Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
 - «Esto está mal» y «no pude comprobarlo» son distintos. Lo primero es un
   hecho y puede abortar; lo segundo es ausencia de información y abortar
   por ello trata la ignorancia como certeza.
+- Un comentario en prosa no lo lee el código. El catálogo de transiciones
+  decía en prosa que dos de sus operaciones no eran botones sueltos, y
+  `AccionesEquipo` pintó un botón que daba 404: pinta lo que venga en
+  `por_estado`, y `por_estado` sale de esa misma tabla. Si una distinción
+  importa, tiene que ser **un campo del que salgan las tres cosas** —que la
+  operación exista, que tenga endpoint y que tenga botón—, no una nota al lado.
+  El mismo día apareció la variante barata: `Operacion` estaba copiado a mano
+  en `src/types.ts`, el servidor pasó a ocho y el cliente se quedó en seis con
+  `tsc` en verde.
 - Un componente correcto puede ser inalcanzable. El estado de error de
   `InventoryView` distinguía sus tres causas y tenía botón de reintentar, y
   aun así el usuario nunca lo veía: el proceso moría dos capas más abajo,
@@ -129,6 +166,11 @@ Ahora gana `docs/decisiones-01.md`, y sobre ese, `docs/decisiones-04.md`
   lo habría encontrado, porque el componente no tenía nada malo. Los
   caminos de fallo se prueban provocando la falla real sobre el sistema
   completo, no leyendo el código que los maneja.
+- Un registro que nunca se llena no se distingue de uno que dice que no pasó
+  nada. La tabla de auditoría vacía no significaba «nadie tocó esas filas»,
+  significaba «nadie escribe aquí», y las dos cosas se leen igual. Antes de
+  concluir algo desde la ausencia de datos, comprobar que algo los escribiría
+  si existieran.
 
 ## Eficiencia
 

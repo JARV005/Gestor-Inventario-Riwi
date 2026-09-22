@@ -16,8 +16,10 @@ import * as repoEquipos from '../../db/repositorios/equipos.js';
 import {
   categoriaEquipo,
   condicionEquipo,
+  empresaEmpleado,
   estadoEquipo,
   licenciaTipo,
+  prestatario,
   propiedadEquipo,
 } from '../../db/esquema.js';
 import { CODIGOS } from '../../db/motivos.js';
@@ -50,6 +52,16 @@ const camposEquipo = z.object({
   sede_id: uuid.nullable().optional(),
   empleado_id: uuid.nullable().optional(),
   sesion_usuario: z.string().trim().max(200).nullable().optional(),
+  /**
+   * De quién es (D31). SÍ se edita a mano, al contrario que `estado`,
+   * `empleado_id` y `sede_id`: la propiedad no sale de ninguna operación —no
+   * hay un movimiento «cambio de dueño»— y es justo el campo que hay que tocar
+   * para cerrar un `PROPIEDAD_AMBIGUA` desde la bandeja.
+   *
+   * `prestado_a` no está aquí: ese sí sale de una operación (prestar /
+   * recuperar) y su 409 lo dice.
+   */
+  empresa: z.enum(empresaEmpleado.enumValues).optional(),
   notas: z.string().trim().max(2000).nullable().optional(),
   /**
    * Pesos colombianos, como cadena: `numeric(14,2)` no cabe en un `number` de
@@ -88,6 +100,8 @@ const esquemaActualizar = camposEquipo
   .partial();
 
 const POR_SU_ENDPOINT: Record<string, string> = {
+  prestado_a:
+    'A quién está prestado no se edita a mano: sale de una operación. POST /api/equipos/:id/prestar o /recuperar_prestamo.',
   estado:
     'El estado no se edita a mano: sale de una operación. POST /api/equipos/:id/{asignar|devolver|reservar|liberar|baja}.',
   empleado_id:
@@ -100,6 +114,16 @@ const esquemaFiltros = z.object({
   estado: z.enum(estadoEquipo.enumValues).optional(),
   categoria: z.enum(categoriaEquipo.enumValues).optional(),
   sede: uuid.optional(),
+  /**
+   * Contra el enum de PRÉSTAMO y no el de empresa, más `Sin clasificar`:
+   * filtrar por ISF tiene que funcionar, porque ISF tiene dos equipos nuestros
+   * en la mano, y `Sin clasificar` no es un prestatario posible pero sí una
+   * empresa posible.
+   *
+   * Enumerado y no texto libre por lo mismo que `motivo`: un valor inexistente
+   * devolvería cero filas y parecería «no hay ninguno».
+   */
+  empresa: z.enum([...prestatario.enumValues, 'Sin clasificar']).optional(),
   q: z.string().trim().max(120).optional(),
   // Se valida contra el catálogo de códigos, no como texto libre: un código
   // inexistente devolvería cero filas y parecería "no hay ninguno".
@@ -129,7 +153,14 @@ export function registrarRutasEquipos(app: Express): void {
     guardian,
     asincrono(async (req, res) => {
       const f = validar(esquemaFiltros, req.query);
-      res.json(await repoEquipos.listar(f));
+      // Los conteos por empresa viajan con el listado, igual que los de motivo
+      // en la bandeja y los de colaboradores (D28): un número delante es lo que
+      // hace que «Sin clasificar» se vea sin ir a buscarlo.
+      const [pagina, conteos] = await Promise.all([
+        repoEquipos.listar(f),
+        repoEquipos.conteoPorEmpresa(),
+      ]);
+      res.json({ ...pagina, conteos_empresa: conteos });
     }),
   );
 
@@ -142,14 +173,74 @@ export function registrarRutasEquipos(app: Express): void {
     guardian,
     asincrono(async (req, res) => {
       const f = validar(esquemaFiltros, req.query);
-      const [pagina, conteos] = await Promise.all([
+      const [pagina, conteos, conteosEmpresa] = await Promise.all([
         repoEquipos.listar({ ...f, revision: true }),
         repoEquipos.conteoPorMotivo(),
+        repoEquipos.conteoPorEmpresa(),
       ]);
       // Los conteos van con el listado para que la bandeja pueda pintar los
       // bloques sin una segunda petición: "los 37 de licencia" tiene que ser
       // visible antes de filtrar, o nadie sabe por dónde empezar.
-      res.json({ ...pagina, conteos });
+      res.json({ ...pagina, conteos, conteos_empresa: conteosEmpresa });
+    }),
+  );
+
+  /**
+   * Cerrar un motivo en TODO su bloque.
+   *
+   * `admin` y no `autenticado`, al contrario que el cierre de uno solo: esto
+   * toca cientos de filas de una vez, y el permiso tiene que ser proporcional a
+   * lo que la acción alcanza.
+   *
+   * POST y no DELETE porque lleva cuerpo —la nota— y porque no es idempotente
+   * en el sentido que importa aquí: repetirlo añadiría la nota otra vez a las
+   * filas que aún conserven el motivo.
+   *
+   * Responde **200 aunque haya rechazos**, con el detalle fila a fila. Un 409
+   * global diría que no se hizo nada, y lo normal es justo lo contrario: entran
+   * casi todas y quedan unas pocas que necesitan una decisión antes (las que al
+   * bajar la marca reactivan un índice único parcial sobre un duplicado que
+   * sigue ahí).
+   */
+  ruta(
+    app,
+    'post',
+    '/api/equipos/revision/cerrar-en-bloque',
+    'admin',
+    guardian,
+    asincrono(async (req, res) => {
+      const datos = validar(
+        z.object({
+          motivo: z.enum(CODIGOS as [string, ...string[]]),
+          /**
+           * Opcional, y con un tope para que no se convierta en un campo de
+           * texto libre donde acabe media conversación.
+           *
+           * No se rellena por defecto: qué se comprobó y quién lo confirmó lo
+           * sabe la persona que cierra, no el programa.
+           */
+          nota: z.string().trim().min(1).max(500).nullable().optional(),
+        }),
+        req.body,
+      );
+
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+
+      const resultados = await repoEquipos.cerrarMotivoEnBloque(
+        datos.motivo,
+        datos.nota ?? null,
+        { usuarioId, ip: req.ip ?? null },
+      );
+
+      const fallidos = resultados.filter((r) => r.problema !== null);
+      res.json({
+        motivo: datos.motivo,
+        cerrados: resultados.length - fallidos.length,
+        // Las que no pudieron, con su motivo. Es lo que permite volver sobre
+        // ellas: un recuento de fallos sin nombres obliga a buscarlos a mano.
+        fallidos,
+      });
     }),
   );
 
@@ -226,7 +317,9 @@ export function registrarRutasEquipos(app: Express): void {
       // movimiento sin autor.
       const usuarioId = req.usuario?.id;
       if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
-      res.status(201).json({ equipo: await repoEquipos.crear(datos, usuarioId) });
+      res.status(201).json({
+        equipo: await repoEquipos.crear(datos, { usuarioId, ip: req.ip ?? null }),
+      });
     }),
   );
 
@@ -251,9 +344,101 @@ export function registrarRutasEquipos(app: Express): void {
       }
 
       const datos = validar(esquemaActualizar, cuerpo);
-      const equipo = await repoEquipos.actualizar(id, datos);
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+      const equipo = await repoEquipos.actualizar(id, datos, {
+        usuarioId,
+        ip: req.ip ?? null,
+      });
       if (!equipo) throw noEncontrado('Equipo');
       res.json({ equipo });
+    }),
+  );
+
+  /**
+   * Cerrar un motivo de la bandeja: alguien lo miró y lo resolvió.
+   *
+   * Sin esto la bandeja solo se puede LEER, y una bandeja que no se vacía no es
+   * una bandeja: es una lista de reproches. Los 177 marcados de la 5e se
+   * quedarían ahí para siempre aunque alguien arreglara el dato.
+   *
+   * Cuando cae el último motivo, la marca baja sola —son el mismo hecho, lo
+   * dice el CONSTRAINT TRIGGER de la 0006— y los índices únicos parciales
+   * vuelven a mirar esa fila. Si el duplicado que la motivó sigue ahí, Postgres
+   * rechaza: la limpieza no se cierra en falso.
+   */
+  ruta(
+    app,
+    'delete',
+    '/api/equipos/:id/motivos/:codigo',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const codigo = validar(z.enum(CODIGOS as [string, ...string[]]), req.params.codigo);
+      // `guardian` ya rechazó la petición sin sesión. Si dejara de hacerlo, esto
+      // falla aquí y no escribe una fila de auditoría sin autor.
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+      try {
+        const equipo = await repoEquipos.cerrarMotivo(id, codigo, {
+          usuarioId,
+          ip: req.ip ?? null,
+        });
+        if (!equipo) throw noEncontrado('Equipo');
+        res.json({ equipo });
+      } catch (e) {
+        if (e instanceof repoEquipos.MotivoNoPuesto) {
+          throw new ErrorHttp(409, `Ese equipo no tiene puesto el motivo "${codigo}".`);
+        }
+        throw e;
+      }
+    }),
+  );
+
+  /**
+   * Quién tiene en la mano un equipo prestado.
+   *
+   * Ruta propia y no un campo del `PATCH`: `empleado_id` está en
+   * `POR_SU_ENDPOINT` desde D19 y tiene que seguir estándolo. Lo que la 0012
+   * abrió es un hueco estrecho —`Prestado` es el único estado donde ese campo
+   * es libre, y ninguna de las diez operaciones lo escribe: `prestar` mueve el
+   * estado y deja el tenedor a NULL— y este endpoint lo cubre sin tocar el
+   * resto. El estado no cambia, la empresa prestataria tampoco, y fuera de
+   * `Prestado` responde 409 diciendo qué operación toca.
+   *
+   * Sin él, el `RESPONSABLE_EN_CONFLICTO` de `F5X8494` sería visible y no
+   * resoluble: dos nombres en una nota y ninguna forma de elegir.
+   */
+  ruta(
+    app,
+    'post',
+    '/api/equipos/:id/tenedor',
+    'autenticado',
+    guardian,
+    asincrono(async (req, res) => {
+      const id = validar(uuid, req.params.id);
+      const { empleado_id } = validar(z.object({ empleado_id: uuid.nullable() }), req.body ?? {});
+      const usuarioId = req.usuario?.id;
+      if (!usuarioId) throw new ErrorHttp(401, 'Sesión requerida');
+      try {
+        const equipo = await repoEquipos.fijarTenedor(id, empleado_id, {
+          usuarioId,
+          ip: req.ip ?? null,
+        });
+        if (!equipo) throw noEncontrado('Equipo');
+        res.json({ equipo });
+      } catch (e) {
+        if (e instanceof repoEquipos.NoEstaPrestado) {
+          throw new ErrorHttp(
+            409,
+            'Fijar quién lo tiene solo aplica a un equipo prestado. Para uno asignado ' +
+              'la operación es POST /api/equipos/:id/asignar.',
+            { estado_actual: e.estado_actual },
+          );
+        }
+        throw e;
+      }
     }),
   );
 }

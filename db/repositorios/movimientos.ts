@@ -26,11 +26,12 @@ import { and, asc, desc, eq, isNull, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
 import { db, type BD, type Ejecutor } from '../cliente.js';
-import { empleados, equipos, movimientos, sedes, usuariosApp } from '../esquema.js';
+import { empleados, equipos, movimientos, prestatario, sedes, usuariosApp } from '../esquema.js';
 import {
   comprobarTransicion,
   type EstadoEquipo,
   type Operacion,
+  type TipoMovimiento,
 } from '../transiciones.js';
 import * as repoAuditoria from './auditoria.js';
 
@@ -40,6 +41,8 @@ export interface DatosMutacion {
   empleado_id?: string | null;
   /** Obligatorio en `trasladar`: a qué sede va. */
   sede_destino_id?: string | null;
+  /** Obligatorio en `prestar`: a qué empresa se le presta (D32). */
+  prestado_a?: (typeof prestatario.enumValues)[number] | null;
   observaciones?: string | null;
   /** Solo `trasladar`. Campos de D1, opcionales. */
   transportadora?: string | null;
@@ -56,6 +59,18 @@ export class MovimientoNoEncontrado extends Error {}
 export class NoEsTraslado extends Error {}
 /** Ya se confirmó. El trigger de `0001_reglas.sql` no deja reabrirlo. */
 export class TrasladoYaConfirmado extends Error {}
+
+/**
+ * Lo que devuelve `mutar`. Escrito y no inferido: desde que `reasignar` es
+ * compuesta, la función se llama a sí misma y TypeScript no puede inferir el
+ * tipo de una recursión (TS7023).
+ */
+export interface ResultadoMutacion {
+  /** Solo lo que el `returning` pide: id, tipo y fecha. */
+  movimiento: { id: string; tipo: TipoMovimiento; fecha: Date };
+  antes: Antes;
+  despues: Antes;
+}
 
 /** El estado del equipo antes de tocarlo. Lo que va a `auditoria.antes`. */
 interface Antes {
@@ -81,7 +96,7 @@ export async function mutar(
   // un savepoint, así que un equipo que no se pueda mover aborta el acta entera
   // en vez de dejarla a medias.
   bd: Ejecutor = db,
-) {
+): Promise<ResultadoMutacion> {
   return bd.transaction(async (tx) => {
     // FOR UPDATE: nadie más toca esta fila hasta que la transacción termine.
     const [actual] = await tx
@@ -90,6 +105,7 @@ export async function mutar(
         estado: equipos.estado,
         empleado_id: equipos.empleado_id,
         sede_id: equipos.sede_id,
+        prestado_a: equipos.prestado_a,
       })
       .from(equipos)
       .where(eq(equipos.id, equipoId))
@@ -100,11 +116,48 @@ export async function mutar(
     // Lanza TransicionIlegal, que la capa HTTP traduce a 409.
     const t = comprobarTransicion(operacion, actual.estado);
 
+    // -----------------------------------------------------------------------
+    // Las compuestas: se ejecutan como la cadena que dice la tabla
+    // -----------------------------------------------------------------------
+    //
+    // `reasignar` es `devolver` + `asignar`. Se hace aquí y no en el endpoint
+    // para que cada mitad pase por TODO lo de esta función: su comprobación de
+    // transición, su `FOR UPDATE`, su movimiento y su fila de auditoría. Un
+    // atajo que escribiera un solo movimiento «Reasignación» perdería que hubo
+    // una devolución, y el historial es lo único que justifica el proyecto.
+    //
+    // La transacción es la de fuera: drizzle convierte la anidada en un
+    // savepoint, así que si la segunda mitad no se puede hacer —la persona
+    // destino no existe— la primera se deshace y el equipo NO se queda
+    // devuelto a medias.
+    if (t.compuesta) {
+      if (t.requiere === 'empleado' && !datos.empleado_id) {
+        throw new FaltaDato('Hay que decir a quién se le reasigna el equipo.');
+      }
+      // Reasignar a quien ya lo tiene no es una operación: son dos movimientos
+      // que no cuentan nada y un historial con ruido. Se rechaza antes de
+      // escribir la primera mitad.
+      if (datos.empleado_id && datos.empleado_id === actual.empleado_id) {
+        throw new FaltaDato(
+          'El equipo ya está asignado a esa persona. Reasignar exige un responsable distinto.',
+        );
+      }
+
+      let ultimo!: ResultadoMutacion;
+      for (const paso of t.compuesta) {
+        ultimo = await mutar(paso, equipoId, datos, contexto, tx);
+      }
+      return ultimo;
+    }
+
     if (t.requiere === 'empleado' && !datos.empleado_id) {
       throw new FaltaDato('Hay que decir a quién se le asigna el equipo.');
     }
     if (t.requiere === 'sede' && !datos.sede_destino_id) {
       throw new FaltaDato('Hay que decir a qué sede se traslada el equipo.');
+    }
+    if (t.requiere === 'prestatario' && !datos.prestado_a) {
+      throw new FaltaDato('Hay que decir a qué empresa se le presta el equipo.');
     }
 
     const antes: Antes = {
@@ -128,14 +181,22 @@ export async function mutar(
       // o quitarlo no es opcional según a qué estado se vaya.
       const nuevoEmpleado = t.hacia === 'Asignado' ? (datos.empleado_id ?? null) : null;
 
+      // `prestado_a` va acoplado a `Prestado` por la CHECK
+      // `equipos_prestado_implica_prestatario`, que también es una
+      // equivalencia. Se escribe en el mismo UPDATE por el mismo motivo que
+      // `empleado_id`: dejarlo puesto al recuperar el préstamo no es un
+      // descuido que se arregle luego, es una fila que la base rechaza.
+      const nuevoPrestatario = t.hacia === 'Prestado' ? (datos.prestado_a ?? null) : null;
+
       const [fila] = await tx
         .update(equipos)
-        .set({ estado: t.hacia, empleado_id: nuevoEmpleado })
+        .set({ estado: t.hacia, empleado_id: nuevoEmpleado, prestado_a: nuevoPrestatario })
         .where(eq(equipos.id, equipoId))
         .returning({
           estado: equipos.estado,
           empleado_id: equipos.empleado_id,
           sede_id: equipos.sede_id,
+          prestado_a: equipos.prestado_a,
         });
 
       despues = fila;

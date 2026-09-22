@@ -67,11 +67,21 @@ SELECT 'A', 'SIN_MARCA con marca', count(*)
 FROM equipos e JOIN equipos_motivos_revision m ON m.equipo_id = e.id
 WHERE m.motivo_codigo = 'SIN_MARCA' AND e.marca IS NOT NULL;
 
+-- SIN_UBICACION dice que la celda venía vacía. Con sede puesta, la sede salió
+-- de algún sitio que no es el archivo: eso sigue siendo un error.
 INSERT INTO hallazgo
-SELECT 'A', 'motivo de ubicacion con sede asignada', count(*)
+SELECT 'A', 'SIN_UBICACION con sede asignada', count(*)
 FROM equipos e JOIN equipos_motivos_revision m ON m.equipo_id = e.id
-WHERE m.motivo_codigo IN ('SIN_UBICACION', 'UBICACION_FUERA_DE_SEDES')
-  AND e.sede_id IS NOT NULL;
+WHERE m.motivo_codigo = 'SIN_UBICACION' AND e.sede_id IS NOT NULL;
+
+-- UBICACION_FUERA_DE_SEDES, en cambio, YA NO implica sede vacía. Hasta la 5e
+-- ninguna ubicación rara se mapeaba, así que las dos cosas iban siempre juntas;
+-- ahora «Remoto - Sabaneta» se mapea a Remoto **y se marca**
+-- (decisiones-05): el mapeo es para que salte el aviso de dirección de D30
+-- sobre esa persona, y la marca es para que conste que el archivo no escribió
+-- una sede. Con sede o sin ella, el código es correcto, así que no hay nada que
+-- comprobar aquí — lo que sí se comprueba es el otro lado, en el grupo B: que
+-- un equipo sin sede diga por qué.
 
 INSERT INTO hallazgo
 SELECT 'A', 'ESTADO_REVISION sin quedar Disponible', count(*)
@@ -144,11 +154,19 @@ WHERE e.marca IS NULL AND e.propiedad <> 'Cliente'
   AND NOT EXISTS (SELECT 1 FROM equipos_motivos_revision m
                    WHERE m.equipo_id = e.id AND m.motivo_codigo = 'SIN_MARCA');
 
--- Todo equipo sin sede tiene que decir por qué.
+-- Todo equipo sin sede tiene que decir por qué, y hay TRES formas de decirlo.
+--
+-- Las dos marcas, y —desde la 5e— estar prestado: un equipo que tiene otra
+-- empresa no está en ninguna sede nuestra, y `prestado_a` lo explica mejor que
+-- una marca. Los dos equipos que RIWI prestó a ISF entran así, y marcarlos
+-- además sería mandar a la bandeja de limpieza algo que no tiene nada que
+-- limpiar (decisiones-05: «ISF como ubicación no es sede: es consecuencia del
+-- préstamo»).
 INSERT INTO hallazgo
 SELECT 'B', 'sin sede y sin explicar por que', count(*)
 FROM equipos e
 WHERE e.sede_id IS NULL
+  AND e.prestado_a IS NULL
   AND NOT EXISTS (SELECT 1 FROM equipos_motivos_revision m
                    WHERE m.equipo_id = e.id
                      AND m.motivo_codigo IN ('SIN_UBICACION', 'UBICACION_FUERA_DE_SEDES'));
@@ -178,12 +196,21 @@ FROM (SELECT equipo_id FROM equipos_motivos_revision
       WHERE motivo_codigo IN ('SERIAL_DUPLICADO', 'SERIAL_REPETIDO_PERIFERICO')
       GROUP BY equipo_id HAVING count(*) > 1) x;
 
--- La comprobación de que lo que quedó fuera sigue fuera: estos dos códigos
--- describen filas que no son equipos, y esas se rechazan. Solo viven en el CSV.
+-- La comprobación de que lo que quedó fuera sigue fuera.
+--
+-- Escrita como «ninguno de los dos códigos aparece en la BD», y eso era cierto
+-- por accidente: en el archivo de la etapa 2, la única fila sin estado era
+-- también la única sin tipo. En los dos archivos nuevos no: las dos filas con
+-- las columnas corridas (BAQ-00022 y BAQ-00023) traen la casilla de estado
+-- vacía y son portátiles Dell perfectamente reales.
+--
+-- Lo que rechaza una fila es tener LOS DOS a la vez —ni tipo ni estado no
+-- describe ningún equipo (D7 a)—, y eso es lo que se comprueba.
 INSERT INTO hallazgo
-SELECT 'C', 'codigos de fila rechazada presentes en la BD', count(*)
-FROM equipos_motivos_revision
-WHERE motivo_codigo IN ('ESTADO_NO_APLICA', 'SIN_TIPO');
+SELECT 'C', 'filas con ESTADO_NO_APLICA y SIN_TIPO a la vez', count(*)
+FROM (SELECT equipo_id FROM equipos_motivos_revision
+      WHERE motivo_codigo IN ('ESTADO_NO_APLICA', 'SIN_TIPO')
+      GROUP BY equipo_id HAVING count(*) > 1) x;
 
 -- ===========================================================================
 -- D. Coherencia con la hoja de origen. Detecta un cruce de hojas, que hoy
@@ -421,42 +448,143 @@ WHERE a.empleado_id IS DISTINCT FROM
       CASE a.tipo WHEN 'Entrega' THEN m.empleado_destino_id
                   ELSE m.empleado_origen_id END;
 
+-- El formato pasó a ser `PREFIJO-0000`, una serie por empresa y sin año (D40).
+--
+-- **Dos prefijos y no tres**: `SC` se retiró en la 5f-2 (D42). Si aparece uno,
+-- es que alguien emitió un acta sin remitente por un camino que se saltó la
+-- guarda, y eso hay que verlo.
 INSERT INTO hallazgo
 SELECT 'H', 'consecutivos con formato inesperado', count(*)
-FROM actas a WHERE a.consecutivo !~ '^ACT-\d{4}-\d{4,}$';
+FROM actas a WHERE a.consecutivo !~ '^(RIWI|BBL)-\d{4,}$';
 
--- El año del número tiene que ser el de la fecha, o el consecutivo de 2027
--- empezaría a numerar sobre el contador de 2026.
+-- Nadie puede emitir un acta sin empresa (D42). Lo impone una guarda en el
+-- repositorio y el tipo de `PREFIJO_CONSECUTIVO`; aquí se comprueba que lo
+-- CARGADO lo cumple, que es la otra mitad — una guarda se puede quitar.
 INSERT INTO hallazgo
-SELECT 'H', 'consecutivos cuyo anio no es el de la fecha', count(*)
+SELECT 'H', 'actas emitidas sin empresa asignada', count(*)
+FROM actas a WHERE a.empresa = 'Sin clasificar';
+
+-- Y su contador tampoco debería existir. Una fila `Sin clasificar` aquí es un
+-- número reservado para una serie que no puede emitir: si aparece, alguien
+-- numeró un acta que después no se guardó.
+INSERT INTO hallazgo
+SELECT 'H', 'contador de una serie que no puede emitir', count(*)
+FROM actas_consecutivo c WHERE c.empresa = 'Sin clasificar';
+
+-- Y el prefijo tiene que ser el de SU empresa. Sin esto, un acta de BBL podría
+-- llevar número de la serie de RIWI: dos documentos legales distintos con el
+-- mismo número, que es justo lo que el prefijo vino a evitar.
+INSERT INTO hallazgo
+SELECT 'H', 'consecutivos cuyo prefijo no es el de su empresa', count(*)
 FROM actas a
-WHERE a.consecutivo ~ '^ACT-\d{4}-'
-  AND substring(a.consecutivo from 5 for 4)::int <> extract(year FROM a.fecha AT TIME ZONE 'UTC');
+WHERE split_part(a.consecutivo, '-', 1) <> CASE a.empresa
+        WHEN 'RIWI' THEN 'RIWI'
+        WHEN 'BBL Labs' THEN 'BBL'
+        -- Sin rama por defecto a propósito: `Sin clasificar` da NULL, el
+        -- `<>` no es cierto y la fila NO cae aquí. La cuenta el caso de
+        -- arriba, que es el que sabe qué decir de ella.
+        END;
 
--- Sin huecos: es lo que distingue el contador en tabla de una SEQUENCE (D25),
--- y lo único que lo comprueba de verdad sobre lo emitido.
+-- Sin huecos DENTRO DE CADA SERIE: es lo que distingue el contador en tabla de
+-- una SEQUENCE (D25), y lo único que lo comprueba de verdad sobre lo emitido.
+--
+-- El mínimo es CERO y no uno: la primera acta de cada empresa es la `0000`
+-- (D40). Escrito como estaba —`minimo <> 1`— este caso habría dado por rota
+-- toda serie correcta.
 INSERT INTO hallazgo
-SELECT 'H', 'anios con huecos en la numeracion de actas', count(*)
+SELECT 'H', 'series con huecos en la numeracion de actas', count(*)
 FROM (
-  SELECT substring(a.consecutivo from 5 for 4)::int AS anio,
+  SELECT split_part(a.consecutivo, '-', 1) AS serie,
          count(*) AS emitidas,
          max(substring(a.consecutivo from '\d+$')::int) AS maximo,
          min(substring(a.consecutivo from '\d+$')::int) AS minimo
     FROM actas a
-   WHERE a.consecutivo ~ '^ACT-\d{4}-\d+$'
+   WHERE a.consecutivo ~ '^(RIWI|BBL)-\d+$'
    GROUP BY 1
 ) x
-WHERE x.minimo <> 1 OR x.maximo <> x.emitidas;
+WHERE x.minimo <> 0 OR x.maximo <> x.emitidas - 1;
 
 -- Y el contador no puede ir por detrás de lo emitido: si lo hiciera, la
 -- siguiente acta reintentaría un número ya usado y chocaría con el UNIQUE.
+--
+-- `valor` es el ÚLTIMO número dado, no cuántas van: con la serie arrancando en
+-- cero, las dos cosas se diferencian en uno. Contar actas y comparar contra
+-- `valor` a secas marcaría en rojo todas las series correctas.
 INSERT INTO hallazgo
 SELECT 'H', 'contadores que no cuadran con las actas emitidas', count(*)
 FROM actas_consecutivo c
 WHERE c.valor <> (
-  SELECT count(*) FROM actas a
-   WHERE a.consecutivo LIKE 'ACT-' || c.anio || '-%'
-);
+  SELECT count(*) FROM actas a WHERE a.empresa = c.empresa
+) - 1
+  AND EXISTS (SELECT 1 FROM actas a WHERE a.empresa = c.empresa);
+
+-- La sección 5 va guardada en toda entrega con documento, y en ninguna
+-- devolución (D41). Lo impone una CHECK desde la 0015; aquí se comprueba que
+-- lo CARGADO la cumple, que es la otra mitad.
+INSERT INTO hallazgo
+SELECT 'H', 'actas cuyo chequeo no cuadra con su tipo', count(*)
+FROM actas a
+WHERE (a.chequeo IS NOT NULL) <> (a.pdf IS NOT NULL AND a.tipo = 'Entrega');
+
+
+-- ---------------------------------------------------------------------------
+-- Grupo I — préstamos entre empresas (5e)
+-- ---------------------------------------------------------------------------
+--
+-- Los dos primeros casos los impone además una CHECK desde la 0012, así que
+-- aquí no comprueban que la regla exista: comprueban que lo CARGADO la cumple.
+-- Que estén repetidos es deliberado — una CHECK se puede dejar caer en una
+-- migración futura y estos seguirían hablando.
+--
+-- **Y van con su línea de contexto abajo.** Escritos antes de reimportar
+-- habrían dado tres verdes de vacío: sin un solo equipo prestado, las tres
+-- consultas devuelven cero infractores sin haber mirado nada. La diferencia
+-- entre «ninguno los incumple» y «no hay ninguno» es justo la que hace inútil a
+-- un verificador, y solo se ve con el conteo delante.
+
+-- «Sin marcar» y no «sin prestatario» a secas: un equipo prestado del que el
+-- archivo no dice a quién es un dato incompleto y legítimo mientras lleve su
+-- motivo (D34, la etiqueta 0798). Sin marca, en cambio, nadie lo va a resolver
+-- nunca. Es la misma forma que el resto de casos «y sin marcar» del fichero.
+INSERT INTO hallazgo
+SELECT 'I', 'prestados sin prestatario y sin marcar', count(*)
+FROM equipos e
+WHERE e.estado = 'Prestado' AND e.prestado_a IS NULL AND NOT e.requiere_revision;
+
+INSERT INTO hallazgo
+SELECT 'I', 'prestatario sobre un equipo que no esta Prestado', count(*)
+FROM equipos e WHERE e.prestado_a IS NOT NULL AND e.estado <> 'Prestado';
+
+-- Un equipo «prestado a su propia empresa» no es un préstamo: es una fila mal
+-- puesta, y además saldría dos veces en la vista de esa empresa, porque el
+-- filtro es `empresa = X OR prestado_a = X`.
+INSERT INTO hallazgo
+SELECT 'I', 'equipos prestados a su propia empresa', count(*)
+FROM equipos e
+WHERE e.prestado_a IS NOT NULL AND e.prestado_a::text = e.empresa::text;
+
+-- El serial es la identidad física de la máquina: si el mismo aparece bajo dos
+-- empresas y nadie lo ha marcado, es que el cruce entre archivos no lo resolvió
+-- y hay dos filas para un solo portátil. Es el invariante que D31 existe para
+-- sostener — una fila por máquina física.
+INSERT INTO hallazgo
+SELECT 'I', 'mismo serial en dos empresas sin marcar', count(*)
+FROM (
+  SELECT e.serial
+    FROM equipos e
+   WHERE e.serial IS NOT NULL AND NOT e.requiere_revision
+   GROUP BY e.serial
+  HAVING count(DISTINCT e.empresa) > 1
+) x;
+
+-- Un equipo prestado que no dice dónde está no es raro —el prestatario lo
+-- tiene—, pero uno prestado Y con sede propia sí: o volvió y nadie lo registró,
+-- o la sede es la del dueño y no la de quien lo usa. Solo se avisa de los que
+-- además no están marcados.
+INSERT INTO hallazgo
+SELECT 'I', 'prestados con sede propia y sin marcar', count(*)
+FROM equipos e
+WHERE e.estado = 'Prestado' AND e.sede_id IS NOT NULL AND NOT e.requiere_revision;
 
 -- ===========================================================================
 
@@ -481,7 +609,14 @@ SELECT (SELECT count(*) FROM equipos) AS equipos,
          WHERE tipo = 'Traslado' AND fecha_confirmacion IS NULL) AS traslados_abiertos,
        -- Igual que arriba: sin actas, el grupo H sale verde sin comprobar nada
        -- y eso tiene que verse a simple vista.
-       (SELECT count(*) FROM actas) AS actas;
+       (SELECT count(*) FROM actas) AS actas,
+       -- Sin esto, el grupo I entero sale verde sobre cero equipos prestados y
+       -- nadie distinguiría «ninguno los incumple» de «no hay ninguno».
+       (SELECT count(*) FROM equipos WHERE estado = 'Prestado') AS prestados,
+       (SELECT string_agg(t.prestado_a || '=' || t.n, ' ' ORDER BY t.prestado_a)
+          FROM (SELECT prestado_a::text AS prestado_a, count(*) AS n
+                  FROM equipos WHERE prestado_a IS NOT NULL
+                 GROUP BY 1) t) AS reparto_prestamos;
 
 -- ---------------------------------------------------------------------------
 -- Y ahora, que el proceso FALLE si hay alguna falla.

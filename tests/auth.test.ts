@@ -166,10 +166,24 @@ describe('sesión: ciclo de vida', () => {
     const c = nuevo();
     await c.entrar(admin.email, admin.password);
     const valida = c.cookieCruda;
-    const alterada = valida.replace(/s%3A(.)/, (m, ch: string) =>
-      m.replace(ch, ch === 'a' ? 'b' : 'a'),
-    );
+
+    // Se altera por POSICIÓN, no con `String.replace(ch, ...)`.
+    //
+    // La versión anterior hacía `m.replace(ch, ...)` sobre `s%3A<ch>`, y
+    // `replace` con una cadena sustituye la PRIMERA aparición del carácter en
+    // todo el trozo. Cuando el sid empezaba por 'A' —una vez de cada 64— la que
+    // se cambiaba era la 'A' de `%3A`, dejando `%3a`: el porcentaje-codificado
+    // es insensible a mayúsculas, así que la cookie seguía siendo la misma y el
+    // servidor devolvía 200. El test fallaba una corrida completa de cada
+    // sesenta y cuatro, y en las 63 restantes pasaba sin comprobar nada
+    // distinto de lo que creía.
+    const i = valida.indexOf('s%3A') + 's%3A'.length;
+    const original = valida[i];
+    const alterada =
+      valida.slice(0, i) + (original === 'a' ? 'b' : 'a') + valida.slice(i + 1);
+
     assert.notEqual(alterada, valida, 'la cookie no se pudo alterar; revisar el test');
+    assert.equal(alterada.length, valida.length, 'alterar el sid no puede cambiar la longitud');
     assert.equal((await nuevo().get('/api/auth/me', { cookie: alterada })).estado, 401);
   });
 

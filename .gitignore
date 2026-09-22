@@ -7,3 +7,5 @@ coverage/
 .env*
 !.env.example
 data/origen
+# Borradores de trabajo: no forman parte del proyecto.
+.scratch/

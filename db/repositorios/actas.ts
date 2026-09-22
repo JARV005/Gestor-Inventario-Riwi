@@ -23,6 +23,13 @@
 import { and, desc, eq, sql } from 'drizzle-orm';
 
 import { generarPdfActa, PLANTILLA_VERSION, sha256 } from '../acta-pdf.js';
+import {
+  CHEQUEO_ITEMS,
+  PREFIJO_CONSECUTIVO,
+  puedeEmitir,
+  type EmpresaQueEmite,
+  type ItemChequeo,
+} from '../acta-formato.js';
 import { db, type BD, type Ejecutor } from '../cliente.js';
 import {
   TransicionIlegal,
@@ -74,6 +81,28 @@ const OPERACION_DE: Record<TipoActa, Operacion> = {
 };
 
 export class EmpleadoNoEncontrado extends Error {}
+
+/**
+ * La persona no tiene empresa asignada, así que su acta no tiene remitente
+ * (D42).
+ *
+ * No es un dato que falte en el documento, como la cédula: es de **quién** es
+ * el acta. Se corrige asignándole la empresa, que es un desplegable de dos
+ * opciones, y por eso el mensaje lo dice — un 409 que solo diga que algo falló
+ * deja a quien emite sin saber qué hacer a continuación.
+ */
+export class EmpresaSinAsignar extends Error {
+  constructor(
+    readonly empleadoId: string,
+    readonly nombre: string,
+  ) {
+    super(
+      `${nombre} no tiene empresa asignada, y el acta necesita saber de quién es: ` +
+        `el logo del encabezado y el número de documento salen de ahí. ` +
+        `Asígnale RIWI o BBL Labs en su ficha y vuelve a emitirla.`,
+    );
+  }
+}
 export class EquipoNoEncontrado extends Error {}
 /** El equipo no tiene un movimiento de ese tipo con esa persona. */
 export class SinMovimientoQueDocumentar extends Error {}
@@ -128,35 +157,79 @@ export interface DatosActa {
   /** Los equipos que el acta cubre. Al menos uno. */
   equipos: string[];
   observaciones?: string | null;
+  /**
+   * Las respuestas de la sección 5 (D41). Solo se guardan en las entregas.
+   *
+   * Lo que no venga queda `instalado: null` — «nadie contestó», que es una
+   * respuesta legítima y distinta de «no».
+   */
+  chequeo?: ItemChequeo[] | null;
 }
 
 /**
- * El consecutivo del año, dentro de la transacción del acta.
+ * Los cuatro items en su orden canónico, con lo que haya contestado quien
+ * emite y `null` en lo que no.
  *
- * `INSERT ... ON CONFLICT DO UPDATE` en una sola sentencia: crea el contador el
- * primer día del año y lo incrementa el resto. El `UPDATE` toma el bloqueo de
- * la fila hasta el COMMIT, así que dos peticiones simultáneas se serializan y
- * la segunda recibe el siguiente número, no el mismo.
+ * Se normaliza **siempre**, en vez de guardar tal cual lo que llegue, por dos
+ * motivos que apuntan al mismo sitio: el PDF pinta las cuatro filas vengan o no
+ * en la petición, y el hash se recalcula desde esta columna. Guardar una lista
+ * corta, desordenada o con un item repetido haría que el documento y su
+ * instantánea dejaran de decir lo mismo.
+ *
+ * En una devolución devuelve `null`: su formato no tiene sección 5, y la CHECK
+ * `actas_pdf_con_hash` lo exige.
+ */
+function normalizarChequeo(tipo: TipoActa, entrada: ItemChequeo[] | null | undefined) {
+  if (tipo !== 'Entrega') return null;
+  return CHEQUEO_ITEMS.map((item) => {
+    const dado = entrada?.find((c) => c.item === item);
+    return {
+      item,
+      instalado: dado?.instalado ?? null,
+      observaciones: dado?.observaciones?.trim() || null,
+    } satisfies ItemChequeo;
+  });
+}
+
+/**
+ * El consecutivo de la empresa, dentro de la transacción del acta (D40).
+ *
+ * **Una serie por empresa, y sin año.** El formato aprobado es `BBL-0000` /
+ * `RIWI-0000`: como el número no lleva el año, la clave del contador tiene que
+ * ser exactamente lo que distingue una serie de otra. Si siguiera clavado en
+ * el año, cada 1 de enero la serie volvería a empezar y el acta número uno del
+ * segundo año chocaría contra el UNIQUE de `actas.consecutivo`.
+ *
+ * `INSERT ... ON CONFLICT DO UPDATE` en una sola sentencia: crea el contador
+ * con la primera acta de esa empresa y lo incrementa a partir de ahí. El
+ * `UPDATE` toma el bloqueo de la fila hasta el COMMIT, así que dos peticiones
+ * simultáneas **de la misma empresa** se serializan y la segunda recibe el
+ * siguiente número, no el mismo. Dos de empresas distintas bloquean filas
+ * distintas y no se esperan entre sí.
+ *
+ * Arranca en 0: la primera acta de cada empresa es la `0000`.
  *
  * Se pide **al final**, cuando ya está todo validado: el bloqueo serializa la
- * emisión de actas y no hay motivo para sostenerlo mientras se comprueban
- * movimientos.
+ * emisión y no hay motivo para sostenerlo mientras se comprueban movimientos.
  *
  * Y no es una SEQUENCE a propósito (D25): `nextval` no se deshace con la
  * transacción, así que un acta que falle después de pedir número deja un hueco
  * permanente en la numeración de un documento firmable.
  */
-async function siguienteConsecutivo(tx: Ejecutor, anio: number): Promise<string> {
+export async function siguienteConsecutivo(
+  tx: Ejecutor,
+  empresa: EmpresaQueEmite,
+): Promise<string> {
   const [fila] = await tx
     .insert(actasConsecutivo)
-    .values({ anio, valor: 1 })
+    .values({ empresa, valor: 0 })
     .onConflictDoUpdate({
-      target: actasConsecutivo.anio,
+      target: actasConsecutivo.empresa,
       set: { valor: sql`${actasConsecutivo.valor} + 1` },
     })
     .returning({ valor: actasConsecutivo.valor });
 
-  return `ACT-${anio}-${String(fila.valor).padStart(4, '0')}`;
+  return `${PREFIJO_CONSECUTIVO[empresa]}-${String(fila.valor).padStart(4, '0')}`;
 }
 
 /** Los datos de la persona que el acta congela, y que sirven para los mensajes. */
@@ -294,12 +367,33 @@ export async function emitir(
         cargo: empleados.cargo,
         area: empleados.area,
         sede: sedes.nombre,
+        // De quién es el acta, y por tanto qué logo lleva (D39). Sale de la
+        // PERSONA y no de los equipos: el documento va dirigido a alguien de
+        // una empresa, y sus equipos pueden ser de otra —eso lo dice la
+        // columna «Propietario» de la sección 4, fila a fila.
+        empresa: empleados.empresa,
       })
       .from(empleados)
       .leftJoin(sedes, eq(sedes.id, empleados.sede_id))
       .where(eq(empleados.id, datos.empleado_id));
 
     if (!persona) throw new EmpleadoNoEncontrado(datos.empleado_id);
+
+    /**
+     * Antes de mover nada, y antes de pedir número (D42).
+     *
+     * En modo `ejecutar` el acta hace la operación, así que una guarda puesta
+     * más abajo habría dejado equipos movidos en una transacción que después
+     * revienta. Aquí no hay nada que deshacer.
+     *
+     * Y la comprobación estrecha el tipo: `persona.empresa` pasa a ser
+     * `EmpresaQueEmite` para el resto de la función, que es lo que permite
+     * numerarla sin un `as`.
+     */
+    if (!puedeEmitir(persona.empresa)) {
+      throw new EmpresaSinAsignar(persona.id, persona.nombre);
+    }
+    const empresaDelActa: EmpresaQueEmite = persona.empresa;
 
     const [autor] = await tx
       .select({ nombre: usuariosApp.nombre })
@@ -331,6 +425,10 @@ export async function emitir(
           ram: equipos.ram,
           disco: equipos.disco,
           sistema_operativo: equipos.sistema_operativo,
+          // Sección 4, columna «Propietario» (D36). De qué empresa es ESTE
+          // equipo, que no tiene por qué ser la del acta: un acta de RIWI
+          // puede entregar un portátil de BBL que RIWI tiene prestado.
+          empresa: equipos.empresa,
           // No van a la instantánea —el acta no los imprime— pero hacen falta
           // aquí para validar.
           estado: equipos.estado,
@@ -358,6 +456,7 @@ export async function emitir(
 
       lineas.push({
         acta_id: '', // se rellena al insertar, cuando exista el id del acta
+        empresa: eq_.empresa,
         equipo_id: equipoId,
         movimiento_id: movimientoId,
         etiqueta: eq_.etiqueta,
@@ -376,8 +475,8 @@ export async function emitir(
     // -----------------------------------------------------------------------
     // 3. El consecutivo y el acta
     // -----------------------------------------------------------------------
-    const anio = new Date().getUTCFullYear();
-    const consecutivo = await siguienteConsecutivo(tx, anio);
+    const consecutivo = await siguienteConsecutivo(tx, empresaDelActa);
+    const chequeo = normalizarChequeo(datos.tipo, datos.chequeo);
 
     // La fecha se fija aquí y se usa para las dos cosas: la fila y el
     // `CreationDate` del PDF. Si el PDF tomara `now()` por su cuenta, el
@@ -396,6 +495,11 @@ export async function emitir(
       empleado_area: persona.area,
       sede_nombre: persona.sede,
       generada_por_nombre: generadaPor,
+      empresa: persona.empresa,
+      // Va en la cabecera y no suelto: así el PDF y la fila salen del MISMO
+      // objeto y no pueden discrepar. Es la lección de la 0014 aplicada antes
+      // de que muerda.
+      chequeo,
     };
 
     // El PDF se genera DENTRO de la transacción, con la misma instantánea que
@@ -405,6 +509,12 @@ export async function emitir(
     const pdf = await generarPdfActa({
       ...cabecera,
       equipos: lineas.map((l) => ({
+        empresa: l.empresa ?? 'Sin clasificar',
+        // Los dos campos de la sección 4 que el formato aprobado tiene y el
+        // inventario no. Van vacíos hasta que alguien decida de dónde salen;
+        // imprimir un guion sería afirmar que no hay accesorios.
+        accesorios: null,
+        comentarios: null,
         etiqueta: l.etiqueta ?? null,
         serial: l.serial ?? null,
         marca: l.marca ?? null,
@@ -426,7 +536,7 @@ export async function emitir(
         generada_por: contexto.usuarioId,
         pdf,
         hash_sha256: sha256(pdf),
-        plantilla_version: PLANTILLA_VERSION,
+        plantilla_version: PLANTILLA_VERSION[datos.tipo],
       })
       .returning({ id: actas.id, consecutivo: actas.consecutivo, hash_sha256: actas.hash_sha256 });
 
@@ -482,12 +592,17 @@ export async function porId(id: string, bd: BD = db) {
       empleado_cargo: actas.empleado_cargo,
       empleado_area: actas.empleado_area,
       sede_nombre: actas.sede_nombre,
+      // Decide el logo, y el logo entra en el hash.
+      empresa: actas.empresa,
       generada_por: actas.generada_por,
       generada_por_nombre: actas.generada_por_nombre,
       firmada: actas.firmada,
       fecha_firma: actas.fecha_firma,
       hash_sha256: actas.hash_sha256,
       plantilla_version: actas.plantilla_version,
+      // Entra en el PDF (sección 5), así que entra en el hash: `recalcularHash`
+      // la necesita para regenerar los mismos bytes.
+      chequeo: actas.chequeo,
       // NUNCA la columna `pdf`. Un `SELECT *` aquí traería el binario a memoria
       // y de ahí a la respuesta JSON en cuanto alguien serialice el objeto. El
       // documento sale por su propio endpoint, en bytes y con su Content-Type.
@@ -508,6 +623,9 @@ export async function porId(id: string, bd: BD = db) {
       marca: actasEquipos.marca,
       modelo: actasEquipos.modelo,
       categoria: actasEquipos.categoria,
+      // Entra en el PDF (columna «Propietario»), así que entra en el hash: sin
+      // ella, regenerar el acta daría otros bytes.
+      empresa: actasEquipos.empresa,
       condicion: actasEquipos.condicion,
       procesador: actasEquipos.procesador,
       ram: actasEquipos.ram,
@@ -567,20 +685,32 @@ export async function recalcularHash(id: string, bd: BD = db) {
     consecutivo: acta.consecutivo,
     tipo: acta.tipo,
     fecha: new Date(acta.fecha),
+    empresa: acta.empresa,
     empleado_nombre: acta.empleado_nombre,
     empleado_cedula: acta.empleado_cedula,
     empleado_cargo: acta.empleado_cargo,
     empleado_area: acta.empleado_area,
     sede_nombre: acta.sede_nombre,
     generada_por_nombre: acta.generada_por_nombre,
-    equipos: acta.equipos,
+    // Todo lo que el PDF imprime sale de la INSTANTÁNEA, nunca de las tablas
+    // vivas: si el equipo cambia de dueño mañana, el acta sigue diciendo lo
+    // que decía el día que se firmó, y su hash sigue cuadrando.
+    equipos: acta.equipos.map((e) => ({
+      ...e,
+      accesorios: null,
+      comentarios: null,
+    })),
+    // Desde la columna, nunca `null`. Con `null` aquí la sección 5 saldría en
+    // blanco, los bytes no coincidirían y esta función acusaría de manipulada
+    // toda acta de entrega con el chequeo relleno (D41).
+    chequeo: acta.chequeo,
   });
 
   return {
     hash_guardado: acta.hash_sha256,
     hash_recalculado: sha256(pdf),
     plantilla_guardada: acta.plantilla_version,
-    misma_plantilla: acta.plantilla_version === PLANTILLA_VERSION,
+    misma_plantilla: acta.plantilla_version === PLANTILLA_VERSION[acta.tipo],
   };
 }
 

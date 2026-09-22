@@ -6,12 +6,14 @@ import type {
   EmpleadoConConteo,
   EquipoConMotivos,
   Operacion,
+  Prestatario,
   Sede,
 } from '../types';
+import { PRESTATARIOS } from '../types';
 import { api, ErrorApi } from '../lib/api';
 
 /**
- * Los botones de las seis mutaciones, en el detalle de un equipo.
+ * Los botones de las mutaciones, en el detalle de un equipo.
  *
  * ============================================================================
  * ESTE COMPONENTE NO SABE QUÉ TRANSICIONES SON LEGALES, Y NO DEBE SABERLO.
@@ -46,6 +48,16 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
   const [abierta, setAbierta] = useState<Operacion | null>(null);
   const [empleadoId, setEmpleadoId] = useState('');
   const [sedeId, setSedeId] = useState('');
+  const [prestadoA, setPrestadoA] = useState<'' | Prestatario>('');
+  /**
+   * «¿Lo devolvió de verdad?».
+   *
+   * Reasignar escribe una `Devolución` en el historial, y una devolución es un
+   * hecho físico: alguien tuvo que entregar el portátil. Sin esta casilla, el
+   * atajo convertiría ese hecho en un paso de formulario que se pasa sin leer,
+   * y el historial diría que hubo una entrega que quizá no ocurrió.
+   */
+  const [devuelto, setDevuelto] = useState(false);
   const [transportadora, setTransportadora] = useState('');
   const [guia, setGuia] = useState('');
   const [fechaEstimada, setFechaEstimada] = useState('');
@@ -99,6 +111,13 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
   const posibles = catalogo.por_estado[equipo.estado] ?? [];
   const de = (op: Operacion) => catalogo.operaciones.find((o) => o.operacion === op)!;
 
+  // Las que tienen endpoint propio se pintan como botón; las que las dispara
+  // el flujo de partes, no. La separación la decide el servidor con `disparo`,
+  // igual que decide cuáles son legales: una lista aquí sería otra vez la
+  // segunda tabla contra la que avisa el bloque de arriba.
+  const directas = posibles.filter((op) => de(op).disparo === 'directa');
+  const porParte = posibles.filter((op) => de(op).disparo === 'parte');
+
   const ejecutar = async (op: Operacion) => {
     setEnviando(true);
     setError(null);
@@ -112,12 +131,26 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
           guia: guia.trim() || null,
           fecha_estimada: fechaEstimada || null,
         });
-      else r = await api.operacionSimple(equipo.id, op);
+      else if (op === 'prestar') r = await api.prestar(equipo.id, prestadoA as Prestatario);
+      else if (op === 'reasignar') r = await api.reasignar(equipo.id, empleadoId);
+      else if (
+        op === 'reservar' ||
+        op === 'liberar' ||
+        op === 'baja' ||
+        op === 'recuperar_prestamo'
+      )
+        r = await api.operacionSimple(equipo.id, op);
+      // No hay `else`. Una operación con `disparo: 'parte'` no llega hasta
+      // aquí —no se le pinta botón— y si algún día llegara, es mejor que el
+      // compilador lo diga que inventarle un endpoint que no existe.
+      else throw new Error(`La operación «${op}» no se dispara desde aquí.`);
 
       setAbierta(null);
       setConfirmando(null);
       setEmpleadoId('');
       setSedeId('');
+      setPrestadoA('');
+      setDevuelto(false);
       setTransportadora('');
       setGuia('');
       setFechaEstimada('');
@@ -151,13 +184,14 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
 
       {posibles.length === 0 ? (
         <p className="text-xs text-ink-muted border border-dashed border-line rounded-lg p-3">
-          Ninguna de las seis operaciones sale de «{equipo.estado}».
+          Ninguna operación sale de «{equipo.estado}».
           {catalogo.sin_operacion.includes(equipo.estado) &&
-            ' Ese estado se alcanza por el flujo de mantenimiento, que todavía es de solo lectura.'}
+            ' A ese estado no llega ninguna operación, lo cual es un hueco del modelo y no una' +
+              ' propiedad del equipo: convendría decirlo.'}
         </p>
-      ) : (
+      ) : directas.length === 0 ? null : (
         <div className="flex flex-wrap gap-2">
-          {posibles.map((op) => {
+          {directas.map((op) => {
             const t = de(op);
             return (
               <button
@@ -178,6 +212,22 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
         </div>
       )}
 
+      {/* Las de mantenimiento se anuncian pero no se pulsan: enviar al taller
+          es abrir un parte y volver es cerrarlo (D29). Callárselas dejaría el
+          estado «En mantenimiento» sin explicación visible desde el equipo;
+          pintarlas como botón daría un 404, que es lo que hacía antes. */}
+      {porParte.map((op) => (
+        <p
+          key={op}
+          className="text-xs text-ink-muted bg-surface-alt border border-line rounded-lg px-3 py-2"
+        >
+          <strong className="text-ink">{de(op).etiqueta}</strong> se hace desde Mantenimiento:{' '}
+          {op === 'enviar_mantenimiento'
+            ? 'abrir un parte manda el equipo al taller, en la misma transacción.'
+            : 'cerrar el parte lo saca del taller, en la misma transacción.'}
+        </p>
+      ))}
+
       {error && (
         <p
           role="alert"
@@ -185,6 +235,92 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
         >
           {error}
         </p>
+      )}
+
+      {/* Prestar: hace falta a quién, y no puede ser su propia empresa — la
+          CHECK `equipos_prestado_a_no_es_su_empresa` lo rechazaría, y ofrecer
+          en un desplegable lo que la base va a rebotar es la misma clase de
+          botón inútil que el 404 de mantenimiento. */}
+      {abierta === 'prestar' && (
+        <div className="bg-surface-alt border border-line rounded-lg p-3 space-y-2">
+          <label className="block text-xs font-medium text-ink">¿A qué empresa se le presta?</label>
+          <select
+            value={prestadoA}
+            onChange={(e) => setPrestadoA(e.target.value as '' | Prestatario)}
+            className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink"
+          >
+            <option value="">— elegir empresa —</option>
+            {PRESTATARIOS.filter((e) => e !== equipo.empresa).map((e) => (
+              <option key={e} value={e}>
+                {e}
+              </option>
+            ))}
+          </select>
+          <p className="text-[11px] text-ink-muted">
+            El equipo sigue siendo de {equipo.empresa}. Aparecerá en el inventario de las dos
+            hasta que se recupere.
+          </p>
+          <Botonera
+            enviando={enviando}
+            puede={Boolean(prestadoA)}
+            onCancelar={() => setAbierta(null)}
+            onAceptar={() => void ejecutar('prestar')}
+            texto="Prestar"
+          />
+        </div>
+      )}
+
+      {/* Reasignar: a quién, y la pregunta que el atajo no puede saltarse.
+          Va antes del desplegable a propósito: primero el hecho, después la
+          decisión. */}
+      {abierta === 'reasignar' && (
+        <div className="bg-surface-alt border border-line rounded-lg p-3 space-y-2">
+          <label className="flex items-start gap-2 text-xs text-ink">
+            <input
+              type="checkbox"
+              checked={devuelto}
+              onChange={(e) => setDevuelto(e.target.checked)}
+              className="mt-0.5"
+            />
+            <span>
+              El equipo ya volvió de{' '}
+              <strong>
+                {empleados.find((e) => e.id === equipo.empleado_id)?.nombre ?? 'su responsable'}
+              </strong>
+              . Reasignar deja una devolución en el historial, y una devolución es algo que pasó de
+              verdad.
+            </span>
+          </label>
+          <label className="block text-xs font-medium text-ink pt-1">
+            ¿A quién se le entrega ahora?
+          </label>
+          <select
+            value={empleadoId}
+            onChange={(e) => setEmpleadoId(e.target.value)}
+            disabled={!devuelto}
+            className="w-full bg-surface border border-line rounded-lg px-3 py-2 text-sm text-ink disabled:opacity-50"
+          >
+            <option value="">— elegir colaborador —</option>
+            {empleados
+              .filter((e) => e.id !== equipo.empleado_id)
+              .map((e) => (
+                <option key={e.id} value={e.id}>
+                  {e.nombre}
+                  {e.cargo ? ` — ${e.cargo}` : ''}
+                </option>
+              ))}
+          </select>
+          <p className="text-[11px] text-ink-muted">
+            Quien lo tiene ahora no está en la lista: reasignar exige un responsable distinto.
+          </p>
+          <Botonera
+            enviando={enviando}
+            puede={devuelto && Boolean(empleadoId)}
+            onCancelar={() => setAbierta(null)}
+            onAceptar={() => void ejecutar('reasignar')}
+            texto="Devolver y reasignar"
+          />
+        </div>
       )}
 
       {/* Asignar: hace falta a quién */}

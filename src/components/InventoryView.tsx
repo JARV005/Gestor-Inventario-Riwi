@@ -13,11 +13,18 @@ import {
   X,
 } from 'lucide-react';
 
-import type { CategoriaEquipo, EquipoConMotivos, EstadoEquipo, Sede } from '../types';
+import type {
+  CategoriaEquipo,
+  CierreEnBloque,
+  EquipoConMotivos,
+  EstadoEquipo,
+  Sede,
+} from '../types';
 import { CATEGORIAS_EQUIPO, ESTADOS_EQUIPO, MOTIVOS } from '../types';
 import { api, ErrorApi, type ConteoMotivo } from '../lib/api';
 import { AccionesEquipo } from './AccionesEquipo';
 import { NotasEquipo } from './NotasEquipo';
+import { ResolverMotivos } from './ResolverMotivos';
 
 /**
  * La primera vista con datos reales.
@@ -37,7 +44,6 @@ interface InventoryViewProps {
   onOpenNewDeviceModal: () => void;
   onGenerarActa: (equipo: EquipoConMotivos) => void;
   onSolicitarMantenimiento: () => void;
-  onReasignar: () => void;
   /** Una mutación mueve los contadores del sidebar, que se pintan fuera. */
   onEquipoMutado?: () => void;
 }
@@ -50,6 +56,7 @@ const colorEstado: Record<EstadoEquipo, string> = {
   'En mantenimiento': 'bg-warn/20 text-ink border border-warn/50',
   Reservado: 'bg-surface-alt text-ink-muted border border-line',
   'De baja': 'bg-danger/15 text-ink border border-danger/40',
+  Prestado: 'bg-info/20 text-ink border border-info/50',
 };
 
 const nombreDe = (e: EquipoConMotivos) =>
@@ -65,17 +72,38 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
   const [estado, setEstado] = useState<EstadoEquipo | ''>('');
   const [categoria, setCategoria] = useState<CategoriaEquipo | ''>('');
   const [sede, setSede] = useState('');
+  const [empresa, setEmpresa] = useState('');
   const [motivo, setMotivo] = useState('');
   const [pagina, setPagina] = useState(1);
 
   const [filas, setFilas] = useState<EquipoConMotivos[]>([]);
   const [total, setTotal] = useState(0);
   const [conteos, setConteos] = useState<ConteoMotivo[]>([]);
+  /**
+   * Cuántos equipos ve cada empresa. Las tres claves de `empresa` siempre —lo
+   * de D28— y además ISF si tiene algo prestado.
+   *
+   * Los tres números suman más que el total y eso es correcto: un equipo
+   * prestado cuenta en la lista del dueño Y en la de quien lo tiene. Es lo que
+   * D31 compró al meter cada máquina en una sola fila, y el texto de abajo lo
+   * dice para que nadie lo lea como un error de cuentas.
+   */
+  const [conteosEmpresa, setConteosEmpresa] = useState<Record<string, number> | null>(null);
   const [sedes, setSedes] = useState<Sede[]>([]);
 
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState<ErrorApi | null>(null);
   const [seleccionado, setSeleccionado] = useState<EquipoConMotivos | null>(null);
+
+  /**
+   * El cierre en bloque del motivo filtrado.
+   *
+   * `null` = el panel está cerrado. No hay botón que cierre 37 filas de un
+   * clic: primero se abre, se lee qué va a pasar y se escribe la constancia.
+   */
+  const [enBloque, setEnBloque] = useState<{ nota: string } | null>(null);
+  const [cerrandoBloque, setCerrandoBloque] = useState(false);
+  const [resultadoBloque, setResultadoBloque] = useState<CierreEnBloque | null>(null);
 
   const porPagina = 25;
 
@@ -83,7 +111,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     setCargando(true);
     setError(null);
     try {
-      const filtros = { estado, categoria, sede, q: searchTerm, pagina, porPagina };
+      const filtros = { estado, categoria, sede, empresa, q: searchTerm, pagina, porPagina };
       const datos =
         pestana === 'revision'
           ? await api.revision({ ...filtros, motivo })
@@ -92,6 +120,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
       setTotal(datos.total);
       // Solo la bandeja trae los conteos por motivo; el listado general no.
       if ('conteos' in datos) setConteos(datos.conteos as ConteoMotivo[]);
+      setConteosEmpresa(datos.conteos_empresa);
     } catch (e) {
       setError(e instanceof ErrorApi ? e : new ErrorApi(0, 'Error desconocido'));
       setFilas([]);
@@ -99,7 +128,28 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
     } finally {
       setCargando(false);
     }
-  }, [pestana, estado, categoria, sede, motivo, searchTerm, pagina]);
+  }, [pestana, estado, categoria, sede, empresa, motivo, searchTerm, pagina]);
+
+  const cerrarBloque = async () => {
+    if (!motivo || !enBloque) return;
+    setCerrandoBloque(true);
+    setError(null);
+    try {
+      const r = await api.cerrarMotivoEnBloque(motivo, enBloque.nota.trim() || null);
+      setResultadoBloque(r);
+      setEnBloque(null);
+      // Si entraron todas, el bloque desaparece y el filtro ya no apunta a
+      // nada: se vuelve a «todos los motivos» para no dejar una pantalla vacía
+      // sin explicación.
+      if (r.fallidos.length === 0) setMotivo('');
+      await cargar();
+      onEquipoMutado?.();
+    } catch (e) {
+      setError(e instanceof ErrorApi ? e : new ErrorApi(0, 'Error desconocido'));
+    } finally {
+      setCerrandoBloque(false);
+    }
+  };
 
   // La búsqueda va al servidor: se espera a que la persona deje de escribir
   // para no lanzar una consulta por tecla.
@@ -117,7 +167,7 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
 
   // Cualquier cambio de filtro vuelve a la primera página: si no, filtrar
   // estando en la página 4 puede dejar la tabla vacía sin explicación.
-  useEffect(() => setPagina(1), [pestana, estado, categoria, sede, motivo, searchTerm]);
+  useEffect(() => setPagina(1), [pestana, estado, categoria, sede, empresa, motivo, searchTerm]);
 
   const nombreSede = (id: string | null) =>
     id ? (sedes.find((s) => s.id === id)?.nombre ?? '—') : '—';
@@ -156,6 +206,47 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
           </button>
         </div>
       </header>
+
+      {/* Las empresas, como bloques y no como un desplegable más.
+          Mismo mecanismo que la bandeja de motivos y que el de colaboradores
+          (D28): un número delante es lo que hace que «Sin clasificar» se vea
+          sin ir a buscarlo. */}
+      {conteosEmpresa && (
+        <div className="flex flex-wrap items-center gap-2">
+          {Object.entries(conteosEmpresa).map(([nombre, n]) => {
+            const activa = empresa === nombre;
+            const pendiente = nombre === 'Sin clasificar' && n > 0;
+            return (
+              <button
+                key={nombre}
+                onClick={() => setEmpresa(activa ? '' : nombre)}
+                className={`px-3 py-1.5 text-xs rounded-lg border flex items-center gap-2 transition-colors ${
+                  activa
+                    ? 'bg-brand text-white border-brand'
+                    : pendiente
+                      ? 'border-warn/50 bg-warn/10 text-ink hover:bg-warn/20'
+                      : 'border-line text-ink-muted hover:bg-surface-alt'
+                }`}
+              >
+                {pendiente && <AlertTriangle className="w-3.5 h-3.5 text-warn" />}
+                {nombre}
+                <span className="font-semibold tabular-nums">{n}</span>
+              </button>
+            );
+          })}
+          {empresa && (
+            <button
+              onClick={() => setEmpresa('')}
+              className="text-xs text-ink-muted hover:text-ink px-2"
+            >
+              Quitar filtro
+            </button>
+          )}
+          <span className="text-[11px] text-ink-muted">
+            Un equipo prestado cuenta en las dos: en la de su dueño y en la de quien lo tiene.
+          </span>
+        </div>
+      )}
 
       <div className="flex items-center gap-1 border-b border-line">
         {(['todos', 'revision'] as const).map((p) => (
@@ -211,6 +302,127 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
               <span className="ml-1.5 font-semibold tabular-nums">{c.equipos}</span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ---------------------------------------------------------------------
+          Cerrar el bloque entero.
+
+          La bandeja se filtra por motivo desde la 5e, pero cerrarlos era de uno
+          en uno y desde el panel de cada equipo: los 37 de `LICENCIA_OK` eran
+          37 aperturas. Una bandeja que cuesta 37 clics por bloque no se vacía,
+          se abandona — el mismo final que cuando solo se leía.
+
+          Solo aparece con un motivo seleccionado: «cerrar todos los motivos de
+          todo» no es una acción que nadie quiera de verdad.
+          --------------------------------------------------------------------- */}
+      {pestana === 'revision' && motivo !== '' && (
+        <div className="border border-line rounded-lg p-3 space-y-2 bg-surface">
+          <div className="flex items-start justify-between gap-3 flex-wrap">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-ink">
+                {MOTIVOS[motivo as keyof typeof MOTIVOS]?.descripcion ?? motivo}
+              </p>
+              <p className="text-xs text-ink-muted">
+                Recomendación: {MOTIVOS[motivo as keyof typeof MOTIVOS]?.recomendacion ?? '—'}
+              </p>
+            </div>
+            {enBloque === null && (
+              <button
+                onClick={() => {
+                  setEnBloque({ nota: '' });
+                  setResultadoBloque(null);
+                }}
+                className="px-3 py-1.5 text-xs font-semibold rounded-lg border border-line text-ink hover:bg-surface-alt shrink-0"
+              >
+                Cerrar este motivo en las {total} filas
+              </button>
+            )}
+          </div>
+
+          {enBloque !== null && (
+            <div className="space-y-2 border-t border-line pt-2">
+              <label className="block text-xs text-ink-muted space-y-1">
+                <span>
+                  Constancia que se añade a las notas de cada equipo{' '}
+                  <span className="text-ink-muted">(opcional, pero recomendada)</span>
+                </span>
+                <input
+                  value={enBloque.nota}
+                  onChange={(e) => setEnBloque({ nota: e.target.value })}
+                  placeholder="Qué se comprobó, cuándo y quién lo confirmó"
+                  className="w-full px-3 py-2 text-sm border border-line rounded-lg bg-surface text-ink focus:outline-none focus:border-brand"
+                />
+              </label>
+              {/* Por qué la constancia importa, donde se escribe y no en un
+                  documento que nadie abrirá: un campo vacío y un campo vacío
+                  con constancia de que se revisó se leen igual dentro de un
+                  año, y no son lo mismo. */}
+              <p className="text-xs text-ink-muted">
+                Se añade a lo que ya haya en notas, sin borrarlo. Cerrar un motivo no rellena
+                ningún campo: si el dato sigue sin saberse, queda vacío — y la nota es lo que
+                distingue «no se sabe» de «nadie lo miró».
+              </p>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => void cerrarBloque()}
+                  disabled={cerrandoBloque}
+                  className="px-3 py-1.5 bg-brand hover:bg-brand-hover disabled:opacity-50 text-white text-xs font-semibold rounded-lg"
+                >
+                  {cerrandoBloque ? 'Cerrando…' : `Cerrar ${total} y anotar`}
+                </button>
+                <button
+                  onClick={() => setEnBloque(null)}
+                  disabled={cerrandoBloque}
+                  className="px-3 py-1.5 text-xs text-ink-muted hover:text-ink"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* El resultado sobrevive a la recarga: si quedaron filas sin cerrar hay
+          que poder leer cuáles, y se van a haber movido de sitio en el listado. */}
+      {resultadoBloque && (
+        <div
+          className={`border rounded-lg p-3 space-y-2 text-xs ${
+            resultadoBloque.fallidos.length === 0
+              ? 'bg-ok/10 border-ok/40'
+              : 'bg-warn/10 border-warn/40'
+          }`}
+        >
+          <div className="flex items-start justify-between gap-3">
+            <p className="text-ink font-semibold">
+              {resultadoBloque.cerrados} cerradas en {resultadoBloque.motivo}
+              {resultadoBloque.fallidos.length > 0 &&
+                ` · ${resultadoBloque.fallidos.length} sin cerrar`}
+            </p>
+            <button
+              onClick={() => setResultadoBloque(null)}
+              className="text-ink-muted hover:text-ink"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {resultadoBloque.fallidos.length > 0 && (
+            <>
+              <p className="text-ink-muted">
+                Estas necesitan una decisión antes: al bajarles la marca vuelve a exigirse que
+                su serial y su etiqueta sean únicos, y el duplicado sigue ahí.
+              </p>
+              <ul className="space-y-0.5 text-ink">
+                {resultadoBloque.fallidos.map((f: CierreEnBloque['fallidos'][number]) => (
+                  <li key={f.equipo_id}>
+                    <span className="font-mono">{f.etiqueta ?? f.serial ?? f.equipo_id}</span>
+                    {f.problema ? ` — ${f.problema}` : ''}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
 
@@ -330,6 +542,16 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                       <span className={`text-xs px-2 py-0.5 rounded-full ${colorEstado[e.estado]}`}>
                         {e.estado}
                       </span>
+                      {/* A quién, pegado al estado. «Prestado» a secas obliga a
+                          abrir la ficha para saber lo único que importa de un
+                          préstamo, y quien mira la lista de una empresa
+                          necesita distinguir de un vistazo lo suyo de lo que
+                          tiene en préstamo. */}
+                      {e.prestado_a && (
+                        <div className="text-[11px] text-ink-muted mt-0.5">
+                          {e.empresa} → <strong className="text-ink">{e.prestado_a}</strong>
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-ink-muted">{nombreSede(e.sede_id)}</td>
                     <td className="px-4 py-3">
@@ -490,23 +712,9 @@ const Detalle: React.FC<{
         </button>
       </div>
 
-      {equipo.motivos_revision.length > 0 && (
-        <div className="bg-warn/10 border border-warn/40 rounded-lg p-3 space-y-2">
-          <p className="text-sm font-medium text-ink flex items-center gap-1.5">
-            <AlertTriangle className="w-4 h-4 text-warn" />
-            Pendiente de revisión
-          </p>
-          <ul className="space-y-1.5">
-            {equipo.motivos_revision.map((m) => (
-              <li key={m} className="text-xs text-ink-muted">
-                <span className="font-mono text-ink">{m}</span>
-                {' — '}
-                {MOTIVOS[m as keyof typeof MOTIVOS]?.descripcion ?? 'sin descripción'}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      {/* Antes esto solo listaba los motivos. Ahora también los cierra: ver
+          `ResolverMotivos`. Una bandeja que solo se lee no se vacía nunca. */}
+      <ResolverMotivos equipo={equipo} onCambiado={onMutado} />
 
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
         {(
@@ -517,6 +725,8 @@ const Detalle: React.FC<{
             ['Marca', equipo.marca],
             ['Modelo', equipo.modelo],
             ['Sede', sede],
+            ['Empresa', equipo.empresa],
+            ['Prestado a', equipo.prestado_a],
             ['Propiedad', equipo.propiedad],
             ['Sistema operativo', equipo.sistema_operativo],
             ['Licencia', equipo.licencia_tipo],

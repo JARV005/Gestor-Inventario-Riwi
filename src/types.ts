@@ -17,9 +17,11 @@
 
 import type {
   empleados,
+  empresaEmpleado,
   equipos,
   mantenimientos,
   movimientos,
+  prestatario,
   sedes,
 } from '../db/esquema';
 
@@ -129,6 +131,12 @@ export interface NuevoEquipo {
   estado: EstadoEquipo;
   sede_id?: string | null;
   empleado_id?: string | null;
+  /**
+   * De quién es (D31). Es de los pocos campos de estado-ish que SÍ se editan a
+   * mano: la propiedad no sale de ninguna operación, y es lo que hay que tocar
+   * para cerrar un `PROPIEDAD_AMBIGUA` desde la bandeja.
+   */
+  empresa?: Empresa;
   /** Cadena, no `number`: `numeric(14,2)` no cabe en un `number` sin perder precisión. */
   costo?: string | null;
   /**
@@ -166,7 +174,46 @@ export interface ResumenEquipos {
 
 export type Movimiento = Serializado<typeof movimientos.$inferSelect>;
 
-export type Operacion = 'asignar' | 'devolver' | 'trasladar' | 'baja' | 'reservar' | 'liberar';
+/**
+ * Se re-exporta de `db/transiciones.ts`, no se copia.
+ *
+ * Era una lista escrita a mano con las seis de la etapa 5. La 5d añadió dos
+ * operaciones a la tabla y esta copia no se enteró: `tsc` siguió en verde, el
+ * catálogo del servidor empezó a devolver ocho y `AccionesEquipo` pintó dos
+ * botones que daban 404. Exactamente la desincronización silenciosa contra la
+ * que avisa el comentario de `Transicion.etiqueta`, ocurrida en el tipo en vez
+ * de en las etiquetas.
+ */
+import type { Operacion } from '../db/transiciones';
+export type { Operacion };
+
+import { PREFIJO_CONSECUTIVO, type EmpresaQueEmite } from '../db/acta-formato';
+
+/**
+ * Los cuatro items de la lista de chequeo, **re-exportados de
+ * `db/acta-formato.ts`**, no copiados. Por lo mismo que `Operacion` de aquí
+ * arriba: una segunda lista escrita a mano se desincroniza en silencio, con
+ * `tsc` en verde, y lo que queda mal es un documento legal.
+ *
+ * Es un valor y no solo un tipo porque el formulario tiene que PINTAR los
+ * cuatro. `acta-formato.ts` no importa nada, así que entra en el bundle sin
+ * arrastrar código de servidor.
+ */
+export { CHEQUEO_ITEMS } from '../db/acta-formato';
+
+/**
+ * Las empresas que pueden emitir un acta (D42). **Sale del formato**, no es una
+ * lista escrita aquí: si mañana entra una tercera, el desplegable la ofrece sin
+ * que nadie se acuerde de este fichero.
+ *
+ * `Sin clasificar` no está, y por eso el desplegable de «asignar empresa para
+ * poder emitir» no la ofrece: volver a ponerla sería ofrecer como solución
+ * justo el estado que bloquea.
+ */
+export const EMPRESAS_QUE_EMITEN = Object.keys(
+  PREFIJO_CONSECUTIVO,
+) as EmpresaQueEmite[];
+export type { EmpresaQueEmite };
 
 export type TipoActa = 'Entrega' | 'Devolución';
 
@@ -237,7 +284,42 @@ export interface ActaEmitida {
   hash_sha256: string | null;
   /** El binario no viaja en el detalle: en 5a siempre es `false`. */
   tiene_pdf: boolean;
+  /** De quién es el acta: decide el logo y el prefijo del consecutivo (D40). */
+  empresa: Empresa;
+  /** La sección 5, congelada. `null` en las devoluciones (D41). */
+  chequeo: ItemChequeo[] | null;
   equipos: LineaActa[];
+}
+
+/**
+ * Un item de la lista de chequeo del acta (D41).
+ *
+ * `instalado: null` significa **«nadie contestó»**, y se imprime como casilla
+ * en blanco. No es `false`: el formulario no premarca nada, porque un «Sí» por
+ * defecto en un documento legal es una afirmación que no hizo nadie.
+ */
+export interface ItemChequeo {
+  item: string;
+  instalado: boolean | null;
+  observaciones: string | null;
+}
+
+/**
+ * Lo que devuelve cerrar un motivo en bloque.
+ *
+ * `fallidos` viene con nombre y no como número: las filas que no entran son
+ * las que necesitan una decisión antes —un duplicado sin resolver—, y un
+ * recuento sin nombres obliga a buscarlas a mano.
+ */
+export interface CierreEnBloque {
+  motivo: string;
+  cerrados: number;
+  fallidos: {
+    equipo_id: string;
+    etiqueta: string | null;
+    serial: string | null;
+    problema: string | null;
+  }[];
 }
 
 /** Una fila del listado de actas. */
@@ -300,6 +382,17 @@ export interface CatalogoTransiciones {
     requiere: 'empleado' | 'sede' | null;
     explicacion: string;
     irreversible: boolean;
+    /**
+     * `directa` tiene endpoint propio y se pinta como botón. `parte` la
+     * dispara el flujo de mantenimiento y **no** tiene endpoint suelto: pintar
+     * un botón para ella da 404.
+     */
+    disparo: 'directa' | 'parte';
+    /**
+     * Las operaciones que esta ejecuta en cadena, o `null`. `reasignar` es
+     * `['devolver', 'asignar']`: dos movimientos, no uno.
+     */
+    compuesta: Operacion[] | null;
   }[];
   por_estado: Record<EstadoEquipo, Operacion[]>;
   sin_operacion: EstadoEquipo[];
@@ -363,6 +456,30 @@ export type MantenimientoConEquipo = Mantenimiento & {
  */
 export type EmpleadoConConteo = Empleado & { equipos_asignados: number };
 
+export type Empresa = 'RIWI' | 'BBL Labs' | 'Sin clasificar';
+
+/** A quién se le presta un equipo (D31). Enum propio, no el de `Empresa`. */
+export type Prestatario = 'RIWI' | 'BBL Labs' | 'ISF';
+export const PRESTATARIOS: Prestatario[] = ['RIWI', 'BBL Labs', 'ISF'];
+export const EMPRESAS: Empresa[] = ['RIWI', 'BBL Labs', 'Sin clasificar'];
+
+/** Los estados de un parte con el equipo todavía en el taller. */
+export const ESTADOS_PARTE_ABIERTO = ['Pendiente', 'En taller', 'Completado'] as const;
+export type EstadoParteAbierto = (typeof ESTADOS_PARTE_ABIERTO)[number];
+
+/** Lo que hace falta para dar de alta o editar a un colaborador. */
+export interface DatosEmpleado {
+  nombre: string;
+  cedula?: string | null;
+  email_corporativo?: string | null;
+  cargo?: string | null;
+  area?: string | null;
+  sede_id?: string | null;
+  telefono?: string | null;
+  direccion?: string | null;
+  empresa?: Empresa;
+}
+
 /** Solo de `GET /api/equipos/:id/bios`, rol admin y con fila en `auditoria`. */
 export interface SecretosEquipo {
   bios_password: string | null;
@@ -415,6 +532,8 @@ export const ESTADOS_EQUIPO = [
   'En mantenimiento',
   'Reservado',
   'De baja',
+  /** 5e (D32). Lo tiene otra empresa; `equipos.prestado_a` dice cuál. */
+  'Prestado',
 ] as const;
 
 export const CONDICIONES_EQUIPO = [
@@ -436,6 +555,16 @@ type _c2 = Comprobar<Igual<(typeof ESTADOS_EQUIPO)[number], EstadoEquipo>>;
 type _c3 = Comprobar<Igual<(typeof CONDICIONES_EQUIPO)[number], CondicionEquipo>>;
 type _c4 = Comprobar<Igual<(typeof PROPIEDADES_EQUIPO)[number], PropiedadEquipo>>;
 type _c5 = Comprobar<Igual<(typeof ESTADOS_EMPLEADO)[number], EstadoEmpleado>>;
+
+// Y estos dos porque `Empresa` y `Prestatario` sí están escritos a mano: son
+// enums de la base que no cuelgan de ninguna columna de las que `Serializado`
+// arrastra. Sin la guarda serían la misma copia silenciosa que `Operacion`,
+// que aguantó dos operaciones de diferencia con `tsc` en verde.
+type _c6 = Comprobar<Igual<Empresa, (typeof empresaEmpleado.enumValues)[number]>>;
+type _c7 = Comprobar<Igual<Prestatario, (typeof prestatario.enumValues)[number]>>;
+type _c8 = Comprobar<Igual<(typeof EMPRESAS)[number], Empresa>>;
+type _c9 = Comprobar<Igual<(typeof PRESTATARIOS)[number], Prestatario>>;
+type _c10 = Comprobar<Igual<(typeof EMPRESAS_QUE_EMITEN)[number], EmpresaQueEmite>>;
 
 // ---------------------------------------------------------------------------
 // Respuestas de la API

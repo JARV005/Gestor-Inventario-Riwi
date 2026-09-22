@@ -1,5 +1,6 @@
 /**
- * Las seis mutaciones de estado, el historial y la atomicidad. Etapa 5.
+ * Las mutaciones de estado, el historial y la atomicidad. Etapa 5, más las que
+ * añadieron la 5d (mantenimiento) y la 5e (préstamos y reasignar).
  *
  * El caso que da nombre a esta suite es el último: **matar la conexión entre
  * el UPDATE de `equipos` y el INSERT de `movimientos`**, de verdad y no con un
@@ -604,7 +605,12 @@ describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', 
   const creados: string[] = [];
   let c: Cliente;
   let catalogo: {
-    operaciones: { operacion: string; etiqueta: string; requiere: string | null }[];
+    operaciones: {
+      operacion: string;
+      etiqueta: string;
+      requiere: string | null;
+      disparo: 'directa' | 'parte';
+    }[];
     por_estado: Record<string, string[]>;
     sin_operacion: string[];
   };
@@ -624,17 +630,68 @@ describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', 
     await suite.limpiar();
   });
 
-  it('trae las seis operaciones, con etiqueta para el botón', () => {
+  it('trae las once operaciones, con etiqueta para el botón', () => {
     assert.deepEqual(
       catalogo.operaciones.map((o) => o.operacion).sort(),
-      ['asignar', 'baja', 'devolver', 'liberar', 'reservar', 'trasladar'],
+      [
+        'asignar',
+        'baja',
+        'devolver',
+        'enviar_mantenimiento',
+        'liberar',
+        'prestar',
+        'reasignar',
+        'recuperar_prestamo',
+        'reservar',
+        'retornar_mantenimiento',
+        'trasladar',
+      ],
     );
     for (const o of catalogo.operaciones) {
       assert.ok(o.etiqueta && o.etiqueta.length > 2, `${o.operacion} sin etiqueta usable`);
+      assert.ok(
+        o.disparo === 'directa' || o.disparo === 'parte',
+        `${o.operacion} sin disparo: la interfaz no sabría si pintarle botón`,
+      );
     }
   });
 
-  it('cubre TODOS los estados del enum, incluso los que no tienen salida', () => {
+  /**
+   * El caso que faltaba, y que costó un botón que daba 404.
+   *
+   * `AccionesEquipo` pinta un botón por cada operación de `por_estado` y lo
+   * manda a `POST /api/equipos/:id/<operacion>`. Mientras las ocho operaciones
+   * y las seis rutas se escribían en sitios distintos, nada comprobaba que
+   * coincidieran: el catálogo prometía «Enviar a mantenimiento» desde
+   * `Disponible` y esa ruta no existía.
+   *
+   * Aquí se comprueban las dos direcciones. Una `directa` sin ruta da 404, y
+   * una de `parte` con ruta significaría que el equipo puede irse al taller sin
+   * dejar parte — el agujero que D29 cerró, abierto por el otro lado.
+   */
+  it('las `directa` tienen ruta y las de `parte` no la tienen', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}RUTAS`, sedeA);
+    creados.push(id);
+
+    for (const o of catalogo.operaciones) {
+      const r = await c.post(`/api/equipos/${id}/${o.operacion}`, { empleado_id: empleado });
+      if (o.disparo === 'directa') {
+        assert.notEqual(r.estado, 404, `${o.operacion} es directa y no tiene ruta: daría 404`);
+      } else {
+        assert.equal(
+          r.estado,
+          404,
+          `${o.operacion} se dispara con un parte y aun así tiene endpoint suelto`,
+        );
+      }
+      // No hace falta devolver el equipo a Disponible entre vuelta y vuelta:
+      // el 404 lo decide que la ruta exista, no el estado. Una operación
+      // ilegal desde donde el equipo haya quedado responde 409, y 409 ya
+      // demuestra que la ruta está registrada.
+    }
+  });
+
+  it('cubre TODOS los estados del enum, y ninguno se queda sin operación', () => {
     // Un estado ausente del mapa dejaría a la interfaz sin saber qué pintar, y
     // lo que hace un `?? []` es no pintar nada: una operación legal se
     // volvería invisible sin que ningún test fallara.
@@ -644,10 +701,34 @@ describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', 
       'De baja',
       'Disponible',
       'En mantenimiento',
+      'Prestado',
       'Reservado',
     ]);
     assert.deepEqual(catalogo.por_estado['De baja'], [], 'de "De baja" no sale nada');
-    assert.ok(catalogo.sin_operacion.includes('En mantenimiento'));
+
+    // D29: `sin_operacion` quedó VACÍO al añadir las dos de mantenimiento, y
+    // eso es el criterio de que el modelo está completo — cada estado del enum
+    // tiene puerta de entrada y de salida. La constante se queda aunque esté
+    // vacía, y este caso es lo que hará visible el tercer hueco: un estado
+    // nuevo sin operación aparece aquí y pone el test en rojo.
+    assert.deepEqual(
+      catalogo.sin_operacion,
+      [],
+      'hay un estado al que no llega ninguna operación: se alcanza y no se puede salir',
+    );
+    assert.ok(
+      catalogo.por_estado['En mantenimiento'].includes('retornar_mantenimiento'),
+      'de "En mantenimiento" se sale cerrando el parte',
+    );
+    // Lo mismo para el estado que añade la 5e: entra y sale el mismo día.
+    assert.ok(
+      catalogo.por_estado['Disponible'].includes('prestar'),
+      'a "Prestado" se entra prestando',
+    );
+    assert.ok(
+      catalogo.por_estado['Prestado'].includes('recuperar_prestamo'),
+      'de "Prestado" se sale recuperándolo',
+    );
   });
 
   /**
@@ -655,11 +736,15 @@ describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', 
    * las operaciones que el catálogo declara ilegales desde ahí. Las seis menos
    * las legales, una por una, y todas tienen que dar 409.
    */
-  const LAS_SEIS = ['asignar', 'devolver', 'reservar', 'liberar', 'baja', 'trasladar'] as const;
+  // Sale del catálogo y no de una lista escrita aquí: una operación `directa`
+  // nueva entra sola en la comprobación. Las de `parte` quedan fuera porque no
+  // tienen endpoint —darían 404, no 409— y eso lo cubre el caso de arriba.
+  const directas = () =>
+    catalogo.operaciones.filter((o) => o.disparo === 'directa').map((o) => o.operacion);
 
   async function comprobarIlegalesDesde(estado: string, id: string) {
     const legales = catalogo.por_estado[estado];
-    const ilegales = LAS_SEIS.filter((op) => !legales.includes(op));
+    const ilegales = directas().filter((op) => !legales.includes(op));
     assert.ok(ilegales.length > 0, `${estado} no tendría nada que comprobar`);
 
     for (const op of ilegales) {
@@ -702,6 +787,99 @@ describe('transiciones: el catálogo concuerda con lo que hacen los endpoints', 
     creados.push(id);
     await c.post(`/api/equipos/${id}/baja`, {});
     await comprobarIlegalesDesde('De baja', id);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Préstamos entre empresas: las dos operaciones de la 5e
+// ---------------------------------------------------------------------------
+
+describe('préstamos: prestar y recuperar, con la CHECK detrás', () => {
+  const suite = ambito('prestamo');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    empleado = await crearEmpleado(`${suite.prefijo}receptor`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  const equipo = async (etiqueta: string) => {
+    const id = await crearEquipo(c, etiqueta, sedeA);
+    creados.push(id);
+    return id;
+  };
+
+  it('prestar mueve el estado, pone el prestatario y escribe su movimiento', async () => {
+    const id = await equipo(`${suite.prefijo}P1`);
+
+    const r = await c.post(`/api/equipos/${id}/prestar`, { prestado_a: 'ISF' });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const { equipo: eq } = r.cuerpo as { equipo: { estado: string; prestado_a: string } };
+    assert.equal(eq.estado, 'Prestado');
+    assert.equal(eq.prestado_a, 'ISF');
+
+    const movs = await movimientosDe(id);
+    assert.equal(movs[movs.length - 1].tipo, 'Préstamo');
+  });
+
+  it('prestar SIN decir a quién: 400, no una fila a medias', async () => {
+    // La CHECK `equipos_prestado_implica_prestatario` lo rechazaría igual, pero
+    // entonces el mensaje sería el de Postgres. Quien lo lea tiene que saber
+    // qué dato falta, no qué constraint rebotó.
+    const id = await equipo(`${suite.prefijo}P2`);
+
+    const r = await c.post(`/api/equipos/${id}/prestar`, {});
+    assert.equal(r.estado, 400);
+    assert.match((r.cuerpo as { error: string }).error, /empresa/i);
+    assert.equal(await estadoDe(id), 'Disponible', 'y el equipo no se movió');
+  });
+
+  it('prestar un equipo asignado: 409 y sigue en manos de su responsable', async () => {
+    const id = await equipo(`${suite.prefijo}P3`);
+    await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado });
+
+    const r = await c.post(`/api/equipos/${id}/prestar`, { prestado_a: 'ISF' });
+    assert.equal(r.estado, 409, 'prestar lo que alguien tiene en la mano no es legal');
+    assert.equal(await estadoDe(id), 'Asignado');
+  });
+
+  it('recuperar deja el equipo Disponible Y borra el prestatario', async () => {
+    // Las dos mitades importan. Un `recuperar` que moviera el estado y dejara
+    // `prestado_a` puesto haría que la vista de ISF siguiera contando un equipo
+    // que ya devolvió — y la CHECK no dejaría ni escribirlo.
+    const id = await equipo(`${suite.prefijo}P4`);
+    await c.post(`/api/equipos/${id}/prestar`, { prestado_a: 'BBL Labs' });
+
+    const r = await c.post(`/api/equipos/${id}/recuperar_prestamo`, {});
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const { equipo: eq } = r.cuerpo as { equipo: { estado: string; prestado_a: string | null } };
+    assert.equal(eq.estado, 'Disponible');
+    assert.equal(eq.prestado_a, null);
+
+    const movs = await movimientosDe(id);
+    assert.equal(movs[movs.length - 1].tipo, 'Retorno de préstamo');
+  });
+
+  it('recuperar algo que no está prestado: 409', async () => {
+    const id = await equipo(`${suite.prefijo}P5`);
+    const r = await c.post(`/api/equipos/${id}/recuperar_prestamo`, {});
+    assert.equal(r.estado, 409);
+    assert.equal(await estadoDe(id), 'Disponible');
   });
 });
 
@@ -856,5 +1034,135 @@ describe('movimientos: si la transacción se corta, no queda media', () => {
     assert.equal(r.estado, 200, 'matar una conexión no puede dejar el pool inservible');
     assert.equal(await estadoDe(id), 'Asignado');
     assert.equal(await contarAuditoria(id, 'asignar'), 1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reasignar: la operación compuesta
+// ---------------------------------------------------------------------------
+//
+// El caso escrito desde `docs/pendientes.md`: «Reasignar es `devolver` +
+// `asignar`: dos mutaciones». Lo que se comprueba es que sean DOS movimientos,
+// no uno llamado «Reasignación» — el historial es lo único que justifica el
+// proyecto, y un atajo que se coma la devolución deja media respuesta a «quién
+// tenía esto en marzo».
+
+describe('reasignar: una operación, dos movimientos', () => {
+  const suite = ambito('reasignar');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let ana: string;
+  let beto: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    ana = await crearEmpleado(`${suite.prefijo}ana`);
+    beto = await crearEmpleado(`${suite.prefijo}beto`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([ana, beto]);
+    await suite.limpiar();
+  });
+
+  /** Un equipo ya asignado a Ana. */
+  const asignadoAAna = async (etiqueta: string) => {
+    const id = await crearEquipo(c, etiqueta, sedeA);
+    creados.push(id);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana })).estado, 200);
+    return id;
+  };
+
+  it('deja el equipo con la persona nueva y DOS movimientos, en orden', async () => {
+    const id = await asignadoAAna(`${suite.prefijo}R1`);
+    const antes = (await movimientosDe(id)).length;
+
+    const r = await c.post(`/api/equipos/${id}/reasignar`, { empleado_id: beto });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const { equipo } = r.cuerpo as { equipo: { estado: string; empleado_id: string } };
+    assert.equal(equipo.estado, 'Asignado');
+    assert.equal(equipo.empleado_id, beto);
+
+    const movs = await movimientosDe(id);
+    assert.equal(movs.length, antes + 2, 'devolver + asignar son dos hechos, no uno');
+
+    const [devolucion, asignacion] = movs.slice(-2);
+    assert.equal(devolucion.tipo, 'Devolución');
+    assert.equal(devolucion.empleado_origen_id, ana, 'la devolución dice de quién venía');
+    assert.equal(asignacion.tipo, 'Asignación');
+    assert.equal(asignacion.empleado_destino_id, beto);
+  });
+
+  it('reasignar a quien ya lo tiene: 400, y no dos movimientos vacíos', async () => {
+    const id = await asignadoAAna(`${suite.prefijo}R2`);
+    const antes = (await movimientosDe(id)).length;
+
+    const r = await c.post(`/api/equipos/${id}/reasignar`, { empleado_id: ana });
+    assert.equal(r.estado, 400);
+    assert.equal((await movimientosDe(id)).length, antes, 'no se escribió nada');
+    assert.equal(await estadoDe(id), 'Asignado');
+  });
+
+  it('sin decir a quién: 400, y el equipo no se queda devuelto a medias', async () => {
+    const id = await asignadoAAna(`${suite.prefijo}R3`);
+    const antes = (await movimientosDe(id)).length;
+
+    const r = await c.post(`/api/equipos/${id}/reasignar`, {});
+    assert.equal(r.estado, 400);
+    assert.equal(await estadoDe(id), 'Asignado', 'sigue con su responsable');
+    assert.equal((await movimientosDe(id)).length, antes);
+  });
+
+  /**
+   * Lo que la transacción compra: si la segunda mitad falla, la primera se
+   * deshace. Sin ella el equipo se quedaría `Disponible` —devuelto— y quien
+   * pulsó «reasignar» vería un error creyendo que no pasó nada.
+   */
+  it('si la segunda mitad falla, la devolución se deshace', async () => {
+    const id = await asignadoAAna(`${suite.prefijo}R4`);
+    const antes = (await movimientosDe(id)).length;
+
+    const inexistente = '00000000-0000-4000-8000-000000000000';
+    const r = await c.post(`/api/equipos/${id}/reasignar`, { empleado_id: inexistente });
+    assert.notEqual(r.estado, 200, `debería fallar y dio ${r.estado}`);
+
+    assert.equal(await estadoDe(id), 'Asignado', 'NO se quedó devuelto');
+    assert.equal((await movimientosDe(id)).length, antes, 'ni medio movimiento');
+  });
+
+  it('reasignar un equipo que no está asignado: 409 que dice la salida', async () => {
+    const id = await crearEquipo(c, `${suite.prefijo}R5`, sedeA);
+    creados.push(id);
+
+    const r = await c.post(`/api/equipos/${id}/reasignar`, { empleado_id: beto });
+    assert.equal(r.estado, 409);
+    const cuerpo = r.cuerpo as { error: string; puedes: string[] };
+    assert.equal(await estadoDe(id), 'Disponible');
+    assert.ok(cuerpo.puedes.includes('asignar'), 'y dice que lo que toca es asignarlo');
+  });
+
+  it('el catálogo la declara compuesta, y por eso la interfaz sabe que son dos', async () => {
+    const cat = (await c.get('/api/transiciones')).cuerpo as {
+      operaciones: { operacion: string; compuesta: string[] | null; disparo: string }[];
+    };
+    const r = cat.operaciones.find((o) => o.operacion === 'reasignar');
+    assert.ok(r, 'reasignar tiene que estar en el catálogo');
+    assert.deepEqual(r.compuesta, ['devolver', 'asignar']);
+    assert.equal(r.disparo, 'directa', 'tiene endpoint propio y botón');
+
+    // Y las demás no son compuestas: si `compuesta` se colara en otra, se
+    // ejecutaría una cadena que nadie decidió.
+    const otras = cat.operaciones.filter((o) => o.operacion !== 'reasignar');
+    assert.ok(
+      otras.every((o) => o.compuesta === null),
+      'ninguna otra operación es compuesta',
+    );
   });
 });

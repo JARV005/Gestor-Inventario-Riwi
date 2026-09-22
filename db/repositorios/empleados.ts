@@ -20,12 +20,14 @@ const CAMPOS_PUBLICOS = {
   fecha_ingreso: empleados.fecha_ingreso,
   telefono: empleados.telefono,
   direccion: empleados.direccion,
+  empresa: empleados.empresa,
   activo: empleados.activo,
   created_at: empleados.created_at,
   updated_at: empleados.updated_at,
 } as const;
 
 export interface FiltrosEmpleados {
+  empresa?: string;
   q?: string;
   sede?: string;
   activo?: boolean;
@@ -36,6 +38,7 @@ export interface FiltrosEmpleados {
 export async function listar(f: FiltrosEmpleados = {}, bd: BD = db) {
   const condiciones: SQL[] = [];
   if (f.sede) condiciones.push(eq(empleados.sede_id, f.sede));
+  if (f.empresa) condiciones.push(eq(empleados.empresa, f.empresa as never));
   if (f.activo !== undefined) condiciones.push(eq(empleados.activo, f.activo));
   if (f.q) {
     const patron = `%${f.q}%`;
@@ -132,4 +135,30 @@ export async function actualizar(
     .where(eq(empleados.id, id))
     .returning(CAMPOS_PUBLICOS);
   return fila ?? null;
+}
+
+/**
+ * Cuántas personas hay de cada empresa, **incluidas las que nadie ha
+ * clasificado** (D28).
+ *
+ * Va con el listado, como los conteos por motivo de la bandeja de revisión, y
+ * por el mismo motivo: un valor más en un desplegable no lo mira nadie. Los 113
+ * «Sin clasificar» se quedarían así para siempre — es lo que pasó con los 37 de
+ * «licencia OK» hasta que la bandeja los puso delante.
+ *
+ * `GROUP BY` no devuelve grupos vacíos, así que las tres claves se rellenan
+ * aquí: si algún día no queda ninguna sin clasificar, el conteo tiene que decir
+ * cero y no desaparecer, o la interfaz no sabría distinguir «ninguna» de «no se
+ * pudo contar».
+ */
+export async function conteoPorEmpresa(bd: BD = db): Promise<Record<string, number>> {
+  const filas = await bd
+    .select({ empresa: empleados.empresa, n: sql<number>`count(*)::int` })
+    .from(empleados)
+    .where(eq(empleados.activo, true))
+    .groupBy(empleados.empresa);
+
+  const base: Record<string, number> = { RIWI: 0, 'BBL Labs': 0, 'Sin clasificar': 0 };
+  for (const f of filas) base[f.empresa] = f.n;
+  return base;
 }

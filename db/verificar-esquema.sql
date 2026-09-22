@@ -62,6 +62,73 @@ BEGIN
     VALUES ('Portátil', 'Asignado', v_emp, v_sede) RETURNING id INTO v_eq;
   INSERT INTO resultado VALUES ('CHECK: Asignado con empleado', 'aceptado', 'aceptado');
 
+  -- 3b. La relajación de D31, por sus dos lados.
+  --
+  -- La 0012 abrió una excepción a la equivalencia para 'Prestado', y una
+  -- excepción mal escrita se lleva por delante la regla entera: un
+  -- `OR estado = 'Prestado'` con un paréntesis de más volvería la CHECK
+  -- siempre cierta y los casos 1 y 2 seguirían pasando por casualidad. Por eso
+  -- estos cuatro casos van juntos: los dos que deben pasar Y los dos que no.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, prestado_a)
+      VALUES ('Portátil', 'Prestado', 'ISF');
+    INSERT INTO resultado VALUES ('CHECK: Prestado sin empleado', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: Prestado sin empleado', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- El caso que motivó la relajación: el equipo está prestado y aun así se
+  -- sabe quién lo tiene en la mano. Ocho filas del Excel de RIWI son así.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empleado_id, prestado_a)
+      VALUES ('Portátil', 'Prestado', v_emp, 'ISF');
+    INSERT INTO resultado VALUES ('CHECK: Prestado CON empleado', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: Prestado CON empleado', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 3c. `prestado_a` exige 'Prestado', pero NO al revés (0013).
+  --
+  -- Este caso decía 'rechazado' y estaba mal, y salió verde igualmente porque
+  -- comprobaba la CHECK que yo había escrito en vez de la regla que estaba
+  -- decidida. Lo destapó el importador: D34 manda que la etiqueta 0798 entre
+  -- 'Prestado' con prestatario NULL y marcada, porque el archivo dice que está
+  -- prestado y no dice a quién. Un dato que falta no es un dato incoherente, y
+  -- una CHECK no puede exigir lo que el origen no tiene.
+  BEGIN
+    INSERT INTO equipos (categoria, estado) VALUES ('Portátil', 'Prestado');
+    INSERT INTO resultado VALUES ('CHECK: Prestado sin prestatario', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: Prestado sin prestatario', 'aceptado', 'RECHAZADO');
+  END;
+
+  BEGIN
+    INSERT INTO equipos (categoria, estado, prestado_a)
+      VALUES ('Portátil', 'Disponible', 'ISF');
+    INSERT INTO resultado VALUES ('CHECK: prestatario sin Prestado', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: prestatario sin Prestado', 'rechazado', 'rechazado');
+  END;
+
+  -- 3d. Nadie se presta a sí mismo.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empresa, prestado_a)
+      VALUES ('Portátil', 'Prestado', 'BBL Labs', 'BBL Labs');
+    INSERT INTO resultado VALUES ('CHECK: prestado a su propia empresa', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: prestado a su propia empresa', 'rechazado', 'rechazado');
+  END;
+
+  -- Y el mismo par de empresas cruzado sí vale: si esto rebotara, la CHECK de
+  -- arriba estaría comparando mal y rechazaría préstamos legítimos.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empresa, prestado_a)
+      VALUES ('Portátil', 'Prestado', 'BBL Labs', 'RIWI');
+    INSERT INTO resultado VALUES ('CHECK: prestado a la otra empresa', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('CHECK: prestado a la otra empresa', 'aceptado', 'RECHAZADO');
+  END;
+
   -- 4. serial NULL repetido: varios vacíos conviven
   INSERT INTO equipos (categoria, estado, serial) VALUES ('Monitor', 'Disponible', NULL);
   INSERT INTO equipos (categoria, estado, serial) VALUES ('Monitor', 'Disponible', NULL);
@@ -453,13 +520,23 @@ BEGIN
     INSERT INTO resultado VALUES ('D26: plantilla sin PDF', 'rechazado', 'rechazado');
   END;
 
+  -- El lado positivo de la CHECK, que la 0015 volvió a mover: ya no son tres
+  -- columnas sino CUATRO. `v_acta` es una entrega, así que necesita su chequeo.
+  --
+  -- Este caso se ha roto dos veces por lo mismo —la 0010 le añadió
+  -- `plantilla_version` y la 0015 le añade `chequeo`— y las dos veces fue al
+  -- ampliar la instantánea del documento. Es su función: si mañana entra una
+  -- quinta columna en los bytes del PDF, este caso tiene que volver a ponerse
+  -- rojo, porque una instantánea incompleta es la que hace que
+  -- `recalcularHash` acuse a un acta legítima.
   BEGIN
     UPDATE actas SET pdf = '\x255044462d'::bytea, hash_sha256 = 'abc123',
-                     plantilla_version = '1-borrador'
+                     plantilla_version = '1-borrador',
+                     chequeo = '[{"item": "BitLocker", "instalado": null, "observaciones": null}]'::jsonb
      WHERE id = v_acta;
-    INSERT INTO resultado VALUES ('D15+D26: los tres juntos', 'aceptado', 'aceptado');
+    INSERT INTO resultado VALUES ('D15+D26+D41: las cuatro juntas', 'aceptado', 'aceptado');
   EXCEPTION WHEN check_violation THEN
-    INSERT INTO resultado VALUES ('D15+D26: los tres juntos', 'aceptado', 'RECHAZADO');
+    INSERT INTO resultado VALUES ('D15+D26+D41: las cuatro juntas', 'aceptado', 'RECHAZADO');
   END;
 
   -- 27. D24: un acta no puede colgar del movimiento de OTRO equipo.
@@ -534,6 +611,121 @@ BEGIN
     INSERT INTO resultado VALUES ('D25: consecutivo repetido', 'rechazado', 'ACEPTADO');
   EXCEPTION WHEN unique_violation THEN
     INSERT INTO resultado VALUES ('D25: consecutivo repetido', 'rechazado', 'rechazado');
+  END;
+
+  -- ==========================================================================
+  -- 5f-2 · D40 y D41. Los dos cambios de la 0015, por sus dos lados.
+  -- ==========================================================================
+
+  -- 33. D41: una ENTREGA con documento tiene que llevar su lista de chequeo.
+  --     La sección 5 se imprime en el PDF, así que forma parte de los bytes y
+  --     del hash. Un acta con documento y sin chequeo guardado es un acta que
+  --     `recalcularHash` no puede regenerar: la pintaría vacía, los bytes no
+  --     cuadrarían y acusaría de manipulada un acta legítima.
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                       empleado_nombre, generada_por_nombre,
+                       pdf, hash_sha256, plantilla_version)
+      VALUES ('PRUEBA-D41-A', 'Entrega', v_emp, v_usr, 'N', 'A',
+              '\x25504446'::bytea, 'h', '1');
+    INSERT INTO resultado VALUES ('D41: entrega con PDF y sin chequeo', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D41: entrega con PDF y sin chequeo', 'rechazado', 'rechazado');
+  END;
+
+  -- 34. D41: y el otro lado — con el chequeo puesto, entra.
+  --     Sin este caso, una CHECK que rechazara TODAS las entregas pasaría el
+  --     anterior perfectamente.
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                       empleado_nombre, generada_por_nombre,
+                       pdf, hash_sha256, plantilla_version, chequeo)
+      VALUES ('PRUEBA-D41-B', 'Entrega', v_emp, v_usr, 'N', 'A',
+              '\x25504446'::bytea, 'h', '1',
+              '[{"item": "BitLocker", "instalado": false, "observaciones": null}]'::jsonb);
+    INSERT INTO resultado VALUES ('D41: entrega con PDF y con chequeo', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D41: entrega con PDF y con chequeo', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 35. D41: una DEVOLUCIÓN no puede llevar chequeo.
+  --     Su formato no tiene sección 5 (D37). Guardárselo haría que la
+  --     instantánea dijera algo que el documento no imprime, y entonces el
+  --     hash dejaría de significar «esto es lo que se firmó».
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                       empleado_nombre, generada_por_nombre,
+                       pdf, hash_sha256, plantilla_version, chequeo)
+      VALUES ('PRUEBA-D41-C', 'Devolución', v_emp, v_usr, 'N', 'A',
+              '\x25504446'::bytea, 'h', '1-borrador',
+              '[{"item": "BitLocker", "instalado": true, "observaciones": null}]'::jsonb);
+    INSERT INTO resultado VALUES ('D41: devolución con chequeo', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D41: devolución con chequeo', 'rechazado', 'rechazado');
+  END;
+
+  -- 36. D41: un acta SIN documento tampoco puede llevar chequeo.
+  --     El chequeo es parte de la instantánea del documento; sin documento no
+  --     hay nada de lo que sea instantánea.
+  BEGIN
+    INSERT INTO actas (consecutivo, tipo, empleado_id, generada_por,
+                       empleado_nombre, generada_por_nombre, chequeo)
+      VALUES ('PRUEBA-D41-D', 'Entrega', v_emp, v_usr, 'N', 'A',
+              '[{"item": "BitLocker", "instalado": true, "observaciones": null}]'::jsonb);
+    INSERT INTO resultado VALUES ('D41: chequeo sin PDF', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D41: chequeo sin PDF', 'rechazado', 'rechazado');
+  END;
+
+  -- 37. D40: el contador arranca en CERO, y la CHECK tiene que dejarlo.
+  --     Era `valor > 0` hasta la 0015. Con la primera acta de cada serie
+  --     numerada `0000`, esa constraint mataba el primer POST de cada empresa
+  --     — un fallo que solo aparece la primera vez y nunca más.
+  BEGIN
+    INSERT INTO actas_consecutivo (empresa, valor) VALUES ('RIWI', 0);
+    INSERT INTO resultado VALUES ('D40: contador en cero', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D40: contador en cero', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 38. D40: y no puede bajar de ahí. Un consecutivo negativo no es un número
+  --     de documento.
+  BEGIN
+    INSERT INTO actas_consecutivo (empresa, valor) VALUES ('BBL Labs', -1);
+    INSERT INTO resultado VALUES ('D40: contador negativo', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D40: contador negativo', 'rechazado', 'rechazado');
+  END;
+
+  -- 39b. D42: `Sin clasificar` no emite, así que su contador no debería
+  --      existir. La base NO lo impide —la columna es el enum entero— y eso es
+  --      deliberado: la guarda vive en el repositorio y en el tipo, donde puede
+  --      explicar qué hacer. Lo que se comprueba aquí es que el enum SÍ admite
+  --      el valor, para que el caso de `verificar-datos` que lo busca no sea un
+  --      verde imposible de romper.
+  BEGIN
+    INSERT INTO actas_consecutivo (empresa, valor) VALUES ('Sin clasificar', 0);
+    INSERT INTO resultado VALUES ('D42: la base admite el valor que el codigo veta',
+      'aceptado', 'aceptado');
+    DELETE FROM actas_consecutivo WHERE empresa = 'Sin clasificar';
+  EXCEPTION WHEN others THEN
+    INSERT INTO resultado VALUES ('D42: la base admite el valor que el codigo veta',
+      'aceptado', 'RECHAZADO');
+  END;
+
+  -- 39. D40: cada empresa tiene SU serie, y solo una.
+  --     La clave primaria es la empresa: dos filas para la misma empresa serían
+  --     dos contadores compitiendo por la misma numeración, que es exactamente
+  --     lo que produce dos actas con el mismo número.
+  INSERT INTO actas_consecutivo (empresa, valor) VALUES ('BBL Labs', 7);
+  INSERT INTO resultado VALUES ('D40: dos series conviven',
+    '2', (SELECT count(*)::text FROM actas_consecutivo));
+
+  BEGIN
+    INSERT INTO actas_consecutivo (empresa, valor) VALUES ('RIWI', 3);
+    INSERT INTO resultado VALUES ('D40: serie duplicada', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN unique_violation THEN
+    INSERT INTO resultado VALUES ('D40: serie duplicada', 'rechazado', 'rechazado');
   END;
 
   -- 32. D24: un movimiento firmado por un acta no se puede borrar.

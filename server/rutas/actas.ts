@@ -9,6 +9,7 @@
 import type { Express } from 'express';
 import { z } from 'zod';
 
+import { CHEQUEO_ITEMS } from '../../db/acta-formato.js';
 import * as repoActas from '../../db/repositorios/actas.js';
 import { guardian } from '../autenticar.js';
 import { asincrono, ErrorHttp, noEncontrado } from '../errores.js';
@@ -37,6 +38,33 @@ const esquemaEmitir = z.object({
     .max(50)
     .refine((v) => new Set(v).size === v.length, { message: 'hay un equipo repetido' }),
   observaciones: z.string().trim().max(2000).nullable().optional(),
+  /**
+   * La sección 5 (D41). Solo cuenta en las entregas; el repositorio la
+   * descarta en una devolución, cuyo formato no tiene esa sección.
+   *
+   * `instalado` es `.nullable()` y **no** `.optional()`: quien emite tiene que
+   * decir `true`, `false` o `null` para cada item que mande. Dejarlo omitible
+   * con un valor supuesto detrás sería reintroducir por la puerta de atrás el
+   * valor por defecto que el formato prohíbe — un «Sí» que no afirmó nadie.
+   *
+   * Los items van por su nombre y no por posición: un array suelto de cuatro
+   * booleanos se desalinea en silencio en cuanto la lista cambie de orden, y
+   * lo que quedaría mal es un documento legal.
+   */
+  chequeo: z
+    .array(
+      z.object({
+        item: z.enum(CHEQUEO_ITEMS),
+        instalado: z.boolean().nullable(),
+        observaciones: z.string().trim().max(500).nullable(),
+      }),
+    )
+    .max(CHEQUEO_ITEMS.length)
+    .refine((v) => new Set(v.map((c) => c.item)).size === v.length, {
+      message: 'hay un item de chequeo repetido',
+    })
+    .nullable()
+    .optional(),
 });
 
 function validar<T>(esquema: z.ZodType<T>, entrada: unknown): T {
@@ -193,6 +221,22 @@ export function registrarRutasActas(app: Express): void {
             equipo_id: e.equipo_id,
             etiqueta: e.etiqueta,
             titular: e.titular,
+          });
+        }
+
+        /**
+         * 409 y no 400 (D42): la petición está bien formada y lo que falla es
+         * el estado de la ficha, que era correcto ayer y lo será cuando alguien
+         * le asigne la empresa.
+         *
+         * Va con `empleado_id` porque el mensaje pide una acción concreta sobre
+         * una persona concreta, y la pantalla tiene que poder abrir ESA ficha
+         * sin que quien emite la busque a mano.
+         */
+        if (e instanceof repoActas.EmpresaSinAsignar) {
+          throw new ErrorHttp(409, e.message, {
+            empleado_id: e.empleadoId,
+            falta: 'empresa',
           });
         }
 

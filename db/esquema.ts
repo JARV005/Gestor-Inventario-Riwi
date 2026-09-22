@@ -13,6 +13,8 @@
  */
 
 import { sql } from 'drizzle-orm';
+
+import type { ItemChequeo } from './acta-formato.js';
 import {
   boolean,
   check,
@@ -106,7 +108,25 @@ export const estadoEquipo = pgEnum('estado_equipo', [
   'En mantenimiento',
   'Reservado',
   'De baja',
+  /**
+   * El sexto, de la 5e (D32). Lo tiene otra empresa: `prestado_a` dice cuál, y
+   * la CHECK de la 0012 los ata —uno sin el otro no significa nada.
+   *
+   * Es el único estado donde `empleado_id` puede estar puesto sin que el equipo
+   * esté `Asignado`: un equipo prestado sigue en las manos de una persona con
+   * nombre, y esa es la razón de que la equivalencia de la 0000 se relajara.
+   */
+  'Prestado',
 ]);
+
+/**
+ * A quién se le presta un equipo. Enum **propio**, no el de `empresa` (D31).
+ *
+ * Reutilizar `empresa` y añadirle `ISF` costaría el mecanismo de D28: ese enum
+ * lo usa `empleados.empresa`, y su conteo de «Sin clasificar» solo funciona
+ * mientras las claves posibles sean exactamente tres.
+ */
+export const prestatario = pgEnum('prestatario', ['RIWI', 'BBL Labs', 'ISF']);
 
 /**
  * `Usado` no estaba en el §2. Lo exige la hoja de periféricos, que trae 48
@@ -142,14 +162,37 @@ export const tipoMovimiento = pgEnum('tipo_movimiento', [
   'Baja',
   'Reserva',
   'Liberación',
+  /** Los dos de la 5e (D32). `Prestado` no llega por ningún otro camino. */
+  'Préstamo',
+  'Retorno de préstamo',
 ]);
 
+/**
+ * Los estados de un parte.
+ *
+ * Los tres primeros son ABIERTOS: el equipo está en `En mantenimiento` mientras
+ * dure cualquiera de ellos. Los dos últimos lo cierran, y cerrar un parte
+ * **siempre** saca al equipo de mantenimiento (D29) — con `Retorno` si volvió,
+ * con `Baja` si no tenía arreglo.
+ *
+ * `Completado` y `Devuelto` no son lo mismo, y esa distinción ya estaba en el
+ * enum desde la 0000: el taller termina antes de que el equipo vuelva al
+ * armario. Por eso «cerrar» es un solo gesto y no dos — el paso intermedio ya
+ * tiene su propio estado y no necesita otro botón.
+ */
 export const estadoMantenimiento = pgEnum('estado_mantenimiento', [
   'Pendiente',
   'En taller',
   'Completado',
   'Devuelto',
+  'Baja tras revisión',
 ]);
+
+/** D28. `Sin clasificar` es de partida, no un valor de relleno. */
+export const empresaEmpleado = pgEnum('empresa', ['RIWI', 'BBL Labs', 'Sin clasificar']);
+
+/** Los estados de un parte con el equipo todavía en el taller. */
+export const ESTADOS_PARTE_ABIERTO = ['Pendiente', 'En taller', 'Completado'] as const;
 
 export const tipoActa = pgEnum('tipo_acta', ['Entrega', 'Devolución']);
 
@@ -206,10 +249,25 @@ export const empleados = pgTable(
     estado: estadoEmpleado('estado').notNull().default('Activo'),
     fecha_ingreso: date('fecha_ingreso'),
     telefono: text('telefono'),
+    /**
+     * Obligatoria **de hecho pero no por CHECK** para la sede Remoto (D30): hay
+     * empleados cargados del Excel sin ella, y una constraint los dejaría sin
+     * poder editarse ni siquiera para corregir otra cosa. Se avisa en la
+     * interfaz, que es donde alguien puede hacer algo al respecto.
+     */
     direccion: text('direccion'),
     activo: boolean('activo').notNull().default(true),
+    /**
+     * De qué empresa es (D28). `Sin clasificar` es el valor de partida de los
+     * 113 del Excel: nadie lo ha revisado. No es un hueco de datos, es una
+     * tarea pendiente — y por eso se cuenta en la interfaz.
+     */
+    empresa: empresaEmpleado('empresa').notNull().default('Sin clasificar'),
   },
-  (t) => [index('idx_empleados_sede').on(t.sede_id)],
+  (t) => [
+    index('idx_empleados_sede').on(t.sede_id),
+    index('idx_empleados_empresa').on(t.empresa),
+  ],
 );
 
 /**
@@ -361,6 +419,22 @@ export const equipos = pgTable(
      * `serial` y `etiqueta`.
      */
     requiere_revision: boolean('requiere_revision').notNull().default(false),
+    /**
+     * De quién es el equipo (D31). Se deduce del archivo de origen en la
+     * reimportación de la 5e, así que `Sin clasificar` debería quedar casi
+     * vacío — solo para altas manuales futuras.
+     */
+    empresa: empresaEmpleado('empresa').notNull().default('Sin clasificar'),
+    /**
+     * Quién lo tiene, si no es su dueño. NULL cuando no está prestado.
+     *
+     * `empresa` y `prestado_a` juntas son lo que permite **una fila por máquina
+     * física**: la vista de una empresa filtra por `empresa = X OR prestado_a =
+     * X`. Con dos filas —una en el inventario de cada empresa— el mismo serial
+     * existiría en dos estados contradictorios, que es justo lo que el índice
+     * único parcial de `serial` existe para impedir.
+     */
+    prestado_a: prestatario('prestado_a'),
   },
   (t) => [
     // Invariante del §2. Es una equivalencia, no una implicación: un equipo
@@ -371,9 +445,30 @@ export const equipos = pgTable(
     // Las columnas van sin interpolar: drizzle las emitiría calificadas
     // ("equipos"."estado") y Postgres no admite calificación dentro de un CHECK
     // ni en el predicado de un índice parcial. Mismo motivo abajo.
+    // `Prestado` es la única excepción, y se añadió en la 0012 (D31): un equipo
+    // prestado sigue en las manos de una persona con nombre, y sin esta salida
+    // el import tendría que tirar ocho nombres reales. Los dos errores que la
+    // equivalencia caza —'Asignado' sin responsable, responsable sobre un
+    // equipo que no lo está— siguen cazados.
     check(
       'equipos_asignado_implica_empleado',
-      sql`(estado = 'Asignado') = (empleado_id IS NOT NULL)`,
+      sql`(estado = 'Asignado') = (empleado_id IS NOT NULL) OR estado::text = 'Prestado'`,
+    ),
+    // Implicación y NO equivalencia (0013): un prestatario exige estado
+    // 'Prestado', pero un equipo prestado puede no saber a quién — el archivo
+    // de RIWI trae uno así, y D34 dice que entre marcado, no que se rechace.
+    // Sigue impidiendo lo que motivaba la equivalencia: que
+    // `recuperar_prestamo` mueva el estado y deje el campo puesto.
+    check(
+      'equipos_prestatario_implica_prestado',
+      sql`prestado_a IS NULL OR estado::text = 'Prestado'`,
+    ),
+    // El cast es obligatorio: son dos enums distintos a propósito. Y
+    // `IS DISTINCT FROM` en vez de `<>` para que un NULL no vuelva la
+    // expresión NULL, que una CHECK da por buena.
+    check(
+      'equipos_prestado_a_no_es_su_empresa',
+      sql`prestado_a IS NULL OR prestado_a::text IS DISTINCT FROM empresa::text`,
     ),
     index('idx_equipos_importacion').on(t.importacion_id),
     // Unicidad de serial y etiqueta, pero solo entre las filas ya limpias.
@@ -403,6 +498,12 @@ export const equipos = pgTable(
     index('idx_equipos_revision')
       .on(t.id)
       .where(sql`requiere_revision`),
+    index('idx_equipos_empresa').on(t.empresa),
+    // Parcial: los prestados son la minoría. Sin el WHERE el índice cubriría
+    // las 217 filas para responder por ocho.
+    index('idx_equipos_prestado_a')
+      .on(t.prestado_a)
+      .where(sql`prestado_a IS NOT NULL`),
   ],
 );
 
@@ -526,6 +627,15 @@ export const mantenimientos = pgTable(
   (t) => [
     index('idx_mantenimientos_equipo').on(t.equipo_id),
     index('idx_mantenimientos_estado').on(t.estado),
+    /**
+     * Un solo parte abierto por equipo. Misma forma que el traslado abierto
+     * (D13) y por el mismo motivo: dos partes abiertos serían dos respuestas a
+     * «por qué está en el taller», y al cerrar uno el equipo saldría de
+     * mantenimiento con el otro todavía abierto.
+     */
+    uniqueIndex('idx_mantenimientos_abierto')
+      .on(t.equipo_id)
+      .where(sql`estado IN ('Pendiente', 'En taller', 'Completado')`),
   ],
 );
 
@@ -548,6 +658,12 @@ export const actas = pgTable(
   {
     ...columnasBase,
     consecutivo: text('consecutivo').notNull().unique(),
+    /**
+     * De quién es el acta (5f). Decide el LOGO del encabezado, y el logo entra
+     * en los bytes del PDF: sin guardarla, `recalcularHash` regeneraría el
+     * documento con otro logo y acusaría de manipulada un acta legítima.
+     */
+    empresa: empresaEmpleado('empresa').notNull().default('Sin clasificar'),
     tipo: tipoActa('tipo').notNull(),
     empleado_id: uuid('empleado_id')
       .notNull()
@@ -586,6 +702,21 @@ export const actas = pgTable(
      * bytes y las viejas no.
      */
     plantilla_version: text('plantilla_version'),
+    /**
+     * La sección 5 del formato: los cuatro items, su «Instalado» y sus
+     * observaciones, congelados al emitir (D41).
+     *
+     * Se imprime en el PDF, así que entra en los bytes y por tanto en el hash.
+     * Sin guardarla, `recalcularHash` regeneraría el acta con la sección vacía
+     * y acusaría de manipulada un acta legítima — exactamente lo que la 0014
+     * arregló para la empresa.
+     *
+     * **Ninguno de los cuatro tiene valor por defecto.** `instalado` es
+     * `boolean | null`, y el `null` significa «nadie contestó», que no es lo
+     * mismo que «no». Un «Sí» premarcado en un documento legal es una
+     * afirmación que no hizo nadie.
+     */
+    chequeo: jsonb('chequeo').$type<ItemChequeo[]>(),
     firmada: boolean('firmada').notNull().default(false),
     fecha_firma: timestamp('fecha_firma', { withTimezone: true }),
   },
@@ -593,9 +724,16 @@ export const actas = pgTable(
     // Las tres juntas o ninguna. Un PDF sin hash no se puede verificar; un hash
     // sin PDF no verifica nada; y un PDF cuya plantilla no se sabe no se puede
     // volver a comprobar.
+    // Y el chequeo con ellas, pero no bajo la misma regla: la sección 5 solo
+    // existe en las entregas, así que una devolución con PDF lo tiene a NULL.
+    // La equivalencia con dos condiciones corta los tres errores de una vez —
+    // acta sin documento con chequeo guardado, entrega con documento y sin él,
+    // y devolución que se inventa una sección que su formato no tiene.
     check(
       'actas_pdf_con_hash',
-      sql`(pdf IS NULL) = (hash_sha256 IS NULL) AND (pdf IS NULL) = (plantilla_version IS NULL)`,
+      sql`(pdf IS NULL) = (hash_sha256 IS NULL)
+          AND (pdf IS NULL) = (plantilla_version IS NULL)
+          AND (chequeo IS NOT NULL) = (pdf IS NOT NULL AND tipo = 'Entrega')`,
     ),
     index('idx_actas_empleado').on(t.empleado_id),
   ],
@@ -645,6 +783,8 @@ export const actasEquipos = pgTable(
     marca: text('marca'),
     modelo: text('modelo'),
     categoria: categoriaEquipo('categoria').notNull(),
+    /** La columna «Propietario» de la sección 4, congelada como el resto. */
+    empresa: empresaEmpleado('empresa').notNull().default('Sin clasificar'),
     condicion: condicionEquipo('condicion'),
     procesador: text('procesador'),
     ram: text('ram'),
@@ -677,10 +817,19 @@ export const actasEquipos = pgTable(
  * La fila se incrementa dentro de la transacción del acta, así que el bloqueo
  * serializa a los concurrentes y un rollback devuelve el número.
  */
-export const actasConsecutivo = pgTable('actas_consecutivo', {
-  anio: integer('anio').primaryKey(),
-  valor: integer('valor').notNull(),
-});
+export const actasConsecutivo = pgTable(
+  'actas_consecutivo',
+  {
+    empresa: empresaEmpleado('empresa').primaryKey(),
+    valor: integer('valor').notNull(),
+  },
+  () => [
+    // `>= 0` y no `> 0`: la primera acta de cada serie es la `0000` (D40), así
+    // que el contador arranca en cero. La CHECK anterior habría matado el
+    // primer POST de cada empresa.
+    check('actas_consecutivo_no_negativo', sql`valor >= 0`),
+  ],
+);
 
 /**
  * Obligatoria por el §5: toda escritura sobre `equipos` y todo desciframiento

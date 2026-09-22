@@ -16,6 +16,8 @@ import { eq, like, sql } from 'drizzle-orm';
 import { cifrar } from '../db/cifrado.js';
 import { db, pool } from '../db/cliente.js';
 import { empleados, equipos, usuariosApp } from '../db/esquema.js';
+import type { EmpresaQueEmite } from '../db/acta-formato.js';
+import { siguienteConsecutivo } from '../db/repositorios/actas.js';
 import { crearApp } from '../server/app.js';
 
 /** Prefijo de todo lo que los tests crean, para poder barrerlo después. */
@@ -305,9 +307,62 @@ export async function crearEquipoConSecretos(etiqueta: string, empleadoId?: stri
   return fila.id;
 }
 
-export async function crearEmpleado(nombre: string) {
-  const [fila] = await db.insert(empleados).values({ nombre }).returning({ id: empleados.id });
+/**
+ * Marca un equipo con los motivos que se le pasen, por la base.
+ *
+ * Por la base y no por la API a propósito: no hay endpoint que ponga motivos
+ * —los pone el importador— y lo que estos tests prueban es el camino de
+ * SALIDA. Fabricar el estado de partida con la herramienta que se está
+ * probando dejaría el caso comprobándose a sí mismo.
+ *
+ * Las dos escrituras van juntas porque son el mismo hecho: el CONSTRAINT
+ * TRIGGER de la 0006 exige marca <=> motivos, y está deferido al COMMIT justo
+ * para permitir el estado intermedio.
+ */
+export async function marcarEquipo(id: string, motivos: string[]): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`UPDATE equipos SET requiere_revision = true WHERE equipos.id = ${id}`,
+    );
+    for (const m of motivos) {
+      await tx.execute(
+        sql`INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+             VALUES (${id}, ${m})`,
+      );
+    }
+  });
+}
+
+export async function crearEmpleado(nombre: string, empresa?: 'RIWI' | 'BBL Labs' | 'Sin clasificar') {
+  const [fila] = await db
+    .insert(empleados)
+    .values(empresa ? { nombre, empresa } : { nombre })
+    .returning({ id: empleados.id });
   return fila.id;
+}
+
+/**
+ * Las tablas que referencian `equipos` sin `ON DELETE CASCADE`, **leídas del
+ * catálogo de Postgres**, no de una lista escrita aquí.
+ *
+ * Es lo que convierte «se me olvidó una tabla» en un error con nombre. Una
+ * lista a mano sería la cuarta copia del mismo hecho, y las tres anteriores
+ * —movimientos, actas_equipos, mantenimientos— se olvidaron una por una.
+ */
+async function tablasQueApuntanAEquipos(
+  ejecutor: typeof db,
+): Promise<{ tabla: string; columna: string }[]> {
+  const r = await ejecutor.execute<{ tabla: string; columna: string }>(
+    sql`SELECT c.conrelid::regclass::text AS tabla, a.attname AS columna
+          FROM pg_constraint c
+          JOIN unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord) ON true
+          JOIN pg_attribute a
+            ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+         WHERE c.contype = 'f'
+           AND c.confrelid = 'equipos'::regclass
+           AND c.confdeltype <> 'c'`,
+  );
+  return r.rows;
 }
 
 /**
@@ -324,33 +379,89 @@ export async function crearEmpleado(nombre: string) {
  * fallos y `npm test` salía con código 1. Si el criterio hubiera sido leer el
  * resumen, esto se cierra en verde con la limpieza rota.
  *
- * `session_replication_role = replica` desactiva triggers y FKs para esta
- * sesión, y va con `SET LOCAL`: muere con la transacción. Es aceptable aquí
- * porque `comprobarBaseDeTest()` ya garantizó que la base es la de tests.
+ * **Las FK quedan activas.** Antes esto corría con
+ * `SET LOCAL session_replication_role = replica`, que apaga triggers **y** FK a
+ * la vez, y por eso borrar un equipo no fallaba aunque algo lo referenciara: se
+ * quedaba huérfano y envenenaba la corrida siguiente. Tres tablas se olvidaron
+ * una por una —movimientos, actas_equipos y mantenimientos— y ninguna de las
+ * tres dio error al olvidarse: eso es la definición de una red que no sujeta.
+ *
+ * Ahora se borra en orden de dependencia con las FK puestas, y lo único que se
+ * desactiva es **un trigger concreto de una tabla concreta**:
+ * `trg_movimientos_append_only`, que existe para que un movimiento no se borre
+ * nunca (0001). Es la única razón real por la que hacía falta `replica`.
+ * `ALTER TABLE ... DISABLE TRIGGER` es transaccional en Postgres y se vuelve a
+ * activar antes del COMMIT, así que fuera de esta transacción el append-only
+ * sigue en pie.
+ *
+ * Todo esto es aceptable aquí porque `comprobarBaseDeTest()` ya garantizó que
+ * la base es la de tests.
  */
 export async function borrarEquipos(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   await db.transaction(async (tx) => {
-    await tx.execute(sql`SET LOCAL session_replication_role = replica`);
-    for (const id of ids) {
-      // ATENCIÓN: `replica` desactiva las FK, así que borrar el equipo NO falla
-      // aunque algo lo referencie — se queda huérfano y envenena la corrida
-      // siguiente. Todo lo que apunte a `equipos` tiene que borrarse aquí a
-      // mano. Las actas entraron en la 5a y son el segundo caso; el primero
-      // fueron los movimientos, y su ausencia costó una etapa entera de
-      // `# fail 0` con exit 1.
-      await tx.execute(sql`DELETE FROM actas_equipos WHERE actas_equipos.equipo_id = ${id}`);
-      await tx.execute(sql`DELETE FROM movimientos WHERE movimientos.equipo_id = ${id}`);
-      await tx.execute(sql`DELETE FROM equipos WHERE equipos.id = ${id}`);
-    }
-    // Las actas que se quedaron sin ninguna línea. Referencian al usuario de la
-    // suite con RESTRICT, así que si sobreviven, `limpiar()` no puede borrarlo.
-    await tx.execute(
-      sql`DELETE FROM actas
-           WHERE NOT EXISTS (
-             SELECT 1 FROM actas_equipos WHERE actas_equipos.acta_id = actas.id
-           )`,
+    // Interpolar el array dentro de ANY(...) NO vale: drizzle lo expande como
+    // lista de parámetros y emite `ANY(($1, $2, $3))`, un constructor de fila,
+    // que es un error de sintaxis. Comprobado leyendo el SQL emitido, no
+    // supuesto — es la regla de CLAUDE.md sobre interpolar en `sql` crudo, esta
+    // vez con un array. `IN (...)` emite `IN ($1, $2, $3)` y además no depende
+    // de que el driver acierte el tipo del array.
+    const enIds = sql.join(
+      ids.map((id) => sql`${id}`),
+      sql`, `,
     );
+
+    // Lo mínimo imprescindible, y nada más. Ver el bloque de arriba.
+    await tx.execute(sql`ALTER TABLE movimientos DISABLE TRIGGER trg_movimientos_append_only`);
+
+    {
+      // Orden de dependencia, de las hojas a la raíz. `actas_equipos` antes que
+      // `movimientos` porque su FK es compuesta contra (id, equipo_id), y
+      // `movimientos` antes que `actas` porque `movimientos.acta_id` las
+      // referencia. `equipos_motivos_revision` no está: es la única con
+      // ON DELETE CASCADE, y se va sola con el equipo.
+      await tx.execute(sql`DELETE FROM actas_equipos WHERE actas_equipos.equipo_id IN (${enIds})`);
+      await tx.execute(sql`DELETE FROM mantenimientos WHERE mantenimientos.equipo_id IN (${enIds})`);
+      await tx.execute(sql`DELETE FROM movimientos WHERE movimientos.equipo_id IN (${enIds})`);
+
+      // Las actas que se quedaron sin ninguna línea. Referencian al usuario de
+      // la suite con RESTRICT, así que si sobreviven, `limpiar()` no puede
+      // borrarlo. Van antes del equipo: ya no hay movimientos que las aten.
+      await tx.execute(
+        sql`DELETE FROM actas
+             WHERE NOT EXISTS (
+               SELECT 1 FROM actas_equipos WHERE actas_equipos.acta_id = actas.id
+             )`,
+      );
+
+      // Antes de borrar el equipo: ¿queda algo apuntándole? La FK lo diría
+      // igual —ese es el punto de dejarlas puestas—, pero lo diría con el
+      // nombre de la constraint. Esto lo dice con el nombre de la tabla y el
+      // número de filas, que es lo que hace falta para arreglarlo.
+      for (const { tabla, columna } of await tablasQueApuntanAEquipos(tx as unknown as typeof db)) {
+        if (tabla === 'equipos') continue;
+        const r = await tx.execute<{ n: string }>(
+          sql`SELECT count(*)::text AS n FROM ${sql.identifier(tabla)}
+               WHERE ${sql.identifier(tabla)}.${sql.identifier(columna)} IN (${enIds})`,
+        );
+        const n = Number(r.rows[0]?.n ?? 0);
+        if (n > 0) {
+          throw new Error(
+            `borrarEquipos: ${tabla}.${columna} todavía tiene ${n} fila(s) apuntando a los ` +
+              `equipos que se iban a borrar. Añádela a la limpieza, en orden de dependencia. ` +
+              `Es la cuarta tabla: movimientos, actas_equipos y mantenimientos ya pasaron por aquí.`,
+          );
+        }
+      }
+
+      await tx.execute(sql`DELETE FROM equipos WHERE equipos.id IN (${enIds})`);
+    }
+
+    // Se reactiva en el camino bueno y no en un `finally`: si algo de arriba
+    // falló, la transacción ya está abortada y este `ALTER` daría un segundo
+    // error que taparía el primero. El ROLLBACK deshace el DISABLE por su
+    // cuenta —el DDL es transaccional—, así que el trigger vuelve igual.
+    await tx.execute(sql`ALTER TABLE movimientos ENABLE TRIGGER trg_movimientos_append_only`);
   });
 }
 
@@ -380,11 +491,111 @@ export async function pdfEnLaBase(
 }
 
 /** El valor actual del contador del año, o 0 si todavía no existe. */
-export async function consecutivoActual(anio: number): Promise<number> {
+/**
+ * Dónde va la serie de una empresa, leído de la base (D40).
+ *
+ * Devuelve `null` y no `0` cuando la empresa no tiene fila todavía, porque
+ * ahora esas dos cosas son distintas: con el contador arrancando en cero, un
+ * `0` es «ya se emitió la primera acta» y la ausencia de fila es «ninguna».
+ * Colapsarlas haría que el test de la primera acta pasara sin comprobar nada.
+ */
+export async function consecutivoActual(empresa: string): Promise<number | null> {
   const r = await db.execute<{ valor: number }>(
-    sql`SELECT actas_consecutivo.valor FROM actas_consecutivo WHERE actas_consecutivo.anio = ${anio}`,
+    sql`SELECT actas_consecutivo.valor FROM actas_consecutivo
+         WHERE actas_consecutivo.empresa = ${empresa}::empresa`,
   );
-  return r.rows[0]?.valor ?? 0;
+  return r.rows[0]?.valor ?? null;
+}
+
+/**
+ * Los `cuantos` primeros números que daría una serie **virgen**, sin tocar la
+ * de verdad.
+ *
+ * El contador es monótono y sobrevive a la limpieza de las suites: eso es lo
+ * correcto para una numeración legal, y hace imposible comprobar «la primera
+ * acta es la 0000» mirando la tabla más allá de la primera corrida. Aquí se
+ * borra el contador dentro de una transacción, se piden los números y se
+ * deshace todo con un ROLLBACK, así que la serie real queda donde estaba.
+ */
+export async function primerosDeSerieVirgen(
+  empresa: EmpresaQueEmite,
+  cuantos: number,
+): Promise<string[]> {
+  const numeros: string[] = [];
+  const CORTE = 'rollback a propósito';
+  const antes = await consecutivoActual(empresa);
+  await db
+    .transaction(async (tx) => {
+      await tx.execute(
+        sql`DELETE FROM actas_consecutivo WHERE actas_consecutivo.empresa = ${empresa}::empresa`,
+      );
+      for (let i = 0; i < cuantos; i++) {
+        numeros.push(
+          await siguienteConsecutivo(tx, empresa),
+        );
+      }
+      throw new Error(CORTE);
+    })
+    .catch((e) => {
+      if (!(e instanceof Error) || e.message !== CORTE) throw e;
+    });
+
+  // Que el ROLLBACK haya ocurrido de verdad. Sin esta comprobación, un cambio
+  // que hiciera confirmar la transacción reiniciaría el contador real y este
+  // helper seguiría en verde mientras corrompe la numeración de las demás
+  // suites — un test que rompe la base que usa el resto.
+  const despues = await consecutivoActual(empresa);
+  if (despues !== antes) {
+    throw new Error(
+      `el rollback no ocurrió: la serie ${empresa} pasó de ${antes} a ${despues}`,
+    );
+  }
+  return numeros;
+}
+
+export async function primerNumeroDeSerieVirgen(empresa: EmpresaQueEmite): Promise<string> {
+  return (await primerosDeSerieVirgen(empresa, 1))[0];
+}
+
+export async function dosPrimerosDeSerieVirgen(empresa: EmpresaQueEmite): Promise<string[]> {
+  return primerosDeSerieVirgen(empresa, 2);
+}
+
+/** La sección 5 tal y como está GUARDADA, no como la devuelve la API. */
+export async function chequeoEnLaBase(
+  id: string,
+): Promise<{ item: string; instalado: boolean | null; observaciones: string | null }[] | null> {
+  const r = await db.execute<{ chequeo: unknown }>(
+    sql`SELECT actas.chequeo FROM actas WHERE actas.id = ${id}`,
+  );
+  return (r.rows[0]?.chequeo ?? null) as never;
+}
+
+/**
+ * Cambia la sección 5 guardada sin pasar por la aplicación.
+ *
+ * Es deliberadamente algo que la API no deja hacer: sirve para simular que
+ * alguien tocó la instantánea por debajo y comprobar que `recalcularHash` se
+ * da cuenta. Un acta emitida no se edita por ningún camino legítimo.
+ */
+export async function ponerChequeoEnLaBase(id: string, chequeo: unknown): Promise<void> {
+  await db.execute(
+    sql`UPDATE actas SET chequeo = ${JSON.stringify(chequeo)}::jsonb WHERE actas.id = ${id}`,
+  );
+}
+
+/**
+ * El tipo de licencia guardado, leído de la base.
+ *
+ * Existe para poder afirmar que cerrar un motivo **no rellena** el dato que el
+ * motivo señalaba. Sin esto, un cierre en bloque que se inventara un
+ * `licencia_tipo` plausible pasaría todos los demás casos.
+ */
+export async function licenciaTipoDe(id: string): Promise<string | null> {
+  const r = await db.execute<{ t: string | null }>(
+    sql`SELECT equipos.licencia_tipo AS t FROM equipos WHERE equipos.id = ${id}`,
+  );
+  return r.rows[0]?.t ?? null;
 }
 
 export async function borrarEmpleados(ids: string[]): Promise<void> {

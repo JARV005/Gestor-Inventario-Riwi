@@ -19,6 +19,13 @@ const SEDES = [
   { nombre: 'Barranquilla', ciudad: 'Barranquilla' },
   { nombre: 'Cartagena', ciudad: 'Cartagena' },
   { nombre: 'Bogotá', ciudad: 'Bogotá' },
+  /**
+   * Sede nueva de la 5e: un equipo de RIWI está en Boyacá y es una sede real,
+   * no un valor sucio. `San Rafael` NO entra aquí — nadie ha dicho todavía si
+   * es una sede o un sitio dentro de otra, y las filas que la traen entran con
+   * `sede_id = NULL` y su motivo (D7 c).
+   */
+  { nombre: 'Boyacá', ciudad: 'Boyacá' },
   { nombre: 'Remoto', ciudad: null },
 ];
 
@@ -158,7 +165,7 @@ async function main() {
   console.log(
     sedesInsertadas.length
       ? `Sedes creadas: ${sedesInsertadas.map((s) => s.nombre).join(', ')}`
-      : 'Sedes: ya estaban las 5.',
+      : `Sedes: ya estaban las ${SEDES.length}.`,
   );
   console.log(
     usuarioInsertado.length

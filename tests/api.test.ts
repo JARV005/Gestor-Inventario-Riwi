@@ -198,6 +198,76 @@ describe('campos cifrados: la capa sobre el código', () => {
     }
     assert.deepEqual(culpables, [], `SELECT * en: ${culpables.join(', ')}`);
   });
+
+  /**
+   * Toda función que ESCRIBA en `equipos` tiene que auditar.
+   *
+   * ==========================================================================
+   * ES LO PRIMERO QUE SE OLVIDÓ DOS VECES. NO SE CONFÍA EN ACORDARSE.
+   * ==========================================================================
+   *
+   * El §5 exige que toda escritura sobre `equipos` deje fila en `auditoria`.
+   * `repoMovimientos.mutar` lo hace desde la etapa 5; `db/repositorios/equipos.ts`
+   * no lo hacía en NINGUNA de sus cuatro funciones que escriben —`crear`,
+   * `actualizar`, `cerrarMotivo` y `fijarTenedor`— y nadie lo notó durante dos
+   * etapas.
+   *
+   * Cómo salió a la luz: dos filas del corpus perdieron su marca de revisión,
+   * los verificadores se pusieron en rojo, y al preguntarle a `auditoria` quién
+   * las había tocado **la tabla estaba vacía**. Ese vacío no era «nadie las
+   * tocó»: era «nadie escribe aquí». Un registro de auditoría que nunca se
+   * llena no se distingue de uno que dice que no pasó nada, y esa es
+   * exactamente la forma de fallo que este proyecto ya conoce.
+   *
+   * Esto es estático a propósito. Un caso que ejercite los cuatro endpoints
+   * comprobaría los cuatro que existen hoy; este se pone rojo con el quinto que
+   * alguien escriba, que es cuando hace falta.
+   */
+  it('toda función que escribe en equipos deja fila en auditoria', () => {
+    const ruta = join(process.cwd(), 'db', 'repositorios', 'equipos.ts');
+    const texto = readFileSync(ruta, 'utf8');
+
+    // Comentarios fuera, conservando los saltos de línea para que el número de
+    // línea del informe siga siendo el real. Mismo motivo que arriba: este
+    // fichero habla de `auditoria` en su prosa.
+    const codigo = texto
+      .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+      .replace(/(^|[^:])\/\/[^\n]*/g, (m, antes) => antes + ' '.repeat(m.length - antes.length));
+
+    // Se parte por `export async function`: cada trozo es una función entera,
+    // con su cuerpo, hasta la siguiente.
+    const trozos = codigo.split(/^export (?:async )?function /m).slice(1);
+    assert.ok(trozos.length > 0, 'no se encontró ninguna función exportada; revisar el corte');
+
+    const escriben: string[] = [];
+    const sinAuditar: string[] = [];
+    for (const trozo of trozos) {
+      const nombre = trozo.slice(0, trozo.indexOf('(')).trim();
+      // Las tres formas de escribir en la tabla con drizzle.
+      const escribe =
+        /\.update\(equipos\)/.test(trozo) ||
+        /\.insert\(equipos\)/.test(trozo) ||
+        /\.delete\(equipos\)/.test(trozo);
+      if (!escribe) continue;
+      escriben.push(nombre);
+      if (!/repoAuditoria\.registrar/.test(trozo)) sinAuditar.push(nombre);
+    }
+
+    // Que el detector encuentre algo. Sin esto, renombrar `equipos` o cambiar
+    // de ORM dejaría el caso en verde sin comprobar nada — el modo de fallo de
+    // un test que busca un patrón que ya no existe.
+    assert.ok(
+      escriben.length >= 4,
+      `solo se detectaron ${escriben.length} funciones que escriben (${escriben.join(', ')}); ` +
+        `eran cuatro, así que el detector está mirando mal`,
+    );
+
+    assert.deepEqual(
+      sinAuditar,
+      [],
+      `escriben en equipos sin registrar en auditoria: ${sinAuditar.join(', ')}`,
+    );
+  });
 });
 
 describe('roles: lo que tecnico no puede', () => {
