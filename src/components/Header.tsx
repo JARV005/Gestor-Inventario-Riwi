@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Search, Bell, Plus, PackageCheck } from 'lucide-react';
+import React from 'react';
+import { Search, Plus, PackageCheck } from 'lucide-react';
 
 import { LogoRiwiStock } from './LogoRiwiStock';
 
@@ -20,8 +20,6 @@ export const Header: React.FC<HeaderProps> = ({
   searchTerm,
   setSearchTerm,
 }) => {
-  const [showNotifications, setShowNotifications] = useState(false);
-
   return (
     <header className="bg-surface text-ink border-b border-line sticky top-0 z-40 shadow-sm">
       <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
@@ -93,46 +91,24 @@ export const Header: React.FC<HeaderProps> = ({
               <span className="hidden sm:inline">Nuevo Equipo</span>
             </button>
 
-            {/* Notifications Bell */}
-            <div className="relative">
-              <button
-                onClick={() => setShowNotifications(!showNotifications)}
-                className="p-2 text-ink-muted hover:text-ink bg-surface-alt hover:bg-brand-subtle rounded-lg border border-line transition-colors relative"
-              >
-                <Bell className="w-4 h-4" />
-                <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-brand ring-2 ring-surface" />
-              </button>
+            {/* La campana de notificaciones se retiró en la 5g.
+                ============================================================
+                NO SE QUITÓ POR SER UNA FUNCIÓN A MEDIAS, SINO POR MENTIR.
+                ============================================================
 
-              {showNotifications && (
-                <div className="absolute right-0 mt-2 w-80 bg-surface border border-line rounded-xl shadow-xl py-3 z-50 text-xs">
-                  <div className="px-4 pb-2 border-b border-line flex justify-between items-center">
-                    <span className="font-semibold text-ink">Notificaciones de Inventario</span>
-                    <span className="text-[10px] text-brand-hover bg-brand-subtle px-2 py-0.5 rounded border border-line">3 Activas</span>
-                  </div>
-                  <div className="divide-y divide-line max-h-64 overflow-y-auto">
-                    <div className="p-3 hover:bg-surface-alt">
-                      <p className="font-medium text-ink">Envío DHL en camino</p>
-                      <p className="text-[11px] text-ink-muted">Kit de Onboarding para Mateo Silva llega mañana en Guadalajara.</p>
-                      <span className="text-[10px] text-ink-muted mt-1 block">Hace 25 min</span>
-                    </div>
-                    <div className="p-3 hover:bg-surface-alt">
-                      <p className="font-medium">
-                        <span className="inline-block px-1.5 py-0.5 rounded bg-warn text-ink text-[11px] font-semibold">
-                          Garantía por vencer
-                        </span>
-                      </p>
-                      <p className="text-[11px] text-ink-muted mt-1">3 Laptops Dell en Hub CDMX cumplen 3 años en agosto.</p>
-                      <span className="text-[10px] text-ink-muted mt-1 block">Hace 2 horas</span>
-                    </div>
-                    <div className="p-3 hover:bg-surface-alt">
-                      <p className="font-medium text-ink">Retiro Solicitado</p>
-                      <p className="text-[11px] text-ink-muted">Guía FedEx generada para devolución de Valeria Ortiz (Bogotá).</p>
-                      <span className="text-[10px] text-ink-muted mt-1 block">Ayer</span>
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
+                Sus tres avisos eran inventados del prototipo: dos personas que
+                no existen en la base, envíos de DHL y FedEx que este sistema no
+                gestiona, un «Hub CDMX» que no es ninguna de las seis sedes, y
+                un contador de «3 Activas» fijo en el código.
+
+                Lo peligroso no era el texto, era el punto rojo permanente
+                encima: invitaba a actuar sobre cosas que no habían pasado. Un
+                aviso falso es peor que ningún aviso, porque el que no está no
+                engaña a nadie.
+
+                Cuando haya qué notificar de verdad —garantías por vencer,
+                traslados sin confirmar, partes de mantenimiento abiertos— vuelve
+                con datos. Es la etapa 6 y está anotado en pendientes. */}
           </div>
 
         </div>

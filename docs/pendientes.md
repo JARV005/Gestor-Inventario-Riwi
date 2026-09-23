@@ -13,10 +13,10 @@ cerró está abajo, en Resueltos.
 | Etapa 5e — la base se reconstruye desde los dos archivos nuevos | 0 |
 | Bandeja de revisión — 177 filas marcadas esperando a una persona | 1 |
 | Etapa 5f — el formato del acta | 3 |
-| Etapa 6 — dashboard, bandeja y flujos que faltan | 3 |
+| Etapa 6 — dashboard, bandeja y flujos que faltan | 5 |
 | Etapa 7 — endurecimiento | 2 |
 | Sin etapa: no son decisiones de quien programa | 2 |
-| **Total** | **11** |
+| **Total** | **13** |
 
 La 5d se cerró con sus cuatro puntos **y sus pantallas**: los endpoints estaban
 desde antes, y un endpoint sin pantalla no es una etapa cerrada. Ver Resueltos.
@@ -286,6 +286,34 @@ qué haga la empresa con el papel, y eso no se puede adivinar desde aquí.
 ---
 
 ## Etapa 6 — dashboard, bandeja y flujos que faltan
+
+### La campana de notificaciones se retiró y no la sustituye nada
+
+La quitó la 5g porque sus tres avisos eran inventados —personas que no existen,
+envíos de DHL y FedEx que este sistema no gestiona, un «Hub CDMX»— con un punto
+rojo permanente encima que invitaba a actuar sobre cosas que no habían pasado.
+
+**Hay material real para llenarla**, y por eso queda anotado en vez de darse por
+cerrado: 177 filas en la bandeja de revisión, los traslados sin confirmar que ya
+cuenta el badge de la barra lateral, y los partes de mantenimiento abiertos. Los
+tres son consultas que ya existen.
+
+Lo que falta decidir es qué merece interrumpir a alguien, que no es lo mismo que
+qué se puede contar.
+
+### El dashboard usa 52 colores que no son de la paleta
+
+`DashboardView.tsx` pinta con `slate-`, `blue-`, `emerald-` y seis hexadecimales
+sueltos de Tailwind por defecto. El resto de la aplicación va por los tokens de
+`docs/paleta.md`.
+
+Se nota en el tema oscuro: las tarjetas del dashboard se quedan blancas con
+texto gris mientras todo lo demás cambia. No se arregló en la 5g porque esa
+pantalla se rehace entera en la etapa 6 —tiene seis marcadores de posición— y
+retocar los colores de algo que va a desaparecer es trabajo tirado.
+
+El desglose por estado sí se arregló allí, porque no era cosmético: se dejaba 24
+equipos fuera del gráfico.
 
 ### El importador dejará de poder reimportar
 
