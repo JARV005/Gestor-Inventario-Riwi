@@ -41,6 +41,23 @@ interface DashboardViewProps {
 
 const COLORS = ['#06b6d4', '#10b981', '#f59e0b', '#6366f1', '#ec4899', '#8b5cf6'];
 
+/**
+ * Un color por estado, **de `docs/paleta.md`**.
+ *
+ * Están los seis del enum: si mañana entra un séptimo, cae en el color por
+ * defecto y se ve gris en vez de desaparecer del gráfico, que es lo que hacía
+ * la lista anterior.
+ */
+const COLOR_ESTADO: Record<string, string> = {
+  Disponible: '#57C99B', // ok
+  Asignado: '#5B4FE0', // brand
+  'En mantenimiento': '#E5C84B', // warn
+  Reservado: '#DDA5F2', // info
+  Prestado: '#7C71F0', // brand-light
+  'De baja': '#9B9AB0', // ink-faint
+};
+const COLOR_ESTADO_POR_DEFECTO = '#9B9AB0';
+
 export const DashboardView: React.FC<DashboardViewProps> = ({
   onOpenNewDeviceModal,
   onOpenOnboardingModal,
@@ -84,7 +101,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
   // TODO(6): sustituir estas cuentas por los 7 widgets de D3.
   const totalCount = resumen.total;
   const inUseCount = conteoDe('Asignado');
-  const availableInHubs = conteoDe('Disponible');
+  const disponiblesCount = conteoDe('Disponible');
   const inMaintenanceCount = conteoDe('En mantenimiento');
   const pendingReturnCount = conteoDe('Reservado');
 
@@ -99,17 +116,40 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
     value: c.equipos,
   }));
 
-  // Los estados a cero se filtran: una barra de longitud cero con su etiqueta
-  // ocupa sitio para decir nada. El total de arriba ya los incluye.
-  const statusChartData = [
-    { name: 'En Uso', value: inUseCount, color: '#10b981' },
-    { name: 'Disponible Hub', value: availableInHubs, color: '#06b6d4' },
-    // 'En Tránsito' NO va aquí: ya no es un estado, y estas barras se dibujan
-    // como porcentaje sobre `totalCount`. Un equipo que viaja está contado en
-    // su estado real, así que añadirlo sumaría dos veces.
-    { name: 'Mantenimiento', value: inMaintenanceCount, color: '#f59e0b' },
-    { name: 'Reservado', value: pendingReturnCount, color: '#ec4899' },
-  ].filter((item) => item.value > 0);
+  /**
+   * El desglose sale del ENUM y de lo que devuelve la API, no de una lista
+   * escrita a mano.
+   *
+   * ==========================================================================
+   * LA LISTA A MANO SE DEJABA 24 EQUIPOS FUERA.
+   * ==========================================================================
+   *
+   * Nombraba cuatro estados —«En Uso», «Disponible Hub», «Mantenimiento» y
+   * «Reservado»— y el enum tiene SEIS. Los 15 equipos `De baja` y los 9
+   * `Prestado` no aparecían en ninguna barra, y como las barras se dibujan
+   * como porcentaje sobre el total, el gráfico ni siquiera llegaba al 100 %
+   * sin que nada lo delatara.
+   *
+   * Además dos de esos nombres no eran del enum: «En Uso» es `Asignado` y
+   * «Disponible Hub» es `Disponible` —lo de «hub» venía del SaaS del que salió
+   * el prototipo—. Un estado que en pantalla se llama distinto que en la base
+   * obliga a traducir de memoria cada vez que alguien compara las dos.
+   *
+   * Recorriendo `por_estado`, un estado nuevo en el enum aparece solo.
+   */
+  const statusChartData = resumen.por_estado
+    .map((e: { estado: EstadoEquipo; equipos: number }) => ({
+      name: e.estado,
+      value: e.equipos,
+      color: COLOR_ESTADO[e.estado] ?? COLOR_ESTADO_POR_DEFECTO,
+    }))
+    // Los estados a cero se filtran: una barra de longitud cero con su etiqueta
+    // ocupa sitio para decir nada. El total de arriba ya los incluye.
+    //
+    // 'En Tránsito' NO entra: ya no es un estado (D13), y un equipo que viaja
+    // sigue contado en el suyo. Sumarlo haría que las barras pasaran del total.
+    .filter((item) => item.value > 0)
+    .sort((a, b) => b.value - a.value);
 
   return (
     <div className="space-y-6">
@@ -120,13 +160,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div>
             <div className="inline-flex items-center gap-2 bg-blue-50 text-blue-700 text-xs px-2.5 py-1 rounded-full border border-blue-200 mb-2 font-semibold">
               <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-              <span>Plataforma ITAM para equipos distribuidos</span>
+              <span>Inventario de TI de RIWI y BBL Labs</span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-              Gestión de Inventario TI Global
+              Gestión de inventario de TI
             </h1>
+            {/* La frase llevaba pegado un comentario de trabajo entre
+                paréntesis —«El texto anterior hablaba de licencias MDM…»— que
+                se veía EN PANTALLA. Y enumeraba cinco sedes cuando son seis.
+                Ahora el reparto lo cuenta el propio gráfico de abajo. */}
             <p className="text-sm text-slate-600 mt-1 max-w-2xl leading-relaxed">
-              Inventario de {totalCount} equipos repartidos entre Medellín, Barranquilla, Cartagena, Bogotá y remoto. (El texto anterior hablaba de licencias MDM y de sedes en EE.UU. y Europa: ninguna de las dos cosas existe.)
+              {totalCount} equipos registrados. El desglose por estado y por categoría sale de
+              la base, no de un cálculo aparte.
             </p>
           </div>
 
@@ -136,7 +181,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-medium text-xs rounded-lg shadow-sm transition-all flex items-center gap-2"
             >
               <PackageCheck className="w-4 h-4" />
-              <span>Enviar Kit Onboarding</span>
+              <span>Entregar equipos</span>
             </button>
           </div>
         </div>
@@ -161,7 +206,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Card 2: Equipos en Uso vs Hubs */}
+        {/* Card 2: asignados frente a disponibles */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm transition-all hover:shadow-md">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Distribución Activa</span>
@@ -174,7 +219,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               {inUseCount} <span className="text-xs font-normal text-slate-500">Asignados</span>
             </div>
             <div className="mt-1 flex items-center gap-2 text-[11px] text-slate-600 font-medium">
-              <span className="text-blue-700 font-semibold">{availableInHubs} disponibles</span> en Almacén
+              <span className="text-blue-700 font-semibold">{disponiblesCount} disponibles</span> sin asignar
             </div>
           </div>
         </div>
@@ -321,7 +366,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
         </div>
 
-        {/* Right Column: Active Logistics Feed & Hubs Overview (Spans 1 col) */}
+        {/* Columna derecha: traslados abiertos y ocupación por sede */}
         <div className="space-y-6">
           
           {/* Active Logistics Feed */}
@@ -350,7 +395,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             />
           </div>
 
-          {/* Regional Hubs Overview */}
+          {/* Ocupación por sede */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">

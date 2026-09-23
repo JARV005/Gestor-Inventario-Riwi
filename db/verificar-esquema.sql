@@ -677,6 +677,20 @@ BEGIN
     INSERT INTO resultado VALUES ('D41: chequeo sin PDF', 'rechazado', 'rechazado');
   END;
 
+  -- Los casos del contador trabajan sobre una tabla VACÍA, y la vacían ellos.
+  --
+  -- Estaban escritos dando por hecho que no había filas, y se rompieron en
+  -- cuanto alguien emitió la primera acta real: `INSERT ... ('RIWI', 0)`
+  -- chocaba contra la clave primaria y el verificador salía con error por un
+  -- motivo que no tenía nada que ver con lo que comprueba.
+  --
+  -- Es el mismo defecto que un caso que NECESITA datos dentro, por el otro
+  -- lado: este necesitaba que no los hubiera. Un caso de `verificar-esquema`
+  -- tiene que dar el mismo resultado en una base vacía y en una con trescientas
+  -- actas. Todo esto va dentro de la transacción que termina en ROLLBACK, así
+  -- que la numeración real no se toca.
+  DELETE FROM actas_consecutivo;
+
   -- 37. D40: el contador arranca en CERO, y la CHECK tiene que dejarlo.
   --     Era `valor > 0` hasta la 0015. Con la primera acta de cada serie
   --     numerada `0000`, esa constraint mataba el primer POST de cada empresa

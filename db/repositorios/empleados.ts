@@ -113,6 +113,12 @@ export async function equiposDe(id: string, bd: BD = db) {
       marca: equipos.marca,
       modelo: equipos.modelo,
       estado: equipos.estado,
+      // Las dos que el buscador del generador de actas usa para filtrar
+      // (5f-3). Sin ellas, el filtro por empresa y por sede solo funcionaría
+      // en el modo que lee de `equipos` y en los otros dos saldría vacío —
+      // peor que no tenerlo, porque parece que no hay nada que cumpla.
+      empresa: equipos.empresa,
+      sede_id: equipos.sede_id,
     })
     .from(equipos)
     .where(eq(equipos.empleado_id, id))

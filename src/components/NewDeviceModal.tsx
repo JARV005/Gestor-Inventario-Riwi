@@ -146,7 +146,7 @@ export const NewDeviceModal: React.FC<NewDeviceModalProps> = ({ isOpen, onClose,
             Registrar Nuevo Activo de TI
           </h2>
           <p className="text-xs text-slate-500">
-            Añade un equipo al inventario FirstPlug para seguimiento de garantía y asignaciones.
+            Añade un equipo al inventario para seguir su garantía y sus asignaciones.
           </p>
         </div>
 

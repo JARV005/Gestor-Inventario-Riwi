@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   LayoutDashboard,
   Laptop,
@@ -9,6 +9,10 @@ import {
   Building,
   ArrowRightLeft
 } from 'lucide-react';
+
+import type { Sede } from '../types';
+import { api } from '../lib/api';
+import { LogoRiwiStock } from './LogoRiwiStock';
 
 interface SidebarProps {
   activeTab: string;
@@ -30,6 +34,26 @@ export const Sidebar: React.FC<SidebarProps> = ({
   enTransitoCount,
   maintenanceCount,
 }) => {
+  /**
+   * Las sedes, pedidas aquí y no recibidas por props.
+   *
+   * Es el patrón del resto de vistas conectadas: cada una pide lo suyo. Y son
+   * seis filas que no cambian casi nunca, así que no justifica subir el estado
+   * a `App` solo para este widget.
+   *
+   * Si la petición falla se queda vacío y el bloque lo dice. Antes había una
+   * lista escrita a mano —cinco nombres y un «5 sembradas»— que ya mentía: se
+   * escribió con cinco sedes y nadie la tocó al añadir Boyacá.
+   */
+  const [sedes, setSedes] = useState<Sede[]>([]);
+
+  useEffect(() => {
+    api.sedes().then(
+      (r) => setSedes(r.sedes),
+      () => setSedes([]),
+    );
+  }, []);
+
   const menuItems = [
     {
       id: 'dashboard',
@@ -74,12 +98,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <aside className="w-64 bg-nav border-r border-nav-line flex flex-col justify-between shrink-0 min-h-[calc(100vh-4rem)] p-4">
       <div className="space-y-4">
-        {/* Brand Header */}
+        {/* La marca. El cuadro llevaba un cuadrado blanco de relleno, que era
+            lo que el prototipo puso donde iría un logo. */}
         <div className="pb-2 flex items-center gap-3 px-2">
-          <div className="w-8 h-8 bg-brand rounded-lg flex items-center justify-center shadow-sm">
-            <div className="w-4 h-4 bg-white rounded-sm"></div>
-          </div>
-          <span className="text-nav-ink font-bold text-xl tracking-tight">FirstPlug</span>
+          <LogoRiwiStock tamano={32} sobre="nav" className="shrink-0" />
+          <span className="text-nav-ink font-bold text-xl tracking-tight">
+            Riwi<span className="text-brand-light">Stock</span>
+          </span>
         </div>
 
         <div className="space-y-1">
@@ -123,7 +148,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         </div>
       </div>
 
-      {/* Warehouse Hub Status Widget */}
+      {/* Las sedes.
+
+          Decía «5 sembradas» y son SEIS: el texto se escribió cuando eran
+          cinco y no se movió al añadir Boyacá. Un conteo escrito a mano al lado
+          de una lista escrita a mano se desincroniza a la primera, así que
+          ahora los dos salen de `sedes`, que ya llega por props. */}
       <div className="pt-4 border-t border-nav-line px-2 space-y-3">
         <div className="bg-nav-deep p-3 rounded-xl border border-nav-line space-y-2">
           <div className="flex items-center justify-between text-xs">
@@ -132,27 +162,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Sedes
             </span>
             <span className="text-[10px] text-ink font-bold bg-ok px-1.5 py-0.5 rounded border border-transparent">
-              5 sembradas
+              {sedes.length}
             </span>
           </div>
-          {/* Decía «México, Colombia, Argentina, EE.UU. y España», que no es
-              donde están: son las cinco sedes sembradas en `db/semillas.ts`. El
-              «5» acertaba por casualidad. */}
           <p className="text-[11px] text-nav-muted leading-relaxed">
-            Medellín, Barranquilla, Cartagena, Bogotá y Remoto.
+            {sedes.length > 0
+              ? sedes.map((s) => s.nombre).join(', ')
+              : 'Sin sedes registradas.'}
           </p>
           <button
             onClick={() => setActiveTab('logistics')}
             className="w-full text-center py-1.5 bg-nav-hover hover:bg-nav-line text-nav-ink text-[11px] font-medium rounded-md border border-nav-line transition-colors flex items-center justify-center gap-1"
           >
             <ArrowRightLeft className="w-3 h-3 text-brand-light" />
-            <span>Ver Inventario en Hubs</span>
+            <span>Ver sedes</span>
           </button>
         </div>
 
-        {/* FirstPlug Support Footer */}
         <div className="text-[10px] text-nav-muted text-center px-1">
-          FirstPlug Platform • Global ITAM
+          RiwiStock · Inventario de TI
         </div>
       </div>
     </aside>

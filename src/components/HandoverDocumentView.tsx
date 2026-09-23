@@ -1,5 +1,13 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, Download, FileSignature, Printer, User, Laptop } from 'lucide-react';
+import {
+  AlertTriangle,
+  Download,
+  FileSignature,
+  Printer,
+  Search,
+  User,
+  Laptop,
+} from 'lucide-react';
 
 import type {
   ActaEmitida,
@@ -13,7 +21,7 @@ import type {
   Sede,
   TipoActa,
 } from '../types';
-import { CHEQUEO_ITEMS, EMPRESAS_QUE_EMITEN, type EmpresaQueEmite } from '../types';
+import { CHEQUEO_ITEMS, EMPRESAS, EMPRESAS_QUE_EMITEN, type EmpresaQueEmite } from '../types';
 import { api, ErrorApi } from '../lib/api';
 import { Cargando, ErrorDeCarga, Vacio } from './EstadoCarga';
 import { FormularioEmpleado } from './EmployeesView';
@@ -142,6 +150,19 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
 
   /** El aviso de cédula abre la ficha aquí mismo, sin salir del acta. */
   const [editandoFicha, setEditandoFicha] = useState(false);
+
+  /**
+   * El buscador de «Equipos a entregar» (5f-3).
+   *
+   * Va **encima** del filtro de cuatro celdas (modo × tipo), no en su lugar:
+   * las cuatro celdas deciden QUÉ OPERACIÓN se documenta —y por tanto de qué
+   * lista salen los candidatos—, mientras que esto solo recorta esa lista.
+   * Confundirlos haría que buscar cambiara la operación.
+   */
+  const [busqueda, setBusqueda] = useState('');
+  const [fCategoria, setFCategoria] = useState('');
+  const [fSede, setFSede] = useState('');
+  const [fEmpresa, setFEmpresa] = useState('');
 
   /** El desplegable del aviso de empresa (D42). Sin preselección. */
   const [empresaNueva, setEmpresaNueva] = useState<EmpresaQueEmite | ''>('');
@@ -287,8 +308,11 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
     nombre: string;
     etiqueta: string | null;
     serial: string | null;
+    marca: string | null;
+    modelo: string | null;
     categoria: string;
     sede_id: string | null;
+    empresa: string;
   }[] =
     modo === 'firmar'
       ? firmables.map((e) => ({
@@ -296,8 +320,11 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
           nombre: [e.marca, e.modelo].filter(Boolean).join(' ') || e.categoria,
           etiqueta: e.etiqueta,
           serial: e.serial,
+          marca: e.marca,
+          modelo: e.modelo,
           categoria: e.categoria,
           sede_id: e.sede_id,
+          empresa: e.empresa,
         }))
       : tipo === 'Devolución'
         ? suyos.map((e) => ({
@@ -305,8 +332,11 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             nombre: [e.marca, e.modelo].filter(Boolean).join(' ') || e.categoria,
             etiqueta: e.etiqueta,
             serial: e.serial,
+            marca: e.marca,
+            modelo: e.modelo,
             categoria: e.categoria,
-            sede_id: null,
+            sede_id: e.sede_id,
+            empresa: e.empresa,
           }))
         : equipos
             .filter((e) => e.estado === 'Disponible' || e.estado === 'Reservado')
@@ -315,11 +345,46 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
               nombre: nombreEquipo(e),
               etiqueta: e.etiqueta,
               serial: e.serial,
+              marca: e.marca,
+              modelo: e.modelo,
               categoria: e.categoria,
               sede_id: e.sede_id ?? null,
+              empresa: e.empresa,
             }));
 
+  /**
+   * Lo que se pinta: los candidatos que pasan el buscador y los tres filtros.
+   *
+   * **La selección NO se toca aquí.** `seleccionados` es una lista de ids
+   * aparte, así que marcar tres equipos, buscar otra cosa y marcar un cuarto
+   * deja los cuatro. Perder la selección al buscar es lo que hace que alguien
+   * acabe emitiendo cuatro actas en vez de una.
+   */
+  const texto = busqueda.trim().toLowerCase();
+  const visibles = candidatos.filter((e) => {
+    if (fCategoria && e.categoria !== fCategoria) return false;
+    if (fSede && e.sede_id !== fSede) return false;
+    if (fEmpresa && e.empresa !== fEmpresa) return false;
+    if (!texto) return true;
+    // Los cinco campos por los que alguien busca un equipo que tiene delante.
+    return [e.etiqueta, e.serial, e.marca, e.modelo, e.nombre].some((v) =>
+      (v ?? '').toLowerCase().includes(texto),
+    );
+  });
+
   const elegidos = candidatos.filter((e) => seleccionados.includes(e.id));
+
+  /**
+   * Elegidos que el filtro de ahora mismo esconde.
+   *
+   * Hay que decirlo: el acta se emite con TODO lo seleccionado, no con lo que
+   * se ve. Sin este aviso, buscar después de marcar mostraría dos equipos y
+   * emitiría cinco, y nadie entendería de dónde salieron los otros tres.
+   */
+  const ocultosElegidos = elegidos.length - visibles.filter((e) => seleccionados.includes(e.id)).length;
+
+  /** Las categorías que de verdad hay entre los candidatos, no el enum entero. */
+  const categoriasDisponibles = [...new Set(candidatos.map((e) => e.categoria))].sort();
 
   /**
    * Equipos elegidos que están en otra sede que la persona.
@@ -360,6 +425,21 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
       setAsignandoEmpresa(false);
     }
   };
+
+  /**
+   * Los filtros se vacían al cambiar de persona, de modo o de tipo.
+   *
+   * Un filtro que sobrevive a un cambio de contexto enseña una lista vacía sin
+   * decir por qué: la lista de candidatos ya es otra. La selección tampoco
+   * tendría sentido arrastrarla —son equipos de otra operación— y ya se limpia
+   * en su propio efecto.
+   */
+  useEffect(() => {
+    setBusqueda('');
+    setFCategoria('');
+    setFSede('');
+    setFEmpresa('');
+  }, [empleadoId, modo, tipo]);
 
   const alternar = (id: string) =>
     setSeleccionados((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
@@ -513,6 +593,84 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             )}
           </span>
 
+          {/* El buscador y los tres filtros. Encima de la lista y por debajo
+              de las cuatro celdas: recortan lo que se ve, no lo que se
+              documenta. Solo aparecen si hay bastante que recortar. */}
+          {candidatos.length > 5 && (
+            <div className="flex flex-wrap gap-2 mb-2">
+              <div className="relative flex-1 min-w-[180px]">
+                <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-muted" />
+                <input
+                  value={busqueda}
+                  onChange={(e) => setBusqueda(e.target.value)}
+                  placeholder="Etiqueta, serial, marca, modelo o nombre…"
+                  className="w-full pl-8 pr-2 py-1.5 text-xs border border-line rounded-lg bg-surface text-ink focus:outline-none focus:border-brand"
+                />
+              </div>
+
+              <select
+                value={fCategoria}
+                onChange={(e) => setFCategoria(e.target.value)}
+                className="px-2 py-1.5 text-xs border border-line rounded-lg bg-surface text-ink focus:outline-none focus:border-brand"
+              >
+                <option value="">Toda categoría</option>
+                {categoriasDisponibles.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={fSede}
+                onChange={(e) => setFSede(e.target.value)}
+                className="px-2 py-1.5 text-xs border border-line rounded-lg bg-surface text-ink focus:outline-none focus:border-brand"
+              >
+                <option value="">Toda sede</option>
+                {sedes.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.nombre}
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={fEmpresa}
+                onChange={(e) => setFEmpresa(e.target.value)}
+                className="px-2 py-1.5 text-xs border border-line rounded-lg bg-surface text-ink focus:outline-none focus:border-brand"
+              >
+                <option value="">Toda empresa</option>
+                {EMPRESAS.map((e) => (
+                  <option key={e} value={e}>
+                    {e}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          {/* Lo que el filtro esconde, dicho antes de la lista: el acta se
+              emite con lo SELECCIONADO, no con lo que se ve. */}
+          {ocultosElegidos > 0 && (
+            <p className="text-xs text-ink bg-brand-subtle border border-brand/30 rounded-lg px-3 py-1.5 mb-2">
+              {ocultosElegidos === 1
+                ? '1 equipo elegido no se ve con este filtro, y va en el acta igual.'
+                : `${ocultosElegidos} equipos elegidos no se ven con este filtro, y van en el acta igual.`}{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setBusqueda('');
+                  setFCategoria('');
+                  setFSede('');
+                  setFEmpresa('');
+                }}
+                className="underline font-semibold"
+              >
+                Quitar filtros
+              </button>
+            </p>
+          )}
+
           {candidatos.length === 0 ? (
             <p className="text-xs text-ink-muted border border-dashed border-line rounded-lg p-3">
               {modo === 'firmar'
@@ -521,9 +679,27 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
                   ? 'No tiene ningún equipo a su nombre.'
                   : 'No hay equipos disponibles ni reservados para entregar.'}
             </p>
+          ) : visibles.length === 0 ? (
+            // Vacío por filtro, que NO es lo mismo que no haber candidatos. El
+            // mensaje de arriba diría que no hay nada que entregar, y sí lo hay.
+            <p className="text-xs text-ink-muted border border-dashed border-line rounded-lg p-3">
+              Ninguno de los {candidatos.length} equipos disponibles cuadra con la búsqueda.{' '}
+              <button
+                type="button"
+                onClick={() => {
+                  setBusqueda('');
+                  setFCategoria('');
+                  setFSede('');
+                  setFEmpresa('');
+                }}
+                className="underline font-semibold text-brand"
+              >
+                Quitar filtros
+              </button>
+            </p>
           ) : (
             <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
-              {candidatos.map((e) => (
+              {visibles.map((e) => (
                 <label
                   key={e.id}
                   className="flex items-center gap-3 bg-surface-alt p-2.5 rounded-lg border border-line cursor-pointer"

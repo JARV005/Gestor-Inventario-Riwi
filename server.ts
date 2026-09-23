@@ -51,7 +51,7 @@ async function startServer() {
   }
 
   app.listen(PORT, "0.0.0.0", () => {
-    console.log(`FirstPlug ITAM Server running on http://0.0.0.0:${PORT}`);
+    console.log(`RiwiStock escuchando en http://0.0.0.0:${PORT}`);
   });
 }
 

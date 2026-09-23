@@ -7,7 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { after, before, describe, it } from 'node:test';
 
@@ -267,6 +267,78 @@ describe('campos cifrados: la capa sobre el código', () => {
       [],
       `escriben en equipos sin registrar en auditoria: ${sinAuditar.join(', ')}`,
     );
+  });
+});
+
+/**
+ * La marca de la aplicación no puede llegar al PDF de un acta (5g).
+ *
+ * ==========================================================================
+ * SI ESTE CASO SE PONE ROJO, HAY ACTAS FIRMADAS QUE DEJAN DE VERIFICAR.
+ * ==========================================================================
+ *
+ * El logo de un acta es el de la empresa que la emite y sus bytes están dentro
+ * del hash (D39). El logo de RiwiStock es otra cosa: es la marca del programa,
+ * vive en `src/components/LogoRiwiStock.tsx` y no debe aparecer en ningún
+ * documento.
+ *
+ * La forma de que se colara no sería que alguien lo dibujara en el acta a
+ * propósito, sino que el generador acabara importando algo del cliente —una
+ * constante de color, un componente— y arrastrara la marca con ello. Por eso
+ * lo que se comprueba es la DIRECCIÓN de las dependencias: nada de `db/` ni de
+ * `server/` importa de `src/`.
+ *
+ * Es estático porque el daño no se ve al generar: el PDF sale bien, y lo que
+ * falla es la comparación contra las actas emitidas antes del cambio.
+ */
+describe('marca: el logo de la aplicación no entra en las actas', () => {
+  it('nada del servidor importa del cliente', () => {
+    const raices = ['db', 'server'];
+    const culpables: string[] = [];
+
+    const recorrer = (dir: string) => {
+      for (const entrada of readdirSync(dir, { withFileTypes: true })) {
+        const ruta = join(dir, entrada.name);
+        if (entrada.isDirectory()) {
+          if (entrada.name === 'migraciones' || entrada.name === 'node_modules') continue;
+          recorrer(ruta);
+          continue;
+        }
+        if (!entrada.name.endsWith('.ts') && !entrada.name.endsWith('.tsx')) continue;
+
+        const texto = readFileSync(ruta, 'utf8');
+        // `from '../src/…'` en cualquiera de sus formas, y también los import()
+        // dinámicos. No vale con buscar la cadena "src": aparece en prosa.
+        if (/from\s+['"][^'"]*\/src\/|import\(['"][^'"]*\/src\//.test(texto)) {
+          culpables.push(ruta.replace(/\\/g, '/'));
+        }
+      }
+    };
+
+    for (const r of raices) recorrer(join(process.cwd(), r));
+
+    assert.deepEqual(
+      culpables,
+      [],
+      `el servidor importa del cliente en: ${culpables.join(', ')}. ` +
+        `Si arrastra la marca de la aplicación hasta pdfkit, las actas ya emitidas dejan de verificar.`,
+    );
+  });
+
+  /**
+   * Y el otro lado: que el logo del acta siga saliendo de donde debe.
+   *
+   * Sin esto, alguien podría mover los logos de empresa a `src/` «para tenerlos
+   * juntos» y el caso anterior seguiría en verde mientras el acta pierde el
+   * suyo.
+   */
+  it('los logos de las actas siguen en assets/, fuera del cliente', () => {
+    for (const fichero of ['assets/logos/logo-riwi.png', 'assets/logos/logo-bbl.png']) {
+      assert.ok(
+        existsSync(join(process.cwd(), fichero)),
+        `falta ${fichero}: los bytes del logo están dentro del hash de cada acta (D39)`,
+      );
+    }
   });
 });
 

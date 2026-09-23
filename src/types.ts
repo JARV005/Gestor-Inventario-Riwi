@@ -107,6 +107,9 @@ export interface EquipoResumen {
   marca: string | null;
   modelo: string | null;
   estado: EstadoEquipo;
+  /** Las dos que el buscador de actas necesita para filtrar (5f-3). */
+  empresa: Empresa;
+  sede_id: string | null;
 }
 
 /**
@@ -237,6 +240,8 @@ export interface EquipoFirmable {
   categoria: string;
   estado: string;
   sede_id: string | null;
+  /** De quién es el equipo. La usa el filtro del buscador de actas (5f-3). */
+  empresa: Empresa;
   movimiento_id: string;
   fecha: string;
 }

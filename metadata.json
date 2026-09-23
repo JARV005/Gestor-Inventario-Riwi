@@ -1,5 +1,5 @@
 {
-  "name": "FirstPlug - Gestión de Inventario TI",
-  "description": "Plataforma profesional de gestión de inventarios de TI, logística de onboarding/offboarding, catálogo de equipos, auditoría de licencias y almacenamiento.",
+  "name": "RiwiStock — Inventario de TI",
+  "description": "Inventario de equipos de TI de RIWI y BBL Labs: quién tiene cada equipo, su historial de movimientos y las actas de entrega y devolución.",
   "requestFramePermissions": []
 }

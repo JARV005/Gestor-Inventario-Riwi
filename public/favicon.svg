@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="RiwiStock">
+  <!-- La marca de la aplicación (etapa 5g). Mismo dibujo que
+       src/components/LogoRiwiStock.tsx: un bloque partido en diagonal entre
+       los dos colores de la paleta, con la R calada.
+
+       NO tiene nada que ver con los logos de assets/logos/, que son los de
+       RIWI y BBL Labs y van dentro de las actas (D39). -->
+  <defs>
+    <clipPath id="marco">
+      <rect width="64" height="64" rx="14"/>
+    </clipPath>
+  </defs>
+  <g clip-path="url(#marco)">
+    <rect width="64" height="64" fill="#1D1C4A"/>
+    <path d="M64 0v64H16z" fill="#5B4FE0"/>
+  </g>
+  <path fill-rule="evenodd" fill="#FFFFFF"
+        d="M19 15h13a8 8 0 0 1 0 16h-1.8l7 18h-6.4l-6.3-17v17H19zm5 4.6v7h7a3.5 3.5 0 0 0 0-7z"/>
+</svg>

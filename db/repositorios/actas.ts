@@ -749,7 +749,7 @@ export async function firmables(empleadoId: string, tipo: TipoActa, bd: BD = db)
       SELECT DISTINCT ON (movimientos.equipo_id)
              equipos.id, equipos.etiqueta, equipos.serial, equipos.marca, equipos.modelo,
              equipos.categoria::text AS categoria, equipos.estado::text AS estado,
-             equipos.sede_id,
+             equipos.sede_id, equipos.empresa::text AS empresa,
              movimientos.id AS movimiento_id, movimientos.fecha
         FROM movimientos
         JOIN equipos ON equipos.id = movimientos.equipo_id

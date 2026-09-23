@@ -1,13 +1,7 @@
 import React, { useState } from 'react';
-import {
-  Search,
-  Bell,
-  Building2,
-  ChevronDown,
-  Plus,
-  CheckCircle2,
-  PackageCheck
-} from 'lucide-react';
+import { Search, Bell, Plus, PackageCheck } from 'lucide-react';
+
+import { LogoRiwiStock } from './LogoRiwiStock';
 
 interface HeaderProps {
   onOpenNewDeviceModal: () => void;
@@ -26,7 +20,6 @@ export const Header: React.FC<HeaderProps> = ({
   searchTerm,
   setSearchTerm,
 }) => {
-  const [showOrgDropdown, setShowOrgDropdown] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
 
   return (
@@ -34,64 +27,32 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="max-w-[1920px] mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 gap-4">
 
-          {/* Brand Logo & Organization Selector */}
+          {/* La marca.
+
+              El selector de organizaciones que iba aquí se fue en la 5g: sus
+              dos entradas —«TechCorp Global Inc.» e «Innovate LatAm Labs»—
+              eran inventadas del prototipo, y esta aplicación sirve a una sola
+              organización. Un desplegable que solo ofrece nombres falsos no es
+              una función a medias, es una afirmación falsa con forma de menú. */}
           <div className="flex items-center gap-6">
-            <div
+            <button
+              type="button"
               onClick={() => setActiveTab('dashboard')}
-              className="flex items-center gap-2.5 cursor-pointer group"
+              className="flex items-center gap-2.5 cursor-pointer group rounded-lg focus:outline-none focus-visible:ring-2 focus-visible:ring-brand"
             >
-              <div className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center font-black text-sm shadow-sm group-hover:bg-brand-hover transition-colors">
-                FP
-              </div>
-              <div className="flex flex-col">
-                <span className="text-xl font-bold tracking-tight text-ink flex items-center gap-1.5">
-                  FirstPlug <span className="text-brand-hover font-semibold text-xs px-1.5 py-0.5 rounded bg-brand-subtle border border-line">ITAM</span>
+              <LogoRiwiStock tamano={32} sobre="claro" className="shrink-0" />
+              <div className="flex flex-col items-start">
+                <span className="text-xl font-bold tracking-tight text-ink">
+                  Riwi<span className="text-brand">Stock</span>
                 </span>
+                {/* Era «GESTIÓN DE ACTIVOS TI», que describe la categoría de
+                    producto y no lo que hace este. Lo que hace es llevar la
+                    cuenta de quién tiene cada equipo. */}
                 <span className="text-[10px] text-ink-muted tracking-wider uppercase font-semibold">
-                  Gestión de Activos TI
+                  Inventario y actas de TI
                 </span>
               </div>
-            </div>
-
-            {/* Divider */}
-            <div className="hidden md:block h-6 w-px bg-line" />
-
-            {/* Org Switcher */}
-            <div className="relative hidden md:block">
-              <button
-                onClick={() => setShowOrgDropdown(!showOrgDropdown)}
-                className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium bg-surface-alt hover:bg-brand-subtle text-ink-muted rounded-lg border border-line transition-colors"
-              >
-                <Building2 className="w-3.5 h-3.5 text-brand" />
-                <span className="max-w-[140px] truncate">TechCorp Global Inc.</span>
-                <ChevronDown className="w-3.5 h-3.5 text-ink-muted" />
-              </button>
-
-              {showOrgDropdown && (
-                <div className="absolute top-full left-0 mt-2 w-64 bg-surface border border-line rounded-xl shadow-xl py-2 z-50 text-xs">
-                  <div className="px-3 py-1.5 font-semibold text-ink-muted uppercase tracking-wider text-[10px]">
-                    Organizaciones Activas
-                  </div>
-                  <button
-                    onClick={() => setShowOrgDropdown(false)}
-                    className="w-full flex items-center justify-between px-3 py-2 text-left hover:bg-surface-alt text-ink font-medium"
-                  >
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-ok" />
-                      TechCorp Global Inc.
-                    </span>
-                    <CheckCircle2 className="w-3.5 h-3.5 text-brand" />
-                  </button>
-                  <button
-                    onClick={() => setShowOrgDropdown(false)}
-                    className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-alt text-ink-muted"
-                  >
-                    <span className="w-2 h-2 rounded-full bg-ink-faint" />
-                    Innovate LatAm Labs
-                  </button>
-                </div>
-              )}
-            </div>
+            </button>
           </div>
 
           {/* Search bar */}
@@ -100,7 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-ink-muted" />
               <input
                 type="text"
-                placeholder="Buscar equipo, serie, serie C02..., empleado o hub..."
+                placeholder="Buscar por etiqueta, serial, marca, modelo o persona…"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="w-full bg-surface-alt border border-line rounded-lg pl-9 pr-4 py-1.5 text-xs text-ink placeholder-ink-muted focus:outline-none focus:ring-2 focus:ring-brand focus:bg-surface transition-all"
@@ -110,13 +71,17 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Quick Actions */}
           <div className="flex items-center gap-2.5">
-            {/* Quick Action: Send Onboarding Kit */}
+            {/* «Enviar Kit» era lenguaje del SaaS del que venía el prototipo:
+                aquí no se envía nada, se entrega. La FUNCIÓN se queda —es el
+                único camino que asigna y además abre el traslado cuando el
+                equipo está en otra sede, que el acta no hace (D27)—; lo que
+                cambia es cómo se llama. */}
             <button
               onClick={onOpenOnboardingModal}
               className="hidden lg:flex items-center gap-1.5 px-3 py-1.5 bg-surface hover:bg-surface-alt text-ink-muted text-xs font-medium rounded-lg border border-line transition-colors"
             >
               <PackageCheck className="w-3.5 h-3.5 text-brand" />
-              <span>Enviar Kit</span>
+              <span>Entregar equipos</span>
             </button>
 
             {/* Quick Action: Add Device */}
