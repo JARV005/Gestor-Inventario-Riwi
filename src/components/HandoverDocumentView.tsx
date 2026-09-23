@@ -272,6 +272,35 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
     };
   }, [empleadoId, modo, tipo]);
 
+  /**
+   * Los filtros se vacían al cambiar de persona, de modo o de tipo.
+   *
+   * Un filtro que sobrevive a un cambio de contexto enseña una lista vacía sin
+   * decir por qué: la lista de candidatos ya es otra.
+   *
+   * ==========================================================================
+   * VA AQUÍ, ANTES DE LOS `return` DE ABAJO. NO SE PUEDE MOVER.
+   * ==========================================================================
+   *
+   * Estaba doscientas líneas más abajo, después de `if (cargando) return`, y
+   * eso rompía la pantalla entera: durante la carga React ejecutaba 31 hooks y
+   * salía por el return; cuando llegaban los datos ejecutaba 32. React exige
+   * que sean los mismos y en el mismo orden en cada render, así que abortaba
+   * con «Rendered more hooks than during the previous render» y el generador de
+   * actas no abría.
+   *
+   * No lo vio nadie antes de abrirlo: `tsc` pasa —es JavaScript válido— y los
+   * 161 casos de la batería también, porque ninguno renderiza componentes. Es
+   * el modo de fallo de esta capa: aquí lo único que comprueba de verdad es
+   * abrir la pantalla.
+   */
+  useEffect(() => {
+    setBusqueda('');
+    setFCategoria('');
+    setFSede('');
+    setFEmpresa('');
+  }, [empleadoId, modo, tipo]);
+
   if (cargando) return <Cargando que="los datos del acta" />;
   if (error) return <ErrorDeCarga error={error} que="los datos del acta" onReintentar={cargar} />;
   if (!equipos.length) {
@@ -295,12 +324,6 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
   /** Resuelve el `sede_id` a nombre. Cierra el TODO(4b) que había aquí. */
   const nombreSede = (id: string | null) =>
     (id && sedes.find((s) => s.id === id)?.nombre) || '—';
-
-  // Las listas van topadas a 200. Si algún día no caben, hay que decirlo: un
-  // desplegable recortado en silencio es la forma más limpia de firmar el acta
-  // del equipo equivocado.
-  const recortado =
-    totales.equipos > equipos.length || totales.empleados > empleados.length;
 
   /** Lo elegible ahora mismo, ya normalizado a una forma común. */
   const candidatos: {
@@ -426,21 +449,6 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
     }
   };
 
-  /**
-   * Los filtros se vacían al cambiar de persona, de modo o de tipo.
-   *
-   * Un filtro que sobrevive a un cambio de contexto enseña una lista vacía sin
-   * decir por qué: la lista de candidatos ya es otra. La selección tampoco
-   * tendría sentido arrastrarla —son equipos de otra operación— y ya se limpia
-   * en su propio efecto.
-   */
-  useEffect(() => {
-    setBusqueda('');
-    setFCategoria('');
-    setFSede('');
-    setFEmpresa('');
-  }, [empleadoId, modo, tipo]);
-
   const alternar = (id: string) =>
     setSeleccionados((a) => (a.includes(id) ? a.filter((x) => x !== id) : [...a, id]));
 
@@ -506,11 +514,18 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
         </button>
       </div>
 
-      {recortado && (
+      {/* El aviso decía «falta buscador» y el buscador es justo lo que trajo
+          5f-3. Pero solo lo trajo para los EQUIPOS: el desplegable de
+          colaboradores sigue cortado en los primeros {TOPE} y sin forma de
+          buscar, así que el aviso se acota en vez de borrarse.
+
+          Borrarlo entero habría dejado el problema de los colaboradores sin
+          nada que lo señale, que es peor que el aviso desactualizado. */}
+      {totales.empleados > TOPE && (
         <p className="text-xs text-ink bg-warn/25 border border-warn rounded-lg px-3 py-2">
-          Los desplegables muestran los primeros {TOPE}. Hay {totales.equipos} equipos y{' '}
-          {totales.empleados} colaboradores activos: falta buscador, y hasta entonces puede no
-          estar el que busca.
+          La lista de colaboradores muestra los primeros {TOPE} de{' '}
+          {totales.empleados} activos, y todavía no se puede buscar en ella: si quien recibe no
+          aparece, está más abajo del corte. Los equipos sí se pueden buscar, aquí debajo.
         </p>
       )}
 
