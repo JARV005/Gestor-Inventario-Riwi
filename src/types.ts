@@ -398,8 +398,18 @@ export interface CatalogoTransiciones {
      * `['devolver', 'asignar']`: dos movimientos, no uno.
      */
     compuesta: Operacion[] | null;
+    /** D44: la operación pone a alguien detrás del equipo. */
+    requiere_asignable: boolean;
   }[];
   por_estado: Record<EstadoEquipo, Operacion[]>;
+  /**
+   * Lo mismo para un equipo NO asignable (D44).
+   *
+   * Lo calcula el servidor. Si la pantalla tuviera que quitar operaciones de
+   * `por_estado` por su cuenta, la regla viviría en dos sitios y se
+   * separarían — que es exactamente lo que este catálogo existe para evitar.
+   */
+  por_estado_no_asignable: Record<EstadoEquipo, Operacion[]>;
   sin_operacion: EstadoEquipo[];
 }
 

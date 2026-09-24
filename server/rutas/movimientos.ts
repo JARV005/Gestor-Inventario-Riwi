@@ -32,6 +32,7 @@ import * as repoMovimientos from '../../db/repositorios/movimientos.js';
 import { estadoEquipo, prestatario } from '../../db/esquema.js';
 import {
   catalogoTransiciones,
+  EquipoNoAsignable,
   OPERACIONES_DIRECTAS,
   TransicionIlegal,
   type Operacion,
@@ -86,6 +87,18 @@ function traducir(e: unknown): never {
       legal_desde: e.legalesDesde,
       puedes: e.alternativas,
     });
+  }
+  /**
+   * D44. 409 y no 403: no es un problema de permisos sino del equipo, y deja de
+   * serlo en cuanto alguien le quite la marca de infraestructura.
+   *
+   * NO lleva `puedes`, al contrario que la transición ilegal. Ahí la salida es
+   * elegir otra operación; aquí no hay ninguna que sirva mientras el equipo siga
+   * marcado, y ofrecer una lista de alternativas que tampoco van a funcionar
+   * sería mandar a quien lo recibe a probar una por una.
+   */
+  if (e instanceof EquipoNoAsignable) {
+    throw new ErrorHttp(409, e.message, { operacion: e.operacion, motivo: 'no_asignable' });
   }
   if (e instanceof repoMovimientos.FaltaDato) throw new ErrorHttp(400, e.message);
   if (e instanceof repoMovimientos.EquipoNoEncontrado) throw noEncontrado('Equipo');

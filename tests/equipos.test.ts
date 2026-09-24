@@ -28,6 +28,7 @@ import {
   estadoDe,
   licenciaTipoDe,
   marcarEquipo,
+  marcarNoAsignable,
   movimientosDe,
   primeraSede,
   type Servidor,
@@ -756,5 +757,166 @@ describe('bandeja: un motivo se cierra en todo su bloque', () => {
       motivo: 'MOTIVO_INVENTADO',
     });
     assert.equal(r.estado, 400, JSON.stringify(r.cuerpo));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// D44 — los equipos que no se asignan a nadie
+// ---------------------------------------------------------------------------
+
+describe('infraestructura: un switch no se le entrega a nadie', () => {
+  const suite = ambito('infra');
+  let admin: UsuarioDePrueba;
+  let sede: string;
+  let empleado: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sede = await primeraSede();
+    empleado = await crearEmpleado(`${suite.prefijo}titular`, 'RIWI');
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([empleado]);
+    await suite.limpiar();
+  });
+
+  /** Un equipo normal, que después se marca como infraestructura. */
+  async function equipoInfra(etiqueta: string) {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Otro',
+      etiqueta: `${suite.prefijo}${etiqueta}`,
+      serial: `SN-${suite.prefijo}${etiqueta}`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    await marcarNoAsignable(id);
+    return id;
+  }
+
+  /**
+   * Las tres operaciones que ponen a alguien detrás del equipo.
+   *
+   * Se prueban las tres y no una: la regla vive en un CAMPO de la tabla de
+   * transiciones, y un campo mal puesto en una sola de ellas dejaría esa
+   * abierta sin que las otras lo delataran.
+   */
+  for (const [op, cuerpo] of [
+    ['asignar', { empleado_id: null as string | null }],
+    ['reservar', {}],
+    ['prestar', { prestado_a: 'BBL Labs' }],
+  ] as const) {
+    it(`${op} sobre infraestructura es 409, y dice por qué`, async () => {
+      const id = await equipoInfra(`OP${op.slice(0, 3)}`);
+      const datos = op === 'asignar' ? { empleado_id: empleado } : cuerpo;
+
+      const r = await c.post(`/api/equipos/${id}/${op}`, datos);
+      assert.equal(r.estado, 409, JSON.stringify(r.cuerpo));
+
+      const b = r.cuerpo as { error: string; motivo?: string; puedes?: unknown };
+      assert.match(b.error, /infraestructura/i);
+      assert.equal(b.motivo, 'no_asignable');
+      // NO ofrece alternativas: no hay ninguna que funcione mientras siga
+      // marcado, y una lista de opciones que fallan manda a probar una por una.
+      assert.equal(b.puedes, undefined);
+
+      // Y sobre la base: no se movió nada.
+      assert.equal(await estadoDe(id), 'Disponible');
+    });
+  }
+
+  /**
+   * El otro lado, y sin él lo de arriba lo pasaría un servidor que rechazara
+   * TODAS las operaciones: mantenimiento sí aplica. Un switch se avería.
+   */
+  it('mantenimiento sí aplica a la infraestructura', async () => {
+    const id = await equipoInfra('MTTO');
+    const r = await c.post('/api/mantenimientos', {
+      equipo_id: id,
+      tipo: 'Correctivo',
+      descripcion: 'El switch no enciende',
+    });
+    assert.equal(r.estado, 201, JSON.stringify(r.cuerpo));
+    assert.equal(await estadoDe(id), 'En mantenimiento');
+  });
+
+  it('dar de baja también', async () => {
+    const id = await equipoInfra('BAJA');
+    const r = await c.post(`/api/equipos/${id}/baja`, { motivo: 'Fin de vida útil' });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    assert.equal(await estadoDe(id), 'De baja');
+  });
+
+  /**
+   * El catálogo no ofrece lo que el servidor va a rechazar.
+   *
+   * Es la lección del botón con 404 de la 5d: si la lista que pinta la pantalla
+   * y la regla que aplica el servidor salen de sitios distintos, se separan.
+   */
+  it('el catálogo trae una lista aparte para los no asignables', async () => {
+    const r = await c.get('/api/transiciones');
+    assert.equal(r.estado, 200);
+    const cat = r.cuerpo as {
+      por_estado: Record<string, string[]>;
+      por_estado_no_asignable: Record<string, string[]>;
+      operaciones: { operacion: string; requiere_asignable: boolean }[];
+    };
+
+    // Desde Disponible, un equipo normal puede asignarse, reservarse y prestarse.
+    for (const op of ['asignar', 'reservar', 'prestar']) {
+      assert.ok(cat.por_estado.Disponible.includes(op), `falta ${op} en por_estado`);
+      assert.ok(
+        !cat.por_estado_no_asignable.Disponible.includes(op),
+        `${op} no debería ofrecerse para infraestructura`,
+      );
+    }
+
+    // Y lo que sí queda: no puede ser una lista vacía, o la pantalla de un
+    // switch no tendría ningún botón y no se podría ni dar de baja.
+    assert.ok(
+      cat.por_estado_no_asignable.Disponible.length > 0,
+      'un no asignable se quedó sin ninguna operación',
+    );
+
+    // El campo que lo sostiene sale a la API, que es lo que permite a la
+    // pantalla explicar por qué falta un botón.
+    const asignar = cat.operaciones.find((o) => o.operacion === 'asignar');
+    assert.equal(asignar?.requiere_asignable, true);
+    const baja = cat.operaciones.find((o) => o.operacion === 'baja');
+    assert.equal(baja?.requiere_asignable, false);
+  });
+
+  /**
+   * La CHECK es la que sostiene la regla, no la guarda del repositorio.
+   *
+   * Se comprueba marcando como infraestructura un equipo que YA está asignado:
+   * ese camino no pasa por `mutar`, así que si la base no lo parara, la regla
+   * se podría saltar con un PATCH.
+   */
+  it('no se puede marcar como infraestructura un equipo que ya está asignado', async () => {
+    const r = await c.post('/api/equipos', {
+      categoria: 'Portátil',
+      etiqueta: `${suite.prefijo}YAASIG`,
+      serial: `SN-${suite.prefijo}YAASIG`,
+      estado: 'Disponible',
+      sede_id: sede,
+    });
+    const id = (r.cuerpo as { equipo: { id: string } }).equipo.id;
+    creados.push(id);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: empleado })).estado, 200);
+
+    await assert.rejects(
+      () => marcarNoAsignable(id),
+      /check|constraint|asignable/i,
+      'la base tendría que haber parado esto',
+    );
+    assert.equal(await estadoDe(id), 'Asignado');
   });
 });

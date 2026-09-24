@@ -108,7 +108,17 @@ export const AccionesEquipo: React.FC<AccionesEquipoProps> = ({ equipo, onHecho 
     return <p className="text-xs text-ink-muted">Cargando acciones…</p>;
   }
 
-  const posibles = catalogo.por_estado[equipo.estado] ?? [];
+  /**
+   * Qué se puede hacer, según el equipo sea asignable o no (D44).
+   *
+   * Las dos listas vienen hechas del servidor y aquí solo se elige cuál mirar.
+   * Filtrar a mano sobre `por_estado` sería escribir la regla por segunda vez,
+   * y la primera está en `db/transiciones.ts`.
+   */
+  const posibles =
+    (equipo.asignable === false
+      ? catalogo.por_estado_no_asignable[equipo.estado]
+      : catalogo.por_estado[equipo.estado]) ?? [];
   const de = (op: Operacion) => catalogo.operaciones.find((o) => o.operacion === op)!;
 
   // Las que tienen endpoint propio se pintan como botón; las que las dispara

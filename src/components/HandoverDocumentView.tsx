@@ -362,6 +362,11 @@ export const HandoverDocumentView: React.FC<HandoverDocumentViewProps> = ({
             empresa: e.empresa,
           }))
         : equipos
+            // D44: los no asignables no salen aquí. La API los rechazaría con
+            // un 409 de todas formas —la regla vive en la tabla de
+            // transiciones—, pero ofrecer en el selector algo que va a fallar
+            // es mentir en pantalla.
+            .filter((e) => e.asignable !== false)
             .filter((e) => e.estado === 'Disponible' || e.estado === 'Reservado')
             .map((e) => ({
               id: e.id,

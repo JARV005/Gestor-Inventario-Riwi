@@ -435,6 +435,26 @@ export const equipos = pgTable(
      * único parcial de `serial` existe para impedir.
      */
     prestado_a: prestatario('prestado_a'),
+    /**
+     * ¿Se le puede entregar a una persona? (D44)
+     *
+     * `false` es infraestructura: switches, access points, el rack, las
+     * impresoras, los equipos fijos de las salas. Se inventarían y se mantienen
+     * —un switch se avería y se da de baja igual que un portátil— pero no se
+     * asignan, ni se reservan, ni se prestan, ni salen en un acta.
+     *
+     * Lo sostiene `equipos_no_asignable_sin_tenedor`, no la interfaz: excluirlos
+     * del selector deja la puerta abierta a que alguien llame al endpoint a mano.
+     */
+    asignable: boolean('asignable').notNull().default(true),
+    /**
+     * Dónde está DENTRO de la sede: «P3 OCCI», «Pecera», «P3 Rack» (D48).
+     *
+     * Texto libre y no una FK: no hay catálogo de salas, los nombres los escribe
+     * quien inventaría, y una foránea contra algo que nadie mantiene convierte
+     * cada sala nueva en un error de importación.
+     */
+    ubicacion_detalle: text('ubicacion_detalle'),
   },
   (t) => [
     // Invariante del §2. Es una equivalencia, no una implicación: un equipo
@@ -459,6 +479,22 @@ export const equipos = pgTable(
     // de RIWI trae uno así, y D34 dice que entre marcado, no que se rechace.
     // Sigue impidiendo lo que motivaba la equivalencia: que
     // `recuperar_prestamo` mueva el estado y deje el campo puesto.
+    /**
+     * D44: un equipo que no se asigna no tiene a nadie detrás.
+     *
+     * `De baja` y `En mantenimiento` quedan FUERA de la prohibición a
+     * propósito: un switch se avería y se da de baja como cualquier otro. Lo
+     * que no se hace es entregárselo a una persona.
+     */
+    check(
+      'equipos_no_asignable_sin_tenedor',
+      sql`asignable
+          OR (
+            empleado_id IS NULL
+            AND prestado_a IS NULL
+            AND estado::text NOT IN ('Asignado', 'Reservado', 'Prestado')
+          )`,
+    ),
     check(
       'equipos_prestatario_implica_prestado',
       sql`prestado_a IS NULL OR estado::text = 'Prestado'`,

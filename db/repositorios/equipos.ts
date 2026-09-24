@@ -64,6 +64,11 @@ const CAMPOS_PUBLICOS = {
   garantia_vence: equipos.garantia_vence,
   costo: equipos.costo,
   notas: equipos.notas,
+  // D44 y D48. `asignable` decide qué operaciones ofrece la pantalla, así que
+  // tiene que viajar con el equipo; sin ella, `AccionesEquipo` no puede saber
+  // qué lista de `por_estado` mirar.
+  asignable: equipos.asignable,
+  ubicacion_detalle: equipos.ubicacion_detalle,
   requiere_revision: equipos.requiere_revision,
   // 5e (D31). Que sea una lista cerrada tiene este precio: una columna nueva no
   // sale por la API hasta que se añade aquí, y el síntoma no dice «falta en la

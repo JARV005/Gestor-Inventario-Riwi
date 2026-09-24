@@ -29,6 +29,7 @@ import { db, type BD, type Ejecutor } from '../cliente.js';
 import { empleados, equipos, movimientos, prestatario, sedes, usuariosApp } from '../esquema.js';
 import {
   comprobarTransicion,
+  EquipoNoAsignable,
   type EstadoEquipo,
   type Operacion,
   type TipoMovimiento,
@@ -106,6 +107,10 @@ export async function mutar(
         empleado_id: equipos.empleado_id,
         sede_id: equipos.sede_id,
         prestado_a: equipos.prestado_a,
+        // D44: si no se asigna, cuatro de las once operaciones no valen.
+        asignable: equipos.asignable,
+        etiqueta: equipos.etiqueta,
+        serial: equipos.serial,
       })
       .from(equipos)
       .where(eq(equipos.id, equipoId))
@@ -115,6 +120,24 @@ export async function mutar(
 
     // Lanza TransicionIlegal, que la capa HTTP traduce a 409.
     const t = comprobarTransicion(operacion, actual.estado);
+
+    /**
+     * D44. Antes de tocar nada.
+     *
+     * La CHECK de la base lo pararía igualmente —es ella la que sostiene la
+     * regla—, pero lo haría con un error de constraint que la capa HTTP
+     * traduciría a un 409 genérico sobre «violación de integridad». Aquí se
+     * convierte en un mensaje que dice qué pasa y qué hacer.
+     *
+     * Y va DESPUÉS de `comprobarTransicion`: si la operación ni siquiera es
+     * legal desde ese estado, eso es lo primero que hay que contar.
+     */
+    if (t.requiere_asignable && !actual.asignable) {
+      throw new EquipoNoAsignable(
+        operacion,
+        actual.etiqueta ?? actual.serial ?? 'El equipo',
+      );
+    }
 
     // -----------------------------------------------------------------------
     // Las compuestas: se ejecutan como la cadena que dice la tabla

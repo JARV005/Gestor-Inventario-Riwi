@@ -11,9 +11,12 @@ ni autenticación. El objetivo es construirle el backend por debajo y reusar la 
 requisitos de seguridad y el orden de las 7 etapas. Es la fuente de verdad.
 Si algo de este archivo contradice ese documento, gana ese documento.
 Ahora gana `docs/decisiones-01.md`; sobre ese `docs/decisiones-04.md`, sobre
-esos `docs/decisiones-05.md` (etapa 5e: la base se reconstruye desde
-`INVENTARIO-RIWI.xlsx` e `INVENTARIO-BBL.xlsx`), y sobre todos
-`docs/decisiones-06.md` (etapa 5f: el formato del acta aprobado por BBL).
+esos `docs/decisiones-05.md`, sobre esos `docs/decisiones-06.md` (etapa 5f: el
+formato del acta aprobado por BBL), y **sobre todos `docs/decisiones-07.md`**
+(etapa 8: RIWI pasa de 2 hojas a 15, y los equipos de infraestructura).
+
+La base se reconstruye desde `INVENTARIO_RIWI_MED_1.xlsx` e
+`INVENTARIO_BBL_MED_1.xlsx`, que sustituyen a los dos de la etapa 5e.
 
 ## Stack
 

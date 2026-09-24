@@ -113,6 +113,13 @@
       "when": 1786572000000,
       "tag": "0015_consecutivo_por_empresa_y_chequeo",
       "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1786575600000,
+      "tag": "0016_asignable_y_ubicacion",
+      "breakpoints": true
     }
   ]
 }

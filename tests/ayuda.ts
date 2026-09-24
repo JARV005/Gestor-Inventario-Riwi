@@ -944,3 +944,16 @@ export const PROHIBIDO_EN_RESPUESTAS = [
   BIOS_EN_CLARO,
   LICENCIA_EN_CLARO,
 ];
+
+/**
+ * Marca un equipo como infraestructura (D44), sin pasar por la aplicación.
+ *
+ * No hay endpoint que lo haga: la bandera se pone al importar, y cambiarla a
+ * mano es una operación de administración que la etapa 8e resolverá con su
+ * pantalla. Aquí interesa además que el UPDATE sea crudo, porque así lo que
+ * para el intento es la CHECK y no una guarda del repositorio — que es
+ * justamente lo que hay que comprobar.
+ */
+export async function marcarNoAsignable(id: string): Promise<void> {
+  await db.execute(sql`UPDATE equipos SET asignable = false WHERE equipos.id = ${id}`);
+}

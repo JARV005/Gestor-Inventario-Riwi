@@ -614,6 +614,75 @@ BEGIN
   END;
 
   -- ==========================================================================
+  -- Etapa 8 - D44. Los equipos que no se asignan a nadie.
+  -- ==========================================================================
+  --
+  -- La regla vive en la CHECK y no en la interfaz, asi que es AQUI donde se
+  -- comprueba: excluirlos del selector deja la puerta abierta a que alguien
+  -- llame al endpoint a mano.
+  --
+  -- `v_eq_res` llega aqui en estado Reservado; cada caso lo deja como lo
+  -- necesita y todo se deshace con el ROLLBACK del final.
+
+  -- 40. Un equipo no asignable no puede quedar a nombre de nadie.
+  UPDATE equipos SET estado = 'Disponible', empleado_id = NULL, prestado_a = NULL,
+                     asignable = false
+   WHERE id = v_eq_res;
+
+  BEGIN
+    UPDATE equipos SET empleado_id = v_emp, estado = 'Asignado' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: asignar infraestructura', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: asignar infraestructura', 'rechazado', 'rechazado');
+  END;
+
+  -- 41. Ni reservarla.
+  BEGIN
+    UPDATE equipos SET estado = 'Reservado' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: reservar infraestructura', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: reservar infraestructura', 'rechazado', 'rechazado');
+  END;
+
+  -- 42. Ni prestarla.
+  BEGIN
+    UPDATE equipos SET estado = 'Prestado', prestado_a = 'BBL Labs' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: prestar infraestructura', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: prestar infraestructura', 'rechazado', 'rechazado');
+  END;
+
+  -- 43. EL OTRO LADO, que impide que la regla sea «prohibirlo todo»:
+  --     mantenimiento y baja SI aplican. Un switch se averia.
+  BEGIN
+    UPDATE equipos SET estado = 'En mantenimiento' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: infraestructura al taller', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: infraestructura al taller', 'aceptado', 'RECHAZADO');
+  END;
+
+  BEGIN
+    UPDATE equipos SET estado = 'De baja' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: dar de baja infraestructura', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: dar de baja infraestructura', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- 44. Y un equipo normal sigue asignandose. Sin esto, una CHECK que rechazara
+  --     TODO pasaria los tres casos negativos de arriba.
+  BEGIN
+    UPDATE equipos SET asignable = true, estado = 'Disponible', empleado_id = NULL
+     WHERE id = v_eq_res;
+    UPDATE equipos SET empleado_id = v_emp, estado = 'Asignado' WHERE id = v_eq_res;
+    INSERT INTO resultado VALUES ('D44: asignar un equipo normal', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('D44: asignar un equipo normal', 'aceptado', 'RECHAZADO');
+  END;
+
+  -- Se deja como estaba para los casos de abajo.
+  UPDATE equipos SET estado = 'Reservado', empleado_id = NULL WHERE id = v_eq_res;
+
+  -- ==========================================================================
   -- 5f-2 · D40 y D41. Los dos cambios de la 0015, por sus dos lados.
   -- ==========================================================================
 

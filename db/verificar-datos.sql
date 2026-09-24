@@ -528,6 +528,40 @@ WHERE (a.chequeo IS NOT NULL) <> (a.pdf IS NOT NULL AND a.tipo = 'Entrega');
 
 
 -- ---------------------------------------------------------------------------
+-- Grupo J - equipos de infraestructura (etapa 8, D44)
+-- ---------------------------------------------------------------------------
+--
+-- Lo impone una CHECK desde la 0016, asi que esto no comprueba que la regla
+-- exista: comprueba que lo CARGADO la cumple. Que esten los dos es deliberado
+-- —una CHECK se puede dejar caer en una migracion futura y este seguiria
+-- hablando—, el mismo criterio que el grupo I.
+--
+-- Con su linea de contexto abajo: mientras no haya ni un equipo marcado como
+-- infraestructura, las consultas devuelven cero sin haber mirado nada, y
+-- «ninguno lo incumple» y «no hay ninguno» se leen igual.
+INSERT INTO hallazgo
+SELECT 'J', 'infraestructura a nombre de una persona', count(*)
+FROM equipos e WHERE NOT e.asignable AND e.empleado_id IS NOT NULL;
+
+INSERT INTO hallazgo
+SELECT 'J', 'infraestructura prestada a otra empresa', count(*)
+FROM equipos e WHERE NOT e.asignable AND e.prestado_a IS NOT NULL;
+
+INSERT INTO hallazgo
+SELECT 'J', 'infraestructura en estado que implica tenedor', count(*)
+FROM equipos e
+WHERE NOT e.asignable AND e.estado::text IN ('Asignado', 'Reservado', 'Prestado');
+
+-- Un equipo de infraestructura no puede aparecer en un acta: no se entrega. La
+-- CHECK no lo alcanza —el acta es otra tabla— asi que este es el unico sitio
+-- donde se comprueba.
+INSERT INTO hallazgo
+SELECT 'J', 'infraestructura dentro de un acta', count(*)
+FROM actas_equipos ae
+JOIN equipos e ON e.id = ae.equipo_id
+WHERE NOT e.asignable;
+
+-- ---------------------------------------------------------------------------
 -- Grupo I — préstamos entre empresas (5e)
 -- ---------------------------------------------------------------------------
 --

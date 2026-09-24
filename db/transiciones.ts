@@ -91,6 +91,22 @@ export interface Transicion {
    * tabla, no porque alguien escribiera el caso especial.
    */
   compuesta?: readonly Operacion[];
+  /**
+   * La operación necesita que el equipo sea **asignable** (D44).
+   *
+   * Va como CAMPO por lo mismo que `disparo` y `compuesta`: de aquí salen las
+   * tres cosas a la vez —que la operación se rechace, que el 409 lo explique y
+   * que el botón no se pinte—. Escrito como un `if` en el repositorio, la tabla
+   * diría una cosa y el endpoint haría otra, que es lo que dejó a
+   * `AccionesEquipo` pintando un botón con 404 en la 5d.
+   *
+   * Son las cuatro que ponen a alguien detrás del equipo. `devolver`,
+   * `liberar` y `recuperar_prestamo` NO la llevan aunque parezca simétrico:
+   * sacan de un estado al que un no asignable no debería haber llegado, así que
+   * marcarlas prohibiría lo imposible y, sobre todo, impediría corregir una fila
+   * mal importada sin tocar la base a mano.
+   */
+  requiere_asignable?: boolean;
 }
 
 export const TRANSICIONES: Record<Operacion, Transicion> = {
@@ -100,6 +116,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     movimiento: 'Asignación',
     disparo: 'directa',
     requiere: 'empleado',
+    requiere_asignable: true,
     etiqueta: 'Asignar a alguien',
     explicacion:
       'Solo se puede asignar un equipo que esté disponible o reservado. Si ya está asignado a otra persona, primero hay que devolverlo.',
@@ -156,6 +173,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     movimiento: 'Reserva',
     disparo: 'directa',
     requiere: null,
+    requiere_asignable: true,
     etiqueta: 'Reservar',
     explicacion: 'Solo se puede reservar un equipo disponible.',
   },
@@ -226,6 +244,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     movimiento: 'Préstamo',
     disparo: 'directa',
     requiere: 'prestatario',
+    requiere_asignable: true,
     etiqueta: 'Prestar a otra empresa',
     explicacion:
       'Solo se presta un equipo disponible. Si está asignado a alguien hay que devolverlo primero, y si está en el taller, recuperarlo.',
@@ -264,6 +283,7 @@ export const TRANSICIONES: Record<Operacion, Transicion> = {
     compuesta: ['devolver', 'asignar'],
     disparo: 'directa',
     requiere: 'empleado',
+    requiere_asignable: true,
     etiqueta: 'Reasignar a otra persona',
     explicacion:
       'Solo se reasigna un equipo que ya esté asignado a alguien. Si está disponible, la operación es asignarlo.',
@@ -322,14 +342,52 @@ export function catalogoTransiciones(estados: readonly EstadoEquipo[]) {
       irreversible: TRANSICIONES[op].irreversible ?? false,
       disparo: TRANSICIONES[op].disparo,
       compuesta: TRANSICIONES[op].compuesta ?? null,
+      requiere_asignable: TRANSICIONES[op].requiere_asignable ?? false,
     })),
     por_estado: Object.fromEntries(estados.map((e) => [e, operacionesDesde(e)])) as Record<
       EstadoEquipo,
       Operacion[]
     >,
+    /**
+     * Lo mismo para un equipo NO asignable (D44).
+     *
+     * Va calculado aquí y no filtrado en el cliente por la regla de siempre: la
+     * pantalla pinta lo que venga en la lista, y si tuviera que decidir cuál
+     * quitar, la decisión viviría en dos sitios. Con las dos listas ya hechas,
+     * `AccionesEquipo` solo elige cuál mirar según la bandera del equipo.
+     */
+    por_estado_no_asignable: Object.fromEntries(
+      estados.map((e) => [
+        e,
+        operacionesDesde(e).filter((op) => !TRANSICIONES[op].requiere_asignable),
+      ]),
+    ) as Record<EstadoEquipo, Operacion[]>,
     /** Estados a los que no llega ninguna operación. Ver arriba. */
     sin_operacion: ESTADOS_SIN_OPERACION,
   };
+}
+
+/**
+ * La operación existe y el estado la permitiría, pero el equipo no se asigna
+ * a nadie (D44).
+ *
+ * Separada de `TransicionIlegal` porque la causa es otra y la salida también:
+ * en una transición ilegal se cambia de operación; aquí no hay operación que
+ * valga mientras el equipo siga marcado como infraestructura. El mensaje tiene
+ * que decir eso, no ofrecer alternativas que tampoco van a funcionar.
+ */
+export class EquipoNoAsignable extends Error {
+  constructor(
+    readonly operacion: Operacion,
+    readonly nombre: string,
+  ) {
+    super(
+      `${nombre} está marcado como equipo de infraestructura, así que no se asigna, ` +
+        `ni se reserva, ni se presta, ni sale en un acta. Se inventaría y se mantiene. ` +
+        `Si de verdad hay que entregárselo a alguien, primero hay que dejar de tratarlo ` +
+        `como infraestructura en su ficha.`,
+    );
+  }
 }
 
 export class TransicionIlegal extends Error {
