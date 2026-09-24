@@ -61,13 +61,44 @@ accesibles de una en una por rol admin con su fila en `auditoria`.
 La licencia de Windows **por equipo** que ya es un campo de `equipos` no se toca
 ni se fusiona con esto: son cosas distintas.
 
-### Lo que la exploración añade
+### A qué apuntan las 30 licencias, contado
 
-`EQUIPO ACTIVADO` apunta a equipos como `BAQ-00003`, y **BAQ es Barranquilla**.
-Esos equipos no están en estos ficheros, que son solo de Medellín. Así que la FK
-va a quedar sin resolver en buena parte de las 30 filas, y eso no es un error del
-importador: es que el equipo referenciado llegará con los ficheros de las otras
-sedes. Marcado, no inventado.
+```
+  11   etiqueta de un equipo que SÍ está en los ficheros    → FK resuelta
+  12   BAQ-00001 … BAQ-00024                                → Barranquilla
+   4   «No»                                                 → no activada en ninguno
+   2   EF1, EF2                                             → no se sabe qué son
+   1   etiqueta que no resuelve                             → a la bandeja
+```
+
+**Doce de treinta apuntan a Barranquilla**, y son el 40 % del módulo. Con los
+ficheros de Barranquilla resolverían solas; sin ellos se quedan marcadas y la
+pantalla de licencias enseñará casi la mitad de sus filas sin equipo.
+
+Es un argumento con número para pedir esos ficheros antes de lo previsto, pero
+**no bloquea 8b**: la tabla se construye igual y las filas entran marcadas.
+
+Los cuatro `No` no son un fallo: son licencias compradas y sin activar, y su
+`EQUIPO ACTIVADO` va a NULL sin marca. `EF1` y `EF2` sí van a la bandeja, porque
+no se sabe qué son.
+
+### Y una cosa que cambia la forma del módulo
+
+```
+29 de 30   Local · Windows 11 Pro
+ 1 de 30   Cuenta · Suite Adobe
+```
+
+Casi todo el módulo son licencias de Windows, que es exactamente lo que el campo
+`licencia_tipo` / `licencia_serial_cifrado` de `equipos` ya guarda. **Aun así no
+se fusionan**, y el motivo es que responden preguntas distintas:
+
+- El campo por equipo responde «¿este portátil tiene licencia, y de qué tipo?».
+  Es un atributo de la máquina y muere con ella.
+- La tabla responde «¿dónde está activada esta key que compramos?». Es un activo
+  con vida propia: se desactiva de un equipo y se activa en otro.
+
+Fusionarlos perdería la segunda, que es la que justifica el módulo.
 
 Se implementa en **8b**.
 
@@ -167,6 +198,58 @@ revisión en 8c, y la lista de marcadores sustituye a la nuestra. Cada motivo qu
 salga de aquí cita esta decisión, para que se sepa que viene del fichero y no de
 una suposición.
 
+### Las siete reglas, transcritas
+
+Alguien redactó una especificación dentro de una fórmula. Se pierde con el
+fichero, así que queda aquí.
+
+| # | Regla | Sobre qué columna | Hojas | ¿La tenemos? |
+|---|---|---|---|---|
+| 1 | **Serial duplicado** | `SERIAL EQUIPO` / `SERIAL / MAC` / `KEY / SERIAL LICENCIA` | 14 | Sí — `SERIAL_DUPLICADO` |
+| 2 | **Etiqueta duplicada** | `ETIQUETA` | 12 | Sí — `ETIQUETA_DUPLICADA` |
+| 3 | **Estado vacío** | `ESTADO DEL EQUIPO` / `ESTADO` | 12 | No, y **no hace falta**: `estado` es NOT NULL |
+| 4 | **Nombre duplicado** | `NOMBRE EQUIPO` | 1 (`STAFF`) | **No. Ver abajo** |
+| 5 | **Sin responsable** | `USUARIO RESPONSABLE` | 2 | Sí — `ASIGNADO_SIN_RESPONSABLE` |
+| 6 | **Estado/usuario inconsistente** | `USUARIO RESPONSABLE` | 2 | Sí, por CHECK: `equipos_asignado_implica_empleado` |
+| 7 | **Sin ubicación** | `UBICACIÓN` | 2 | Sí — `SIN_UBICACION` |
+
+Las reglas 5 y 6 son dos caras de lo mismo y el fichero lo escribe explícito:
+
+- **Sin responsable**: el estado es `Asignado`, `Préstamo`, `Préstamo BBL` o
+  `ISF` y la columna de responsable está vacía.
+- **Estado/usuario inconsistente**: el estado es `Stock` o `Disponible` **y sin
+  embargo hay un responsable escrito**.
+
+La segunda es la que nosotros imponemos con una CHECK desde la etapa 1, y en la
+misma dirección. Coincidir en esto sin habernos puesto de acuerdo es la mejor
+señal de que la regla es correcta.
+
+### La regla 4 debería ser un invariante nuestro y no lo es
+
+`NOMBRE EQUIPO` es el nombre de red de la máquina —`RIWI-1705`, `BBL-0049`—, y
+**dos máquinas con el mismo nombre de red es un problema real**: colisionan en el
+dominio, en las licencias y en cualquier inventario que las mire por nombre.
+
+Hoy no lo comprobamos. Los datos dicen que hace falta:
+
+```
+INV RIWI STAFF   75 nombres, 73 distintos   →  2 repetidos
+INV - CE        177 nombres, 172 distintos  →  5 repetidos
+```
+
+Entra en 8c como motivo nuevo `NOMBRE_EQUIPO_DUPLICADO`, y **el fichero es quien
+lo pidió**. Es el único caso de los siete en el que el Excel es más estricto que
+la base.
+
+### La lista de marcadores, que también estaba ahí
+
+```
+N/A · No aplica · No tiene · - · Es de Claro · Sin rotulo · No
+```
+
+`Es de Claro` y `Sin rotulo` no estaban en nuestra lista. Sustituyen a la
+nuestra en 8c.
+
 ---
 
 ## D46. `INV - BLACKBIRD` es un préstamo, pero no solapa con BBL
@@ -252,10 +335,24 @@ Tres cosas que esto cambia:
    «inconsistencia dentro del archivo origen». Son **la misma máquina en dos
    hojas**, no dos equipos: entran como una fila.
 
-2. **La regla de precedencia ya existe y es la contraria a la nuestra.** En 5e
-   decidimos que el fichero del dueño manda; aquí, en conflictos dentro del mismo
-   fichero, **gana el destino por ser más reciente**. Se respeta para los
-   conflictos entre hojas del mismo libro.
+2. **Hay una segunda regla de precedencia, y no contradice a la nuestra: tiene
+   otro alcance.** Conviene dejarlo escrito así, porque dentro de seis meses
+   parecerán incompatibles.
+
+   | Regla | Alcance | Qué gana |
+   |---|---|---|
+   | **D31** (5e) | **Entre ficheros**: RIWI contra BBL | El fichero del **dueño** manda en propiedad, specs y etiqueta; el del **prestatario**, en quién lo tiene hoy |
+   | **D49** (esta) | **Dentro del mismo libro**: hoja contra hoja | Gana el **destino**, por ser la hoja más reciente |
+
+   No compiten porque no se aplican a lo mismo. Un serial que aparece en
+   `INV - BELAB` y en `INV - SEDE` es un conflicto interno del libro de RIWI y lo
+   resuelve D49; un serial que aparece en el libro de RIWI y en el de BBL es un
+   equipo compartido entre dos empresas y lo resuelve D31.
+
+   El orden de aplicación importa y es este: **primero D49 dentro de cada libro**
+   —que deja un libro sin duplicados internos—, **después D31 entre los dos**.
+   Al revés habría que decidir con qué versión de la fila de RIWI se compara la
+   de BBL, que es justo la pregunta que D49 responde.
 
 3. **La última línea aplica nuestra propia regla 4 antes que nosotros.** Johan ya
    excluyó una contraseña «por política de seguridad».

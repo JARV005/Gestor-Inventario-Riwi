@@ -957,3 +957,65 @@ export const PROHIBIDO_EN_RESPUESTAS = [
 export async function marcarNoAsignable(id: string): Promise<void> {
   await db.execute(sql`UPDATE equipos SET asignable = false WHERE equipos.id = ${id}`);
 }
+
+/**
+ * Crea una licencia directamente en la base (8b).
+ *
+ * No hay endpoint de alta: las licencias entran por el importador (8c). Aquí
+ * interesa además que el INSERT sea crudo, porque así lo que para una fila
+ * contradictoria son las CHECK y no una validación de la aplicación — que es
+ * justo lo que los tests comprueban.
+ */
+export async function crearLicencia(datos: {
+  tipo: string;
+  descripcion: string;
+  key?: string | null;
+  estado?: string;
+  equipo_id?: string | null;
+  equipo_referencia?: string | null;
+  requiere_revision?: boolean;
+}): Promise<string> {
+  /**
+   * La causa real, no el envoltorio de drizzle.
+   *
+   * `db.execute` envuelve el error de Postgres en uno cuyo mensaje es la
+   * consulta entera; el "violates check constraint" vive en `.cause`. Sin
+   * desenvolverlo, un test que espere una violación de CHECK falla por no
+   * encontrar la palabra, y el diagnóstico apunta al sitio equivocado.
+   */
+  const conCausa = async <T>(f: () => Promise<T>): Promise<T> => {
+    try {
+      return await f();
+    } catch (e) {
+      const causa = (e as { cause?: { message?: string; constraint?: string } }).cause;
+      if (causa?.message) {
+        const err = new Error(causa.message);
+        (err as { constraint?: string }).constraint = causa.constraint;
+        throw err;
+      }
+      throw e;
+    }
+  };
+
+  const r = await conCausa(() =>
+    db.execute<{ id: string }>(
+    sql`INSERT INTO licencias (tipo, descripcion, key_cifrada, estado, equipo_id,
+                               equipo_referencia, requiere_revision)
+        VALUES (${datos.tipo}, ${datos.descripcion},
+                ${datos.key ? cifrar(datos.key) : null},
+                ${datos.estado ?? 'Disponible'}::estado_licencia,
+                ${datos.equipo_id ?? null}::uuid,
+                ${datos.equipo_referencia ?? null},
+                ${datos.requiere_revision ?? false})
+        RETURNING id`,
+    ),
+  );
+  return r.rows[0].id;
+}
+
+export async function borrarLicencias(ids: string[]): Promise<void> {
+  for (const id of ids) {
+    await db.execute(sql`DELETE FROM auditoria WHERE auditoria.registro_id = ${id}`);
+    await db.execute(sql`DELETE FROM licencias WHERE licencias.id = ${id}`);
+  }
+}

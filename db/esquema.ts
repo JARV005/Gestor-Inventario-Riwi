@@ -867,6 +867,76 @@ export const actasConsecutivo = pgTable(
   ],
 );
 
+/** Estados de una licencia (D43). */
+export const estadoLicencia = pgEnum('estado_licencia', [
+  'Activada',
+  'Disponible',
+  'Vencida',
+  'Retirada',
+]);
+
+/**
+ * Inventario de licencias de software (D43, etapa 8b).
+ *
+ * NO es el módulo SaaS del prototipo —asientos, renovaciones, proveedores— sino
+ * un inventario: una key, dónde está puesta y quién responde por ella.
+ *
+ * Y NO se fusiona con `equipos.licencia_serial_cifrado`, que responde otra
+ * pregunta: aquel es un atributo del portátil y muere con él; esto es un activo
+ * con vida propia que se desactiva de un equipo y se activa en otro.
+ */
+export const licencias = pgTable(
+  'licencias',
+  {
+    ...columnasBase,
+    /** `Local`, `Cuenta`… Texto y no enum: el catálogo lo pone quien compra. */
+    tipo: text('tipo').notNull(),
+    descripcion: text('descripcion').notNull(),
+    /**
+     * **Secreto del §5**, con las mismas reglas que `bios_password`: AES-256-GCM,
+     * fuera de listados y exportaciones, de una en una por admin y con su fila
+     * en `auditoria`.
+     *
+     * NULL permitido: una licencia puede estar registrada sin que se sepa aún su
+     * key, y cifrar una cadena vacía sería un secreto que no lo es.
+     */
+    key_cifrada: customType<{ data: Buffer; driverData: Buffer }>({
+      dataType: () => 'bytea',
+    })('key_cifrada'),
+    equipo_id: uuid('equipo_id').references(() => equipos.id, { onDelete: 'restrict' }),
+    /**
+     * Lo que decía el fichero, se resuelva o no.
+     *
+     * Cuando `equipo_id` es NULL esto es lo ÚNICO que dice a qué apuntaba: las
+     * doce licencias que van a equipos `BAQ-000xx` de Barranquilla se
+     * reconcilian por aquí cuando lleguen sus ficheros.
+     */
+    equipo_referencia: text('equipo_referencia'),
+    estado: estadoLicencia('estado').notNull().default('Disponible'),
+    usuario_responsable: text('usuario_responsable'),
+    ubicacion: text('ubicacion'),
+    notas: text('notas'),
+    requiere_revision: boolean('requiere_revision').notNull().default(false),
+    importacion_id: uuid('importacion_id').references(() => importaciones.id, {
+      onDelete: 'set null',
+    }),
+  },
+  (t) => [
+    /** Una licencia activada tiene que decir dónde, de una de las dos formas. */
+    check(
+      'licencias_activada_dice_donde',
+      sql`estado <> 'Activada' OR equipo_id IS NOT NULL OR equipo_referencia IS NOT NULL`,
+    ),
+    /** Y al revés: si no está activada, no apunta a ningún equipo. */
+    check('licencias_solo_activada_tiene_equipo', sql`estado = 'Activada' OR equipo_id IS NULL`),
+    uniqueIndex('idx_licencias_key_unica')
+      .on(t.key_cifrada)
+      .where(sql`key_cifrada IS NOT NULL AND NOT requiere_revision`),
+    index('idx_licencias_equipo').on(t.equipo_id),
+    index('idx_licencias_estado').on(t.estado),
+  ],
+);
+
 /**
  * Obligatoria por el §5: toda escritura sobre `equipos` y todo desciframiento
  * de una clave BIOS deja rastro aquí.

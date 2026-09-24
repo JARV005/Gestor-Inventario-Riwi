@@ -174,6 +174,13 @@ La base se reconstruye desde `INVENTARIO_RIWI_MED_1.xlsx` e
   significaba «nadie escribe aquí», y las dos cosas se leen igual. Antes de
   concluir algo desde la ausencia de datos, comprobar que algo los escribiría
   si existieran.
+- Enmascarar por nombre de columna exige acertar todos los nombres. `SERIAL
+  WINDOWS` no contiene «clave», «key» ni «password» y pasó limpio por un filtro
+  que parecía completo; enmascarar por la FORMA del valor no depende de acertar.
+  Y truncar no es enmascarar: 26 de 29 caracteres deja la clave prácticamente
+  entera.
+- La regla de no exponer secretos cubre la salida, no solo los ficheros: un log,
+  una traza de error o una consola cuentan igual.
 
 ## Eficiencia
 

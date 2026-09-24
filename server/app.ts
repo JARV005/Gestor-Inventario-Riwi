@@ -16,6 +16,7 @@ import { registrarRutasActas } from './rutas/actas.js';
 import { registrarRutasAuth } from './rutas/auth.js';
 import { registrarRutasEmpleados } from './rutas/empleados.js';
 import { registrarRutasEquipos } from './rutas/equipos.js';
+import { registrarRutasLicencias } from './rutas/licencias.js';
 import { registrarRutasMantenimientos } from './rutas/mantenimientos.js';
 import { registrarRutasMovimientos } from './rutas/movimientos.js';
 import { registrarRutasSedes } from './rutas/sedes.js';
@@ -49,6 +50,7 @@ export function crearApp(): Express {
   // chocan con '/api/equipos/:id', que ya está registrada arriba.
   registrarRutasMovimientos(app);
   registrarRutasActas(app);
+  registrarRutasLicencias(app);
 
   // Siempre el último: si se registra antes que las rutas, no las cubre.
   app.use(manejadorErrores);
