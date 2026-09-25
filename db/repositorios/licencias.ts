@@ -46,6 +46,17 @@ const CAMPOS_PUBLICOS = {
   created_at: licencias.created_at,
   /** Si tiene key registrada, no cuál. Una licencia sin key está a medias. */
   tiene_key: sql<boolean>`(licencias.key_cifrada IS NOT NULL)`,
+  /**
+   * Cómo se llama el equipo donde está activada.
+   *
+   * Lo resuelve el SERVIDOR con un LEFT JOIN, y no el cliente cruzando contra
+   * su lista: la pantalla carga 200 equipos de 938, así que cualquier licencia
+   * activada en uno de los otros 738 salía como «equipo fuera de la lista».
+   * Decir eso de una licencia correctamente activada es una respuesta falsa.
+   */
+  equipo_etiqueta: sql<string | null>`
+    (SELECT coalesce(e.etiqueta, e.serial, e.nombre_equipo)
+       FROM equipos e WHERE e.id = licencias.equipo_id)`,
 } as const;
 
 export class LicenciaNoEncontrada extends Error {}

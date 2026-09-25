@@ -13,10 +13,10 @@ cerró está abajo, en Resueltos.
 | Etapa 5e — la base se reconstruye desde los dos archivos nuevos | 0 |
 | Bandeja de revisión — 177 filas marcadas esperando a una persona | 1 |
 | Etapa 5f — el formato del acta | 3 |
-| Etapa 6 — dashboard, bandeja y flujos que faltan | 5 |
+| Etapa 6 — dashboard, bandeja y flujos que faltan | 7 |
 | Etapa 7 — endurecimiento | 2 |
 | Sin etapa: no son decisiones de quien programa | 2 |
-| **Total** | **13** |
+| **Total** | **15** |
 
 La 5d se cerró con sus cuatro puntos **y sus pantallas**: los endpoints estaban
 desde antes, y un endpoint sin pantalla no es una etapa cerrada. Ver Resueltos.
@@ -300,6 +300,32 @@ tres son consultas que ya existen.
 
 Lo que falta decidir es qué merece interrumpir a alguien, que no es lo mismo que
 qué se puede contar.
+
+### Los cinco widgets retirados del dashboard, y qué haría falta para volver
+
+Se quitaron en la etapa 8 porque eran recuadros con título y sin número: un
+«Valor Total Inventario» vacío invita a leer cero, que es peor que no estar.
+
+| Widget | Qué le falta para volver |
+|---|---|
+| **Valor del inventario** | Ni una de las 938 filas trae costo. El campo existe en la BD; el widget vuelve cuando haya datos |
+| **Inversión en hardware por área** | Lo mismo, más un área por equipo que hoy solo tienen los celulares |
+| **Envíos y retiros** · **Actividad de envíos** | Los traslados ya existen y se ven en Sedes. Aquí harían falta las cifras agregadas, que es trabajo de dashboard, no de datos |
+| **Ocupación por sede** | Ninguna sede tiene capacidad declarada, así que no hay porcentaje que calcular. El **conteo** por sede sí es real y está en Sedes |
+| **Cumplimiento (MDM)** | **No vuelve.** No hay MDM y el widget graficaba un dato inventado (D3) |
+
+Los cuatro primeros son pendientes de verdad. El quinto está cerrado.
+
+### El desplegable de equipos de la pantalla de licencias trae 200 de 938
+
+Para activar una licencia hay que elegir el equipo en una lista, y esa lista está
+topada en 200 como la de colaboradores del generador de actas. Con 938 equipos,
+lo más probable es que el que se busca no esté.
+
+Es el mismo problema que 5f-3 resolvió para «Equipos a entregar» y la misma
+solución: un buscador contra el servidor. Lo que **ya no** es un problema es leer
+a qué equipo apunta una licencia —eso lo resuelve el servidor con un JOIN desde
+la etapa 8e—; lo que falta es elegirlo.
 
 ### El dashboard usa 52 colores que no son de la paleta
 

@@ -123,12 +123,7 @@ export const LicensesView: React.FC = () => {
     }
   };
 
-  const nombreEquipo = (id: string | null) => {
-    if (!id) return null;
-    const e = equipos.find((x) => x.id === id);
-    if (!e) return 'equipo fuera de la lista';
-    return e.etiqueta ?? e.serial ?? [e.marca, e.modelo].filter(Boolean).join(' ') ?? 'equipo';
-  };
+
 
   if (cargando && filas.length === 0) return <Cargando que="las licencias" />;
   if (error) return <ErrorDeCarga error={error} que="las licencias" onReintentar={cargar} />;
@@ -292,7 +287,7 @@ export const LicensesView: React.FC = () => {
                   <>
                     <span className="text-ink flex items-center gap-1.5">
                       <Link2 className="w-3.5 h-3.5 text-ok" />
-                      Activada en <strong>{nombreEquipo(l.equipo_id)}</strong>
+                      Activada en <strong>{l.equipo_etiqueta ?? 'un equipo sin etiqueta'}</strong>
                     </span>
                     <button
                       onClick={() => void cambiarEquipo(l.id, null)}

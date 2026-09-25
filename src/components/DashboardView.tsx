@@ -2,13 +2,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import type { CategoriaEquipo, EstadoEquipo, ResumenEquipos } from '../types';
 import { api, ErrorApi } from '../lib/api';
 import { Cargando, ErrorDeCarga } from './EstadoCarga';
-import { PendienteEtapa6 } from './PendienteEtapa6';
 import { 
   Laptop, 
-  DollarSign, 
-  Building, 
-  Truck, 
-  ShieldCheck, 
   Wrench, 
   Plus, 
   PackageCheck, 
@@ -188,23 +183,12 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* KPI Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        
-        {/* Card 1: Valor del Inventario */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm relative overflow-hidden transition-all hover:shadow-md">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Valor Total Inventario</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <DollarSign className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <PendienteEtapa6
-              clase="pendiente"
-              motivo="El Excel no trae ni un costo cargado. El campo existe en la BD; el widget vuelve cuando haya datos (D3)."
-            />
-          </div>
-        </div>
+      {/* Una sola tarjeta desde que se retiraron las de valor, envíos y
+          cumplimiento: sin datos que las llenaran, eran tres recuadros diciendo
+          que faltaba algo. Con `lg:grid-cols-4` esta quedaba encogida en un
+          cuarto de ancho con tres huecos al lado, que es peor que el hueco que
+          se quitó. */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
 
         {/* Card 2: asignados frente a disponibles */}
         <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm transition-all hover:shadow-md">
@@ -224,45 +208,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
         </div>
 
-        {/* Card 3: Logística en Camino */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm transition-all hover:shadow-md">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Envíos y Retiros</span>
-            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
-              <Truck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl font-bold text-slate-900">
-              {inTransitCount} <span className="text-xs font-normal text-slate-500">en tránsito</span>
-            </div>
-            <PendienteEtapa6
-              clase="pendiente"
-              motivo="El detalle del traslado —transportadora, guía, origen y destino— es un movimiento y llega en la etapa 5 (D1)."
-            />
-          </div>
-        </div>
-
-        {/* Card 4: Seguridad & MDM Enrolled */}
-        <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm transition-all hover:shadow-md">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Cumplimiento</span>
-            <div className="w-8 h-8 rounded-lg bg-teal-50 text-teal-600 flex items-center justify-center">
-              <ShieldCheck className="w-4 h-4" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <PendienteEtapa6
-              clase="retirado"
-              motivo="No hay MDM. El widget graficaba un dato inventado, y eso es peor que no tener widget (D3). No vuelve."
-            />
-          </div>
-        </div>
-
       </div>
 
       {/* Main Grid: Charts & Logistics Feed */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      {/* Una columna, no tres.
+
+          La derecha llevaba «Actividad de Envíos» y «Ocupación por sede», y las
+          dos se retiraron: los traslados en curso ya se ven en Sedes, y la
+          ocupación necesita una capacidad que ninguna sede tiene declarada.
+          Dejar la rejilla de tres con la columna vacía encogería los dos
+          gráficos que sí tienen datos a dos tercios del ancho, por hacer sitio
+          a nada. */}
+      <div className="grid grid-cols-1 gap-6">
         
         {/* Left Column: Recharts Visualization (Spans 2 cols) */}
         <div className="lg:col-span-2 space-y-6">
@@ -270,16 +227,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           {/* Antes: inversión en hardware por departamento, en USD.
               Perdió las dos mitades a la vez — `costo` está vacío en las 186
               filas y `department` pasó a `empleados.area` (D3). */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-            <div className="mb-3">
-              <h3 className="text-sm font-bold text-slate-900">Inversión en hardware por área</h3>
-              <p className="text-xs text-slate-500">Distribución del costo de los equipos</p>
-            </div>
-            <PendienteEtapa6
-              clase="pendiente"
-              motivo="Ninguna de las 186 filas del Excel trae costo. El campo existe en la BD y el gráfico vuelve cuando haya datos que graficar (D3)."
-            />
-          </div>
 
           {/* Chart 2: Category & Status Breakdown (Side by Side inside left col) */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -362,62 +309,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               </button>
             </div>
 
-          </div>
-
-        </div>
-
-        {/* Columna derecha: traslados abiertos y ocupación por sede */}
-        <div className="space-y-6">
-          
-          {/* Active Logistics Feed */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Truck className="w-4 h-4 text-blue-600" />
-                  Actividad de Envíos
-                </h3>
-                <p className="text-xs text-slate-500">Traslados de equipos entre sedes</p>
-              </div>
-              <button 
-                onClick={() => setActiveTab('logistics')}
-                className="text-xs text-blue-600 hover:underline font-semibold"
-              >
-                Ver todos
-              </button>
-            </div>
-
-            {/* Antes: lista de envíos con transportadora, guía y fecha estimada,
-                toda inventada por el prototipo. */}
-            <PendienteEtapa6
-              clase="pendiente"
-              motivo="Un traslado en curso es un movimiento de tipo 'Traslado' sin fecha de confirmación (D1). La tabla ya tiene transportadora, guía y fecha estimada desde la migración 0000; los endpoints llegan en la etapa 5."
-            />
-          </div>
-
-          {/* Ocupación por sede */}
-          <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-sm">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                <Building className="w-4 h-4 text-emerald-600" />
-                Ocupación por sede
-              </h3>
-              <button
-                onClick={() => setActiveTab('logistics')}
-                className="text-xs text-blue-600 hover:underline font-semibold"
-              >
-                Ver sedes
-              </button>
-            </div>
-
-            {/* Antes: barra de ocupación por hub, sobre una capacidad inventada.
-                Ninguna sede tiene capacidad declarada: no existía el dato. El
-                conteo de equipos por sede sí es real y es el widget 3 de D3,
-                que llega en la etapa 6. Mientras tanto está en SedesView. */}
-            <PendienteEtapa6
-              clase="pendiente"
-              motivo="Las sedes no tienen capacidad declarada, así que no hay porcentaje que calcular. El conteo de equipos por sede es el widget 3 de D3 y llega en la etapa 6."
-            />
           </div>
 
         </div>

@@ -356,6 +356,14 @@ export interface Licencia {
   created_at: string;
   /** Si tiene key registrada. NO es la key. */
   tiene_key: boolean;
+  /**
+   * Cómo se llama el equipo donde está activada, resuelto por el servidor.
+   *
+   * No se cruza contra la lista de equipos de la pantalla: esa trae 200 de 938,
+   * y las licencias activadas en cualquiera de los otros salían como «equipo
+   * fuera de la lista».
+   */
+  equipo_etiqueta: string | null;
 }
 
 export interface ResumenLicencias {
