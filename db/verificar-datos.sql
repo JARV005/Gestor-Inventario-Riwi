@@ -130,12 +130,25 @@ WHERE m.motivo_codigo = 'SERIAL_REPETIDO_PERIFERICO'
 --    si alguien las deshace sin querer, se ponen rojas.
 -- ===========================================================================
 
+-- La regla de fondo es que TODO ACTIVO SE PUEDA IDENTIFICAR, y hay dos formas
+-- de conseguirlo: el serial o la etiqueta.
+--
+-- Hasta la etapa 8 se escribio como «sin serial tiene que estar marcado»,
+-- porque las dos hojas de entonces no etiquetaban periféricos. Los 301
+-- monitores y teclados de `INV - CE` SI llevan etiqueta, y todas distintas: son
+-- activos perfectamente identificables sin serial, y marcarlos seria pedir a
+-- una persona que busque un numero de serie que el aparato no tiene impreso.
+--
+-- **No se debilita: se exige lo que de verdad importa.** Una fila sin serial NI
+-- etiqueta no se puede señalar en una estanteria, y esa sigue teniendo que
+-- estar marcada.
 INSERT INTO hallazgo
-SELECT 'B', 'sin serial, no es del cliente y no esta marcado', count(*)
+SELECT 'B', 'sin forma de identificarlo y sin marcar', count(*)
 FROM equipos e
-WHERE e.serial IS NULL AND e.propiedad <> 'Cliente'
+WHERE e.serial IS NULL AND e.etiqueta IS NULL AND e.propiedad <> 'Cliente'
   AND NOT EXISTS (SELECT 1 FROM equipos_motivos_revision m
-                   WHERE m.equipo_id = e.id AND m.motivo_codigo = 'SIN_SERIAL');
+                   WHERE m.equipo_id = e.id
+                     AND m.motivo_codigo IN ('SIN_SERIAL', 'SIN_ETIQUETA'));
 
 -- La hoja de periféricos no tiene columna de etiqueta, así que su ausencia
 -- ahí no es un hueco de datos y no se marca.
@@ -162,11 +175,18 @@ WHERE e.marca IS NULL AND e.propiedad <> 'Cliente'
 -- además sería mandar a la bandeja de limpieza algo que no tiene nada que
 -- limpiar (decisiones-05: «ISF como ubicación no es sede: es consecuencia del
 -- préstamo»).
+-- Desde la etapa 8 hay una CUARTA forma de explicarlo: la SALA (D48).
+--
+-- «P3 OCCI», «Pecera», «P3 Rack» no son sedes, pero tampoco son ausencia de
+-- ubicacion: son donde esta el equipo dentro de una. Una fila con
+-- `ubicacion_detalle` SI dice donde esta, asi que exigirle ademas una marca
+-- mandaria a la bandeja 559 filas que no tienen nada que limpiar.
 INSERT INTO hallazgo
 SELECT 'B', 'sin sede y sin explicar por que', count(*)
 FROM equipos e
 WHERE e.sede_id IS NULL
   AND e.prestado_a IS NULL
+  AND e.ubicacion_detalle IS NULL
   AND NOT EXISTS (SELECT 1 FROM equipos_motivos_revision m
                    WHERE m.equipo_id = e.id
                      AND m.motivo_codigo IN ('SIN_UBICACION', 'UBICACION_FUERA_DE_SEDES'));
@@ -217,11 +237,18 @@ FROM (SELECT equipo_id FROM equipos_motivos_revision
 --    ninguna constraint vería.
 -- ===========================================================================
 
+-- Un periférico no puede traer campos de COMPUTO: si los tiene, la fila se
+-- leyó de la hoja equivocada o con las columnas corridas.
+--
+-- `etiqueta` SALIO de esta lista en la etapa 8. Estaba porque la hoja de
+-- periféricos de la 5e no tenia esa columna, asi que una etiqueta en un monitor
+-- solo podia venir de un cruce. Ya no: los 301 monitores y teclados de
+-- `INV - CE` llevan etiqueta propia y unica, y es su identidad (D50).
 INSERT INTO hallazgo
-SELECT 'D', 'periferico con campos de portatil', count(*)
+SELECT 'D', 'periferico con campos de computo', count(*)
 FROM equipos
 WHERE categoria IN ('Monitor', 'Teclado', 'Mouse', 'Diadema')
-  AND (etiqueta IS NOT NULL OR licencia_tipo IS NOT NULL OR sistema_operativo IS NOT NULL
+  AND (licencia_tipo IS NOT NULL OR sistema_operativo IS NOT NULL
        OR procesador IS NOT NULL OR disco IS NOT NULL OR ram IS NOT NULL
        OR bios_password_cifrado IS NOT NULL OR licencia_serial_cifrado IS NOT NULL);
 
@@ -389,16 +416,24 @@ WHERE e.sede_id IS DISTINCT FROM ult.sede_destino_id;
 -- G. Reconciliación de las corridas de importación
 -- ===========================================================================
 
+-- Desde la etapa 8 una corrida inserta EQUIPOS y LICENCIAS, asi que sus
+-- contadores tienen que sumar las dos. Contando solo equipos, las dos corridas
+-- salian descuadradas en exactamente las 30 licencias del libro de RIWI.
 INSERT INTO hallazgo
 SELECT 'G', 'corridas cuyas filas_insertadas no cuadran con la BD', count(*)
 FROM importaciones i
-WHERE i.filas_insertadas <> (SELECT count(*) FROM equipos e WHERE e.importacion_id = i.id);
+WHERE i.filas_insertadas <> (
+    (SELECT count(*) FROM equipos e WHERE e.importacion_id = i.id)
+  + (SELECT count(*) FROM licencias l WHERE l.importacion_id = i.id)
+);
 
 INSERT INTO hallazgo
 SELECT 'G', 'corridas cuyas filas_marcadas no cuadran con la BD', count(*)
 FROM importaciones i
-WHERE i.filas_marcadas <> (SELECT count(*) FROM equipos e
-                            WHERE e.importacion_id = i.id AND e.requiere_revision);
+WHERE i.filas_marcadas <> (
+    (SELECT count(*) FROM equipos e WHERE e.importacion_id = i.id AND e.requiere_revision)
+  + (SELECT count(*) FROM licencias l WHERE l.importacion_id = i.id AND l.requiere_revision)
+);
 
 INSERT INTO hallazgo
 SELECT 'G', 'equipos marcados sin ningun motivo', count(*)

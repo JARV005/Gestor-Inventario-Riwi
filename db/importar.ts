@@ -426,12 +426,65 @@ function mapearEstado(bruto: string): {
   return { estado: 'Disponible', prestado_a: null, motivo: 'ESTADO_NO_APLICA' };
 }
 
+/**
+ * El tipo del fichero → nuestra categoría.
+ *
+ * ============================================================================
+ * LO QUE NO SE RECONOCE ES «Otro», NO «Portátil».
+ * ============================================================================
+ *
+ * Hasta la etapa 5e las dos hojas solo traían portátiles y escritorios, así que
+ * el caso por defecto —«Portátil» con marca— era inocuo: lo que caía ahí eran
+ * filas sin tipo. Con quince hojas deja de serlo: hay 45 tipos distintos
+ * —cámaras, switches, access points, proyectores, reguladores, un firewall—
+ * y mandarlos todos a «Portátil» hace que la base **afirme algo falso** sobre
+ * cada uno de ellos, marcado o no.
+ *
+ * `Otro` existe exactamente para esto. El enum tiene siete valores y no va a
+ * crecer a cuarenta y cinco: lo que importa es distinguir lo que el inventario
+ * trata distinto —lo que se entrega a personas, lo que es periférico— y el
+ * resto es infraestructura que se inventaría y se mantiene.
+ *
+ * El TIPO ORIGINAL no se pierde: va a `notas`, así que «Switch» sigue siendo
+ * legible aunque la categoría diga `Otro`.
+ */
+const CATEGORIA_POR_TIPO: Record<string, Categoria> = {
+  // Cómputo
+  portatil: 'Portátil',
+  'pc del cliente': 'Portátil',
+  tablet: 'Portátil',
+  escritorio: 'Desktop',
+  desktop: 'Desktop',
+
+  // Periféricos con categoría propia
+  monitor: 'Monitor',
+  tv: 'Monitor',
+  teclado: 'Teclado',
+  teclados: 'Teclado',
+  mouse: 'Mouse',
+  diadema: 'Diadema',
+  diademas: 'Diadema',
+};
+
 function mapearCategoria(bruto: string): { categoria: Categoria; cliente: boolean; falta: boolean } {
   const n = norm(bruto);
-  if (n === 'pc del cliente') return { categoria: 'Portátil', cliente: true, falta: false };
-  if (n === 'portatil') return { categoria: 'Portátil', cliente: false, falta: false };
-  if (n === 'escritorio' || n === 'desktop') return { categoria: 'Desktop', cliente: false, falta: false };
-  return { categoria: 'Portátil', cliente: false, falta: true };
+
+  // Sin tipo escrito: eso SÍ es un hueco de datos y se marca.
+  if (!n) return { categoria: 'Otro', cliente: false, falta: true };
+
+  const conocida = CATEGORIA_POR_TIPO[n];
+  if (conocida) {
+    return { categoria: conocida, cliente: n === 'pc del cliente', falta: false };
+  }
+
+  /**
+   * El tipo viene escrito y no es de los siete: es `Otro`, y NO se marca.
+   *
+   * Un switch no es una fila incompleta que alguien tenga que arreglar: es un
+   * switch. Marcarlo mandaría a la bandeja 150 filas perfectamente descritas y
+   * enterraría las que sí necesitan una persona.
+   */
+  return { categoria: 'Otro', cliente: false, falta: false };
 }
 
 function mapearLicencia(bruto: string): { licencia: Licencia | null; motivo: CodigoMotivo | null } {
@@ -621,6 +674,18 @@ function candidataDeEquipo(
   const { categoria, cliente, falta: tipoAusente } = mapearCategoria(tipoBruto);
   if (tipoAusente) anota('SIN_TIPO');
 
+  /**
+   * El tipo original, cuando la categoría no lo conserva.
+   *
+   * «Switch», «Access Point», «Proyector» y los otros cuarenta caen en `Otro`,
+   * y sin esta nota la base perdería la única palabra que dice qué es el
+   * aparato. Es el mismo criterio que la sala: un dato que el modelo no tiene
+   * columna para guardar no se tira, se escribe donde se pueda leer.
+   */
+  if (categoria === 'Otro' && limpio(tipoBruto)) {
+    notas.push(`Tipo de origen: ${limpio(tipoBruto)}`);
+  }
+
   const { estado: estadoBase, prestado_a, motivo: motivoEstado } = mapearEstado(
     f.por('estado'),
   );
@@ -701,18 +766,16 @@ function candidataDeEquipo(
   anota(motivoUbicacion);
 
   /**
-   * La sala dentro de la sede (D48).
+   * La sala se rellena MÁS TARDE, al resolver la sede contra el catálogo.
    *
-   * `mapearUbicacion` resuelve la SEDE —Medellín, Bogotá— y descarta lo que no
-   * reconoce. Pero «P3 OCCI», «Pecera» o «P3 Rack» no son sedes: son dónde está
-   * el equipo DENTRO de una, y sin esta columna se perderían las 273 filas que
-   * lo dicen.
+   * Aquí todavía no se puede: `mapearUbicacion` devuelve el texto tal cual como
+   * `sede` para todo lo que no reconoce, así que «P3 OCCI» pasa por sede válida.
+   * Quién es sede de verdad solo se sabe al buscarla en `sedePorNombre`, y eso
+   * ocurre ya dentro de la transacción de carga.
    *
-   * Se guarda cuando la ubicación NO era una sede: si lo era, ya está en
-   * `sede_id` y repetirla aquí sería el mismo dato dos veces, con dos sitios
-   * donde corregirlo.
+   * Calcularla aquí dejó 331 filas sin sede y sin sala a la vez: perdían el
+   * único dato que decía dónde estaban.
    */
-  const ubicacionDetalle = sede ? null : limpio(ubicacionOriginal);
 
   // ------------------------------------------------------------ responsable
   const respBruto = f.por('responsable');
@@ -773,7 +836,8 @@ function candidataDeEquipo(
     sedeNombre: sede,
     datos: {
       asignable: f.fuente.mapa.asignable,
-      ubicacion_detalle: ubicacionDetalle,
+      // Se rellena al resolver la sede. Ver el bucle de sedes en `main`.
+      ubicacion_detalle: null,
       categoria,
       etiqueta,
       nombre_equipo: nombreEquipo,
@@ -1371,6 +1435,13 @@ async function main() {
    * puede correr mientras se leen: necesita todas sus filas juntas.
    */
   const perifericosPorHoja: { fuente: Fuente; filas: Fila[] }[] = [];
+  /**
+   * Las hojas de equipos, guardadas para buscar duplicados por LIBRO.
+   *
+   * Igual que los periféricos: la detección necesita todas las filas juntas, y
+   * en este caso las de todas las hojas del mismo fichero.
+   */
+  const filasDeEquipoPorLibro: { fuente: Fuente; filas: Fila[] }[] = [];
   const hashes = new Map<string, string>();
 
   /**
@@ -1438,16 +1509,36 @@ async function main() {
       continue;
     }
 
-    const dupSerialEq = repetidos(filas, 'serial');
-    const dupEtiquetaEq = repetidos(filas, 'etiqueta');
-    const dupNombreEq = repetidos(filas, 'nombreEquipo');
-    for (const f of filas) {
-      candidatas.push(candidataDeEquipo(f, dupSerialEq, dupEtiquetaEq, dupNombreEq));
-    }
+    filasDeEquipoPorLibro.push({ fuente, filas });
 
-    // `INV - CE` trae una pantalla y un teclado por fila, con etiqueta propia y
-    // única: son activos, no campos (D50). Salen como filas aparte.
-    for (const f of filas) candidatas.push(...derivadosDeFila(f));
+  }
+
+  /**
+   * Los duplicados se buscan en el LIBRO ENTERO, no hoja por hoja (D49).
+   *
+   * La misma máquina aparece en dos hojas del libro de RIWI: sus tres equipos
+   * de renting están también en `INV RIWI STAFF` con el mismo serial. Buscando
+   * por hoja, cada copia es única en la suya y ninguna se marca — dos filas para
+   * una máquina, las dos limpias. Es justo lo que el propio fichero llama
+   * «inconsistencia dentro del archivo origen».
+   */
+  for (const ruta of new Set(filasDeEquipoPorLibro.map((x) => x.fuente.ruta))) {
+    const delLibro = filasDeEquipoPorLibro.filter((x) => x.fuente.ruta === ruta);
+    const todas = delLibro.flatMap((x) => x.filas);
+    const dupSerial = repetidos(todas, 'serial');
+    const dupEtiqueta = repetidos(todas, 'etiqueta');
+    const dupNombre = repetidos(todas, 'nombreEquipo');
+
+    for (const { fuente, filas } of delLibro) {
+      for (const f of filas) {
+        candidatas.push(candidataDeEquipo(f, dupSerial, dupEtiqueta, dupNombre));
+      }
+      // `INV - CE` trae una pantalla y un teclado por fila, con etiqueta propia
+      // y única: son activos, no campos (D50). Salen como filas aparte.
+      if (fuente.mapa.nombre === 'INV - CE') {
+        for (const f of filas) candidatas.push(...derivadosDeFila(f));
+      }
+    }
   }
 
   for (const { fuente, filas: filasPe } of perifericosPorHoja) {
@@ -1660,6 +1751,17 @@ async function main() {
     for (const c of aImportar) {
       if (!c.sedeNombre) continue;
       const sede_id = sedePorNombre.get(norm(c.sedeNombre)) ?? null;
+
+      /**
+       * No era una sede: era la SALA (D48).
+       *
+       * «P3 OCCI», «Pecera», «P3 Rack», «BeLAB»… Aquí es donde por fin se sabe,
+       * porque es donde se busca en el catálogo de sedes reales. El texto se
+       * conserva: para un equipo que no es de nadie, la sala es la única forma
+       * de encontrarlo físicamente.
+       */
+      if (!sede_id) c.datos.ubicacion_detalle = c.sedeNombre;
+
       if (!sede_id && !c.motivos.includes('UBICACION_FUERA_DE_SEDES')) {
         c.motivos.push('UBICACION_FUERA_DE_SEDES');
       }
@@ -1786,6 +1888,27 @@ async function main() {
       });
 
       await tx.insert(licencias).values(valoresLic);
+
+      /**
+       * Los contadores de la corrida, recalculados desde la BD.
+       *
+       * `EQUIPO_NO_ENCONTRADO` solo se conoce AQUÍ, al fallar la búsqueda de la
+       * etiqueta, igual que `UBICACION_FUERA_DE_SEDES` para los equipos. Si se
+       * dejaran los números que se escribieron antes, `filas_marcadas` iría por
+       * debajo de lo que la tabla acaba teniendo — y el grupo G del verificador
+       * lo ve, que es exactamente lo que pasó.
+       */
+      await tx.execute(sql`
+        UPDATE importaciones i SET
+          filas_insertadas =
+            (SELECT count(*) FROM equipos e WHERE e.importacion_id = i.id)
+          + (SELECT count(*) FROM licencias l WHERE l.importacion_id = i.id),
+          filas_marcadas =
+            (SELECT count(*) FROM equipos e
+              WHERE e.importacion_id = i.id AND e.requiere_revision)
+          + (SELECT count(*) FROM licencias l
+              WHERE l.importacion_id = i.id AND l.requiere_revision)
+      `);
       resumen.licencias = valoresLic.length;
       resumen.licenciasSinEquipo = valoresLic.filter(
         (v) => v.equipo_id === null && v.equipo_referencia !== null,
