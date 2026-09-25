@@ -1,0 +1,47 @@
+# HTTPS para RiwiStock.
+#
+# Caddy saca y renueva el certificado de Let's Encrypt solo, con la condición de
+# que el dominio de {$DOMINIO} apunte ya a la IP de esta máquina y los puertos
+# 80 y 443 estén abiertos.
+#
+# ============================================================================
+# ESTO NO ES OPCIONAL: SIN HTTPS NADIE PUEDE INICIAR SESIÓN.
+# ============================================================================
+#
+# `server/sesion.ts` pone la cookie con `secure: true` cuando NODE_ENV es
+# production. Una cookie `secure` no viaja por HTTP plano, así que el navegador
+# la descarta, el login «funciona» y la siguiente petición vuelve a pedir
+# sesión. El síntoma es un bucle de login, no un error.
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# Cabeceras que el navegador respeta y no cuestan nada.
+	header {
+		# Un año de HTTPS obligatorio para este dominio.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "same-origin"
+		# La aplicación no hace ninguna llamada externa desde la etapa 4b, así
+		# que puede declararlo: si alguien añade una, esta línea la rompe y se
+		# entera antes de desplegarla.
+		Content-Security-Policy "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
+		-Server
+	}
+
+	reverse_proxy app:3000 {
+		# `trust proxy` está puesto en server/app.ts, así que Express se cree
+		# estas cabeceras: sin ellas, el límite de intentos de login contaría
+		# todas las peticiones como si vinieran de la IP de Caddy y bloquearía a
+		# todo el mundo en cuanto alguien fallara cinco veces.
+		header_up X-Real-IP {remote_host}
+	}
+
+	log {
+		output file /data/acceso.log {
+			roll_size 10MiB
+			roll_keep 5
+		}
+	}
+}

@@ -80,9 +80,21 @@ se eliminó entero — `docs/decisiones-03.md` §D12 — y con él la única sal
 
 Lo que esto permite, y conviene aprovechar:
 
-- **La máquina puede vivir sin salida a internet.** Un cortafuegos que bloquee
-  todo el tráfico saliente no rompe nada de la aplicación. Solo hace falta
+- **La aplicación puede vivir sin salida a internet.** Un cortafuegos que
+  bloquee todo el tráfico saliente no rompe nada de ella. Solo hace falta
   alcanzarla desde la red interna, y que ella alcance a Postgres.
+
+  **Caddy sí necesita salida**, y eso es nuevo desde el despliegue en la VPS: el
+  certificado de Let's Encrypt se pide y se renueva por ACME, contra un servidor
+  de fuera. Bloquear el saliente en esa máquina no rompe nada hoy — el
+  certificado ya está emitido — y rompe el sitio entero **noventa días después**,
+  cuando toca renovar. Es un fallo diferido y sin aviso, así que si el saliente
+  se cierra, hay que dejar pasar el ACME de Caddy o pasar a un certificado
+  puesto a mano.
+
+  Con la aplicación servida solo en la red interna y sin dominio público, Caddy
+  no hace falta: se puede levantar únicamente `postgres` y `app`, que es como se
+  probó el compose de producción en el portátil.
 - **No hay ninguna clave de proveedor externo que custodiar.** La única clave
   sensible sigue siendo `ENCRYPTION_KEY`, que no sale de la máquina; su
   procedimiento está más abajo.
@@ -204,7 +216,233 @@ Funciones y triggers no los modela drizzle-kit. Van en un archivo aparte creado
 con `npx drizzle-kit generate --custom --name=...`, que registra el archivo en
 el journal sin generar SQL.
 
-## Restauración de backups
+## Producción: la VPS
 
-Fuera de alcance hasta la etapa 7. El §5 del plan la exige y añade que un backup
-no verificado no es un backup.
+Todo lo anterior es el portátil. Producción son tres ficheros aparte:
+
+| Fichero | Qué es |
+| --- | --- |
+| `Dockerfile` | La imagen. Dos etapas: la primera construye con todo, la segunda se queda con lo que sirve. Sin `vite`, sin `tsx`, sin tests, sin Excel. |
+| `docker-compose.produccion.yml` | Los tres servicios: base, aplicación, proxy. |
+| `Caddyfile` | El HTTPS, con certificado automático de Let's Encrypt. |
+
+`docker-compose.yml` (el de desarrollo) sigue siendo otra cosa y no se usa en la
+VPS: aquel publica el 5433 para poder abrir `psql` desde el portátil.
+
+### Lo que no está expuesto
+
+Solo Caddy publica puertos (80 y 443). Postgres **no tiene `ports`** y la
+aplicación solo `expose: 3000`, que es visible dentro de la red de compose y no
+desde fuera de la máquina. Añadir un `ports` a Postgres «para poder mirar» lo
+pone en internet entero: para eso está `docker compose exec -T postgres psql`,
+que no abre nada.
+
+### El `.env` de la VPS
+
+Las mismas variables que en desarrollo menos las de desarrollo, más `DOMINIO`:
+
+```
+POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+SESSION_SECRET, ENCRYPTION_KEY
+ORGANIZACION_RAZON_SOCIAL, ORGANIZACION_NIT
+DOMINIO
+```
+
+No hacen falta `POSTGRES_PORT`, `DATABASE_URL` (la arma el compose con el nombre
+de servicio interno) ni `DATABASE_URL_TEST`. Los `ADMIN_*` tampoco: la cuenta se
+crea a mano con `usuario:prod`, y así la contraseña no queda en un fichero.
+
+### Cambiar el `.env` no basta: hay que recrear
+
+`docker compose restart app` **reinicia el contenedor que ya existe, con el
+entorno que tenía cuando se creó**. Un cambio en `.env` no le llega. Hay que
+usar `up -d`, que lo recrea.
+
+Esto costó un rato de diagnóstico: tras cambiar `ENCRYPTION_KEY` y hacer
+`restart`, el servidor se negó a arrancar diciendo *«ENCRYPTION_KEY incorrecta o
+cambiada»* — que es verdad desde su punto de vista, pero el mensaje parece un
+desastre de datos y el problema era el comando. La comprobación de arranque hizo
+exactamente su trabajo.
+
+    docker compose -f docker-compose.produccion.yml up -d    # sí
+    docker compose -f docker-compose.produccion.yml restart  # no aplica el .env
+
+### Las herramientas en la imagen son `.cjs`
+
+`tsx` es una dependencia de desarrollo y no existe en la imagen de producción, así
+que el migrador, la siembra, el creador de usuarios y el verificador de cifrado se
+compilan con esbuild al construir. Se invocan por su ruta:
+
+```bash
+docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/migrar.cjs
+docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/semillas.cjs
+docker compose -f docker-compose.produccion.yml exec -it app node dist/herramientas/crear-usuario.cjs \
+  johan@bbl.local "Johan Rivera" admin
+```
+
+La extensión es `.cjs` y no `.js` a propósito: `package.json` declara
+`"type": "module"`, así que un `.js` con `require()` revienta al arrancar con
+`require is not defined in ES module scope`. El `Dockerfile` pasa
+`--out-extension:.js=.cjs` a esbuild por eso.
+
+### Puesta en marcha, en orden
+
+```bash
+git clone … && cd Inventario-General-Riwi
+cp .env.example .env && $EDITOR .env          # rellenar, más DOMINIO
+docker compose -f docker-compose.produccion.yml up -d --build
+docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/migrar.cjs
+docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/semillas.cjs
+```
+
+Después, la cuenta de administrador (interactiva, pide la contraseña por stdin):
+
+```bash
+docker compose -f docker-compose.produccion.yml exec -it app \
+  node dist/herramientas/crear-usuario.cjs johan@bbl.local "Johan Rivera" admin
+```
+
+### La carga inicial de los datos va por volcado, no por Excel
+
+Los 938 equipos ya están importados, limpios y revisados en el portátil. En la
+VPS **no se vuelve a importar**: se lleva un volcado.
+
+Es lo correcto por dos motivos. Uno, los Excel de `data/origen/` llevan
+contraseñas en texto plano y no deben salir de esa carpeta (regla 6): subirlos a
+la VPS sería mandarlas a un servidor. Dos, reimportar significa volver a pasar
+por los 495 marcados y las decisiones ya tomadas sobre ellos.
+
+```bash
+# En el portátil
+docker compose exec -T postgres pg_dump -Fc -f /tmp/carga-inicial.dump
+docker cp "$(docker compose ps -q postgres):/tmp/carga-inicial.dump" ./carga-inicial.dump
+scp carga-inicial.dump usuario@vps:/tmp/
+
+# En la VPS
+docker cp /tmp/carga-inicial.dump \
+  "$(docker compose -f docker-compose.produccion.yml ps -q postgres):/respaldos/"
+CONFIRMAR=RESTAURAR ./db/restaurar.sh --en-serio /respaldos/carga-inicial.dump
+```
+
+> **La `ENCRYPTION_KEY` de la VPS tiene que ser la MISMA que la del portátil.**
+> Los `bios_password` y las keys de licencia del volcado están cifrados con
+> ella, y no viaja dentro del dump. Generar una nueva para producción —que es lo
+> que uno haría por costumbre— deja 72 contraseñas BIOS y 29 keys ilegibles para
+> siempre. `db/restaurar.sh` lo comprueba y se niega a dar el respaldo por bueno,
+> pero conviene no llegar ahí.
+
+## Respaldos y restauración
+
+Etapa 7. El §5 del plan lo exige y añade que **un backup no verificado no es un
+backup**, así que ninguno de los dos scripts se conforma con que el comando
+termine bien.
+
+### `db/respaldar.sh`
+
+Vuelca a `/respaldos` (volumen aparte del de datos, para que un disco lleno o un
+`docker volume rm` no se lleve el original y la copia a la vez), **restaura el
+volcado en una base temporal y compara los conteos de las seis tablas**, y solo
+entonces rota conservando `RETENER=14`.
+
+```bash
+./db/respaldar.sh            # verifica y rota
+RETENER=30 ./db/respaldar.sh # conservar más
+```
+
+En cron, con la ruta absoluta del repo:
+
+```cron
+15 3 * * * cd /srv/riwistock && ./db/respaldar.sh >> /var/log/riwistock-respaldo.log 2>&1
+```
+
+Lo que **no** hace, y hay que hacer aparte: sacar la copia de la máquina. Un
+respaldo en el mismo servidor protege de un `DROP TABLE`, no de perder el
+servidor.
+
+### `db/restaurar.sh`
+
+```bash
+./db/restaurar.sh                       # PRUEBA: base temporal, no toca producción
+./db/restaurar.sh --en-serio            # sustituye la base real
+./db/restaurar.sh /respaldos/x.dump     # elige el fichero
+```
+
+Sin `--en-serio` restaura en una base desechable y la borra al terminar. Es el
+modo que se puede correr cualquier día sin miedo, y el que conviene correr de vez
+en cuando: **un respaldo que nunca se ha restaurado no se sabe si sirve**.
+
+La prueba llega hasta descifrar. `pg_restore` puede terminar en 0 y dejar una
+base cuyos secretos son ilegibles, porque la `ENCRYPTION_KEY` no está dentro del
+volcado. `db/verificar-cifrado.cjs` descifra una fila real y **falla si no hay ni
+una fila cifrada**: sin nada que descifrar no hay nada comprobado, y un verde de
+vacío en la prueba de un respaldo es justo lo que no sirve.
+
+Cada causa tiene su código de salida, porque no son lo mismo:
+
+| Código | Significa |
+| --- | --- |
+| 0 | la clave descifra |
+| 1 | la clave **no** descifra — un hecho |
+| 2 | no hay ni una fila cifrada — no se comprobó nada |
+| 3 | no se pudo comprobar — ausencia de información, no un diagnóstico |
+
+El 3 existe porque la primera versión salía con 1 pasara lo que pasara, y el
+script traducía ese 1 a «tus secretos son ilegibles». Con la base caída ese
+mensaje es falso y manda a buscar una clave que no se ha perdido.
+
+### `--en-serio` vacía los esquemas; `--clean` no bastaba
+
+`pg_restore --clean --if-exists` borra solo los objetos **que están en el
+volcado**. Lo creado después sobrevive. Se comprobó creando una tabla después del
+respaldo y viéndola seguir ahí mientras el script decía «producción restaurada y
+comprobada».
+
+Lo grave no es la tabla suelta: es el caso mixto. Si entre el respaldo y la
+restauración se aplicó una migración, `drizzle.__drizzle_migrations` vuelve al
+estado del volcado —dice que esa migración no corrió— mientras las tablas que
+creó se quedan puestas. La siguiente migración muere con `already exists` y el
+motivo está dos semanas atrás.
+
+Ahora se vacían **todos** los esquemas de la aplicación y luego se restaura. Son
+dos y no uno: drizzle guarda su tabla de migraciones en un esquema llamado
+`drizzle`, y vaciando solo `public` el `pg_restore` moría con
+`relation "__drizzle_migrations_id_seq" already exists`.
+
+Antes de vaciar, el script deja un volcado de seguridad en
+`/respaldos/antes-de-restaurar-<sello>.dump`. Si el `pg_restore` falla a mitad, la
+base se quedaría sin lo que tenía y sin lo que iba a tener; ese fichero es la
+vuelta atrás, y el script dice el comando exacto para usarlo.
+
+### `db/probar-respaldo.sh`: el ciclo entero, repetible
+
+Corre las siete cosas de una vez y sale con código distinto de cero si alguna
+falla. **Se corre antes de un despliegue y una vez en la VPS recién montada.**
+
+    ./db/probar-respaldo.sh
+
+Comprueba que las cuatro herramientas `.cjs` de la imagen cargan, que
+`verificar-cifrado` devuelve sus cuatro códigos distintos, que `respaldar.sh`
+deja un fichero verificado, que la restauración de prueba llega a descifrar, que
+`--en-serio` **no** se dispara sin confirmación, que una tabla creada después del
+respaldo desaparece al restaurar, y que al terminar la base tiene las mismas
+filas que al empezar.
+
+Aborta si la base no tiene ni una fila cifrada: sobre datos sin cifrar pasaría
+sin comprobar el descifrado, que es su motivo de existir.
+
+Existe porque los cinco fallos que tenían estos scripts la primera vez que se
+corrieron de verdad no se ven leyendo el código, y `npm test` no toca nada de
+esto. El paso 6 se falsificó volviendo `restaurar.sh` a `--clean` para ver que
+salía en rojo.
+
+### La confirmación se lee del terminal
+
+`--en-serio` pide escribir `RESTAURAR`. Se lee de `/dev/tty`, no de stdin, porque
+`docker compose exec -T` hereda stdin y lo consume hasta EOF: cuando el script
+llegaba a preguntar ya no había nada que leer, `read` devolvía 1 y `set -e` lo
+mataba justo después de imprimir la pregunta, sin restaurar y sin decir por qué.
+A mano no se nota, porque el teclado no se agota.
+
+Sin terminal (cron, CI) **no se asume que sí**: hay que pasar
+`CONFIRMAR=RESTAURAR` a propósito. Un script que sustituye la base de producción
+no continúa porque nadie haya dicho que no.

@@ -1,0 +1,17 @@
+# Fin de línea, para que el despliegue no muera por un carácter invisible.
+#
+# Un `.sh` con CRLF en Linux no dice «tiene CRLF»: dice
+# `bad interpreter: /usr/bin/env bash^M: no such file or directory`, o peor,
+# se ejecuta y falla en una comparación que debería cuadrar. Estos ficheros se
+# escriben en Windows y se ejecutan en la VPS, así que se fijan a LF.
+* text=auto eol=lf
+
+*.sh      text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf
+*.yml     text eol=lf
+
+# Binarios: que git no toque nada.
+*.xlsx binary
+*.png  binary
+*.pdf  binary

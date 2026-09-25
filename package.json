@@ -9,6 +9,8 @@
     "start": "node dist/server.cjs",
     "clean": "rm -rf dist server.cjs",
     "lint": "tsc --noEmit",
+    "test": "node --import tsx --test tests/todos.test.ts",
+    "test:preparar": "tsx db/preparar-test.ts",
     "db:up": "docker compose up -d",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d",
@@ -18,12 +20,13 @@
     "db:verificar-datos": "docker compose exec -T postgres psql -v ON_ERROR_STOP=1 < db/verificar-datos.sql",
     "migrate": "tsx db/migrar.ts",
     "migrate:generate": "drizzle-kit generate",
+    "migrate:prod": "node dist/herramientas/migrar.cjs",
     "seed": "tsx db/semillas.ts",
+    "seed:prod": "node dist/herramientas/semillas.cjs",
     "import": "tsx db/importar.ts",
     "usuario": "tsx db/crear-usuario.ts",
-    "api": "tsx server/arrancar.ts",
-    "test:preparar": "tsx db/preparar-test.ts",
-    "test": "node --import tsx --test tests/todos.test.ts"
+    "usuario:prod": "node dist/herramientas/crear-usuario.cjs",
+    "api": "tsx server/arrancar.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.1.14",

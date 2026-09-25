@@ -1,0 +1,25 @@
+# Lo que NO entra en la imagen.
+#
+# `data/origen` es lo primero de la lista y el motivo es la regla 6 del
+# proyecto: contiene los Excel con contraseñas en texto plano. Una imagen es un
+# artefacto que se copia, se sube a un registro y se queda en el disco de quien
+# la descargue.
+data/
+
+node_modules
+dist
+.git
+.github
+.scratch
+
+# Los secretos viven en el entorno del servidor, nunca dentro de la imagen.
+.env
+.env.*
+!.env.example
+
+# Ruido de desarrollo.
+*.log
+coverage
+.DS_Store
+tests
+docs

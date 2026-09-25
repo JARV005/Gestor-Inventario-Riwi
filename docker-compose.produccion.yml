@@ -1,0 +1,79 @@
+# RiwiStock en producción.
+#
+#   docker compose -f docker-compose.produccion.yml up -d --build
+#
+# Tres servicios: la base, la aplicación y el proxy que pone el HTTPS. Postgres
+# NO publica puerto: solo lo alcanza la aplicación por la red interna, así que
+# la base no está en internet aunque la máquina sí.
+#
+# El fichero de desarrollo (`docker-compose.yml`) sigue existiendo y es otra
+# cosa: aquel publica el 5433 para poder abrir `psql` desde el portátil.
+
+name: riwistock
+
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?falta POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?falta POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:?falta POSTGRES_DB}
+      PGUSER: ${POSTGRES_USER}
+      PGDATABASE: ${POSTGRES_DB}
+      # El mismo ordenamiento que en desarrollo: la 'ñ' entre 'n' y 'o'. Solo
+      # aplica al crear el volumen, así que tiene que estar desde el primer día.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale-provider=icu --icu-locale=es-CO --locale=C.UTF-8"
+    # SIN `ports`. Es la diferencia que hace que la base no sea alcanzable desde
+    # fuera de la máquina: publicarla aquí la expondría a internet entero.
+    volumes:
+      - datos:/var/lib/postgresql/data
+      # Los respaldos caen en un volumen aparte del de datos. En el mismo, un
+      # disco lleno o un borrado del volumen se lleva las dos cosas a la vez.
+      - respaldos:/respaldos
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      # Dentro de la red de compose, la base se llama `postgres` y escucha en el
+      # 5432 de siempre: el 5433 era para no chocar con un Postgres del portátil.
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      SESSION_SECRET: ${SESSION_SECRET:?falta SESSION_SECRET}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?falta ENCRYPTION_KEY}
+      ORGANIZACION_RAZON_SOCIAL: ${ORGANIZACION_RAZON_SOCIAL:-}
+      ORGANIZACION_NIT: ${ORGANIZACION_NIT:-}
+    # Tampoco publica puerto: solo Caddy habla con ella.
+    expose:
+      - '3000'
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - '80:80'
+      - '443:443'
+    environment:
+      DOMINIO: ${DOMINIO:?falta DOMINIO en .env (o usa el perfil sin TLS)}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_datos:/data
+      - caddy_config:/config
+
+volumes:
+  datos:
+  respaldos:
+  caddy_datos:
+  caddy_config:
