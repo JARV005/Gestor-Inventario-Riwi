@@ -327,6 +327,44 @@ export interface CierreEnBloque {
   }[];
 }
 
+/**
+ * Una licencia de software (D43).
+ *
+ * **No trae la key**, y nunca lo hará: es un secreto del §5, igual que
+ * `bios_password`. Lo que viaja es `tiene_key`, porque quien mira la lista
+ * necesita saber si la licencia está completa, no cuál es su clave. Para verla
+ * hay un endpoint aparte que exige admin y deja su fila en `auditoria`.
+ */
+export interface Licencia {
+  id: string;
+  tipo: string;
+  descripcion: string;
+  equipo_id: string | null;
+  /**
+   * Lo que decía el Excel, se haya resuelto o no.
+   *
+   * Cuando `equipo_id` es null, esto es lo único que dice a qué apuntaba: las
+   * doce que van a equipos `BAQ-000xx` de Barranquilla se reconciliarán por
+   * aquí cuando lleguen sus ficheros.
+   */
+  equipo_referencia: string | null;
+  estado: 'Activada' | 'Disponible' | 'Vencida' | 'Retirada';
+  usuario_responsable: string | null;
+  ubicacion: string | null;
+  notas: string | null;
+  requiere_revision: boolean;
+  created_at: string;
+  /** Si tiene key registrada. NO es la key. */
+  tiene_key: boolean;
+}
+
+export interface ResumenLicencias {
+  por_estado: { estado: string; licencias: number }[];
+  /** Las que apuntan a un equipo que no está. El número que pide otra sede. */
+  sin_equipo_resuelto: number;
+  total: number;
+}
+
 /** Una fila del listado de actas. */
 export interface ActaResumen {
   id: string;

@@ -532,9 +532,26 @@ export const InventoryView: React.FC<InventoryViewProps> = ({
                   >
                     <td className="px-4 py-3 font-mono text-xs text-brand">{e.etiqueta ?? '—'}</td>
                     <td className="px-4 py-3">
-                      <div className="font-medium text-ink">{nombreDe(e)}</div>
+                      <div className="font-medium text-ink flex items-center gap-1.5">
+                        {nombreDe(e)}
+                        {/* D44. Va aquí y no en una columna propia: es una
+                            propiedad del equipo —qué ES— y no un estado. Una
+                            columna más para una bandera que llevan dos tercios
+                            de las filas empujaría fuera las que sí se leen. */}
+                        {e.asignable === false && (
+                          <span
+                            className="text-[10px] px-1.5 py-0.5 rounded bg-brand-subtle text-brand border border-brand/30 font-semibold"
+                            title="Infraestructura: no se asigna, ni se reserva, ni se presta, ni sale en un acta. Mantenimiento sí aplica."
+                          >
+                            infra
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-ink-muted">
                         {[e.marca, e.modelo].filter(Boolean).join(' ') || e.categoria}
+                        {/* La sala, cuando la hay (D48). Para un equipo que no
+                            es de nadie, es la única forma de encontrarlo. */}
+                        {e.ubicacion_detalle ? ` · ${e.ubicacion_detalle}` : ''}
                       </div>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-ink-muted">{e.serial ?? '—'}</td>

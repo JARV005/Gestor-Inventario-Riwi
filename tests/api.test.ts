@@ -291,6 +291,86 @@ describe('campos cifrados: la capa sobre el código', () => {
  * Es estático porque el daño no se ve al generar: el PDF sale bien, y lo que
  * falla es la comparación contra las actas emitidas antes del cambio.
  */
+/**
+ * Ningún componente llama a un hook después de un `return` temprano.
+ *
+ * ==========================================================================
+ * ESTE CASO EXISTE PORQUE PASÓ, Y DEJÓ UNA PANTALLA INACCESIBLE.
+ * ==========================================================================
+ *
+ * En la 5g, el `useEffect` que limpia los filtros del buscador quedó por
+ * debajo de `if (cargando) return`. Durante la carga React ejecutaba 31 hooks
+ * y salía; cuando llegaban los datos ejecutaba 32. React aborta el render con
+ * «Rendered more hooks than during the previous render» y el navegador se
+ * queda colgado — ni «no carga» ni un error: la pestaña deja de responder.
+ *
+ * **No lo vio nada.** `tsc` pasa, porque es JavaScript válido. La batería
+ * entera pasa, porque ningún caso renderiza componentes. Solo se ve abriendo
+ * la pantalla, y eso no lo hace ningún test de este proyecto.
+ *
+ * Es estático y aproximado a propósito: la herramienta buena para esto es
+ * `eslint-plugin-react-hooks`, que no está instalado —añadir una dependencia
+ * se propone antes—. Mientras tanto, esto cubre el caso concreto que ocurrió.
+ */
+describe('componentes: ningún hook después de un return temprano', () => {
+  it('los hooks van todos antes del primer return condicional', () => {
+    const dir = join(process.cwd(), 'src', 'components');
+    const culpables: string[] = [];
+
+    for (const nombre of readdirSync(dir).filter((f) => f.endsWith('.tsx'))) {
+      const texto = readFileSync(join(dir, nombre), 'utf8');
+
+      // Comentarios fuera, conservando los saltos: los números de línea del
+      // informe tienen que ser los reales, y esta prosa habla de `useEffect`.
+      const codigo = texto
+        .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
+        .replace(/(^|[^:])\/\/[^\n]*/g, (m, antes) => antes + ' '.repeat(m.length - antes.length));
+
+      const lineas = codigo.split('\n');
+
+      /**
+       * Cada componente por separado.
+       *
+       * Un fichero puede tener varios —`EmployeesView` lleva dentro
+       * `FormularioEmpleado`— y los hooks del segundo van legítimamente
+       * después del `return` del primero. Sin trocear, eso sería un falso
+       * positivo que obligaría a desactivar el caso entero.
+       */
+      const inicios: number[] = [];
+      lineas.forEach((l, i) => {
+        if (/^(export )?const \w+: React\.FC/.test(l)) inicios.push(i);
+      });
+
+      for (const [n, desde] of inicios.entries()) {
+        const hasta = inicios[n + 1] ?? lineas.length;
+        const cuerpo = lineas.slice(desde, hasta);
+
+        // El primer `return` de guarda: dos espacios de sangría, dentro del
+        // componente y no de una función anidada.
+        const iReturn = cuerpo.findIndex((l) => /^  if \(.*\)\s*return /.test(l));
+        if (iReturn < 0) continue;
+
+        cuerpo.slice(iReturn + 1).forEach((l, k) => {
+          if (/^  (const .*= )?use(State|Effect|Callback|Memo|Ref|Reducer|Context)\(/.test(l)) {
+            culpables.push(
+              `${nombre}:${desde + iReturn + k + 2} — hook después del return de la línea ` +
+                `${desde + iReturn + 1}`,
+            );
+          }
+        });
+      }
+    }
+
+    assert.deepEqual(
+      culpables,
+      [],
+      `hooks después de un return temprano:\n  ${culpables.join('\n  ')}\n` +
+        `React exige que sean los mismos y en el mismo orden en cada render: la ` +
+        `pantalla se cuelga al llegar los datos.`,
+    );
+  });
+});
+
 describe('marca: el logo de la aplicación no entra en las actas', () => {
   it('nada del servidor importa del cliente', () => {
     const raices = ['db', 'server'];

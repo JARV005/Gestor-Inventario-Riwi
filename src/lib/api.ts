@@ -21,6 +21,8 @@ import type {
   MantenimientoConEquipo,
   CierreEnBloque,
   ItemChequeo,
+  Licencia,
+  ResumenLicencias,
   Movimiento,
   Prestatario,
   ModoActa,
@@ -224,6 +226,39 @@ export const api = {
     pedir<{ empleado: EmpleadoConConteo }>('/api/empleados', {
       method: 'POST',
       body: JSON.stringify(datos),
+    }),
+
+  /** Las licencias, con su resumen. La key NO viene aquí (D43). */
+  licencias: (f: Record<string, string | number | boolean | undefined> = {}) =>
+    pedir<{
+      filas: Licencia[];
+      total: number;
+      pagina: number;
+      porPagina: number;
+      resumen: ResumenLicencias;
+    }>(`/api/licencias${consulta(f)}`),
+
+  /**
+   * La key en claro. **Admin, de una en una, y queda registrada.**
+   *
+   * Se pide explícitamente y nunca viene con el listado: es la misma regla que
+   * `bios_password`. Cada llamada escribe su fila en `auditoria` antes de
+   * responder.
+   */
+  keyLicencia: (id: string) => pedir<{ key: string | null }>(`/api/licencias/${id}/key`),
+
+  /** Activar la licencia en un equipo, o soltarla con `equipo_id: null`. */
+  activarLicencia: (id: string, equipo_id: string | null) =>
+    pedir<{ licencia: Licencia }>(`/api/licencias/${id}/activar`, {
+      method: 'POST',
+      body: JSON.stringify({ equipo_id }),
+    }),
+
+  /** Cierra la marca de revisión de una licencia, con su constancia. */
+  licenciaRevisada: (id: string, nota: string | null) =>
+    pedir<{ licencia: Licencia }>(`/api/licencias/${id}/revisada`, {
+      method: 'POST',
+      body: JSON.stringify({ nota }),
     }),
 
   /**

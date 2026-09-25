@@ -18,6 +18,7 @@ import { SedesView } from './components/SedesView';
 import { EmployeesView } from './components/EmployeesView';
 import { MaintenanceView } from './components/MaintenanceView';
 import { HandoverDocumentView } from './components/HandoverDocumentView';
+import { LicensesView } from './components/LicensesView';
 
 import { OnboardingModal } from './components/OnboardingModal';
 import { OffboardingModal } from './components/OffboardingModal';
@@ -160,6 +161,9 @@ export function App() {
               onActaEmitida={recargarResumen}
             />
           )}
+
+          {/* Conectada: pide sus licencias y sus equipos por su cuenta. */}
+          {activeTab === 'licenses' && <LicensesView />}
         </main>
       </div>
 

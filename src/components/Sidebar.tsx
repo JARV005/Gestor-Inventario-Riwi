@@ -7,7 +7,8 @@ import {
   Wrench,
   FileText,
   Building,
-  ArrowRightLeft
+  ArrowRightLeft,
+  KeyRound
 } from 'lucide-react';
 
 import type { Sede } from '../types';
@@ -91,6 +92,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'documents',
       label: 'Generador de Actas',
       icon: FileText,
+      badge: null,
+    },
+    /**
+     * Licencias (D43, etapa 8e).
+     *
+     * Va después de las actas y no entre el inventario y los colaboradores: no
+     * es una pantalla de uso diario, es donde se va a buscar una clave concreta
+     * cuando hay que reinstalar algo.
+     */
+    {
+      id: 'licenses',
+      label: 'Licencias',
+      icon: KeyRound,
       badge: null,
     },
   ];
