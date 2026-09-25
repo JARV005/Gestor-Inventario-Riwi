@@ -27,11 +27,20 @@ import ExcelJS from 'exceljs';
 import { eq, sql } from 'drizzle-orm';
 
 import { cifrar } from './cifrado.js';
+import {
+  HOJAS,
+  HOJAS_IGNORADAS,
+  MARCADORES_DEL_FICHERO,
+  RUTAS,
+  type ColumnasHoja,
+  type MapaHoja,
+} from './hojas.js';
 import { db, pool } from './cliente.js';
 import {
   empleados,
   equipos,
   equiposMotivosRevision,
+  licencias,
   importaciones,
   movimientos,
   sedes,
@@ -45,39 +54,47 @@ const EMAIL_SISTEMA = 'sistema@bbl.local';
 type Empresa = 'RIWI' | 'BBL Labs' | 'Sin clasificar';
 type Prestatario = 'RIWI' | 'BBL Labs' | 'ISF';
 
+/**
+ * Una fuente es ahora una HOJA, no un fichero.
+ *
+ * Hasta la 5e cada fichero tenía dos hojas fijas y bastaba con nombrarlas aquí.
+ * El de RIWI trae quince con juegos de columnas distintos, así que el mapa vive
+ * en `db/hojas.ts` —un dato, no código— y esto solo lo envuelve con la ruta.
+ */
 interface Fuente {
   empresa: Exclude<Empresa, 'Sin clasificar'>;
   ruta: string;
-  hojaEquipos: string;
-  hojaPerifericos: string;
+  mapa: MapaHoja;
 }
 
 /**
- * Los dos archivos, y de qué empresa es cada uno.
+ * Las diecisiete hojas, en el orden en que se leen.
  *
- * El orden importa en un solo sitio y está documentado allí: al resolver los
- * seriales que están en los dos, el archivo del DUEÑO manda en propiedad y
- * specs, y el del PRESTATARIO en quién lo tiene (D33). Quién es cuál lo dicen
- * las marcas de préstamo de las propias filas, no esta lista.
+ * El orden importa en dos sitios y los dos están documentados:
+ *
+ *   1. **Dentro del libro** gana la hoja DESTINO, por más reciente (D49). Es la
+ *      regla que el propio fichero escribió en `REVISIÓN - DETALLE`, y por eso
+ *      `INV RIWI STAFF` va primero: es el destino al que las demás aportaron.
+ *   2. **Entre libros** manda el del DUEÑO en propiedad y specs, y el del
+ *      prestatario en quién lo tiene (D31/D33).
+ *
+ * Se aplican en ese orden: primero el libro consigo mismo, después los dos
+ * entre sí. Al revés habría que decidir con qué versión de la fila de RIWI se
+ * compara la de BBL, que es justo lo que la primera regla responde.
  */
-const FUENTES: Fuente[] = [
-  {
-    empresa: 'RIWI',
-    ruta: 'data/origen/INVENTARIO-RIWI.xlsx',
-    hojaEquipos: 'INV - EQUIPOS',
-    hojaPerifericos: 'INV - PERIFERICOS',
-  },
-  {
-    empresa: 'BBL Labs',
-    ruta: 'data/origen/INVENTARIO-BBL.xlsx',
-    hojaEquipos: 'INVENTARIO EQUIPOS BBL',
-    hojaPerifericos: 'INVENTARIO PERIFERICOS BBL',
-  },
-];
+const FUENTES: Fuente[] = HOJAS.map((mapa) => ({
+  empresa: mapa.empresa,
+  ruta: RUTAS[mapa.empresa],
+  mapa,
+}));
 
-/** Lo que la reconciliación exige antes del COMMIT. Ver `docs/decisiones-05.md`. */
-const ESPERADO_EQUIPOS = 217;
-const ESPERADO_PERIFERICOS = 88;
+/**
+ * Lo que la reconciliación exige antes del COMMIT.
+ *
+ * Sale del catálogo y no de dos constantes escritas a mano: con quince hojas,
+ * un número copiado a mano se queda viejo en cuanto una de ellas crezca.
+ */
+const ESPERADO_FILAS = HOJAS.reduce((a, h) => a + h.filasEsperadas, 0);
 
 // ---------------------------------------------------------------------------
 // Normalización de texto
@@ -102,18 +119,30 @@ const normCab = (s: string) => s.replace(/\s+/g, ' ').trim().toUpperCase();
 /**
  * Marcadores que los Excel usan para decir «aquí no hay dato». Van a NULL.
  *
- * `no tiene` sale de ETIQUETA en BBL (9 veces). `disponible` NO está aquí: es
- * un marcador solo en la columna de la persona, y ahí se trata aparte — en la
- * columna de estado es un valor legítimo.
+ * ============================================================================
+ * LA MITAD DE ESTA LISTA LA ESCRIBIÓ EL PROPIO FICHERO.
+ * ============================================================================
+ *
+ * `MARCADORES_DEL_FICHERO` sale de la fórmula de `CONTROL DE CALIDAD` (D45):
+ * es la lista que quien mantiene el Excel usa para decidir qué no cuenta como
+ * serial. Trajo dos que nosotros no teníamos —`Es de Claro` y `Sin rotulo`— y
+ * sin ellas entraron como etiquetas literales en la primera pasada.
+ *
+ * `sin etiqueta` no está en ninguna de las dos listas y lo encontró la carga:
+ * `ETIQUETA TECLADO` lo trae en cinco filas de `INV - CE`, y como esa columna
+ * solo existe en esa hoja, no salió en la exploración. Cinco teclados con la
+ * etiqueta «Sin etiqueta» chocaron contra el UNIQUE, que es exactamente lo que
+ * ese índice existe para impedir.
+ *
+ * `disponible` NO está aquí: es un marcador solo en la columna de la persona, y
+ * ahí se trata aparte — en la columna de estado es un valor legítimo.
  */
 const MARCADORES = new Set([
-  'n/a',
+  ...MARCADORES_DEL_FICHERO.map((m) => norm(m)),
   'na',
-  'no aplica',
-  'no tiene',
   'ninguno',
   'sin asignar',
-  '-',
+  'sin etiqueta',
   '--',
   '.',
 ]);
@@ -147,7 +176,21 @@ interface Fila {
   numero: number;
   hoja: string;
   fuente: Fuente;
+  /** Por nombre literal de columna. Revienta si no se exigió. */
   celda: (columna: string) => string;
+  /**
+   * Por CONCEPTO, resuelto contra el mapa de la hoja.
+   *
+   * Es lo que permite que una sola función lea las diecisiete: `por('serial')`
+   * devuelve `SERIAL EQUIPO` en catorce hojas y `SERIAL / MAC` en `INV - SEDE`,
+   * sin que quien la llama tenga que saberlo.
+   *
+   * Devuelve '' cuando la hoja no trae ese concepto, y eso NO es un error: que
+   * `INV - AUDIOVISUAL` no tenga estado es un hecho de la hoja. Pedir una
+   * columna que el mapa nombra pero el fichero no tiene sí revienta, y lo hace
+   * en `celda`.
+   */
+  por: (concepto: keyof ColumnasHoja) => string;
 }
 
 /**
@@ -198,7 +241,10 @@ const COLUMNAS_PERIFERICOS = [
  * `'TIPO EQUIPO'` (sin el espacio final que traen los dos) devolvió 98 celdas
  * «vacías» que en realidad estaban llenas.
  */
-function leerHoja(wb: ExcelJS.Workbook, fuente: Fuente, nombreHoja: string, exigidas: string[]) {
+function leerHoja(wb: ExcelJS.Workbook, fuente: Fuente) {
+  const { mapa } = fuente;
+  const nombreHoja = mapa.nombre;
+  const exigidas = mapa.exigidas;
   const hoja = wb.getWorksheet(nombreHoja);
   if (!hoja) {
     const hay = wb.worksheets.map((h) => `"${h.name}"`).join(', ');
@@ -257,6 +303,23 @@ function leerHoja(wb: ExcelJS.Workbook, fuente: Fuente, nombreHoja: string, exig
         }
         return valores.get(k) ?? '';
       },
+      por: (concepto: keyof ColumnasHoja) => {
+        const columna = mapa.col[concepto];
+        // La hoja no trae ese concepto. NO es un error: `INV - AUDIOVISUAL` no
+        // tiene columna de estado y `INV - IMPRESORAS` no tiene tipo, y eso es
+        // un hecho de la hoja.
+        if (!columna) return '';
+        const k = normCab(columna);
+        // Esto sí es un error, y del mapa: dice que existe una columna que el
+        // fichero no tiene. Revienta en vez de leer vacío.
+        if (!indice.has(k)) {
+          throw new Error(
+            `${nombreHoja}: el mapa dice que "${concepto}" es la columna "${columna}", ` +
+              `y la hoja no la trae. Corregir db/hojas.ts.`,
+          );
+        }
+        return valores.get(k) ?? '';
+      },
     });
   }
   return filas;
@@ -288,7 +351,7 @@ const CLAVE_CON_ERRATA = /^[A-Z0-9]{4,6}(-[A-Z0-9]{4,6}){4}$/i;
  */
 function leerSecreto(
   bruto: string,
-  columna: 'SERIAL WINDOWS' | 'BIOS PASSWORD',
+  columna: 'SERIAL WINDOWS' | 'BIOS PASSWORD' | 'KEY / SERIAL LICENCIA',
 ): { cifrado: Buffer | null; motivo: CodigoMotivo | null } {
   const v = bruto.trim();
   if (!v) return { cifrado: null, motivo: null };
@@ -517,22 +580,49 @@ interface Candidata {
     condicion: Condicion | null;
     sesion_usuario: string | null;
     notas: string | null;
+    /** D44: sale del catálogo de hojas, no de la fila. */
+    asignable: boolean;
+    /** D48: la sala dentro de la sede, cuando la hoja la trae. */
+    ubicacion_detalle: string | null;
   };
 }
 
-function candidataDeEquipo(f: Fila, dupSerial: Set<string>, dupEtiqueta: Set<string>): Candidata {
+/** Una licencia leída del Excel, antes de tocar la base (D43). */
+interface CandidataLicencia {
+  archivo: string;
+  hoja: string;
+  fila: number;
+  motivos: CodigoMotivo[];
+  tipo: string;
+  descripcion: string;
+  /** Ya cifrada. En claro no viaja ni un paso. */
+  key_cifrada: Buffer | null;
+  /** Lo que decía el fichero. Se resuelve contra las etiquetas al cargar. */
+  equipo_referencia: string | null;
+  estado: 'Activada' | 'Disponible' | 'Vencida' | 'Retirada';
+  usuario_responsable: string | null;
+  ubicacion: string | null;
+  notas: string | null;
+}
+
+function candidataDeEquipo(
+  f: Fila,
+  dupSerial: Set<string>,
+  dupEtiqueta: Set<string>,
+  dupNombre: Set<string>,
+): Candidata {
   const motivos: CodigoMotivo[] = [];
   const notas: string[] = [];
   const anota = (m: CodigoMotivo | null) => {
     if (m && !motivos.includes(m)) motivos.push(m);
   };
 
-  const tipoBruto = f.celda('TIPO EQUIPO');
+  const tipoBruto = f.por('tipo');
   const { categoria, cliente, falta: tipoAusente } = mapearCategoria(tipoBruto);
   if (tipoAusente) anota('SIN_TIPO');
 
   const { estado: estadoBase, prestado_a, motivo: motivoEstado } = mapearEstado(
-    f.celda('ESTADO DEL EQUIPO'),
+    f.por('estado'),
   );
   anota(motivoEstado);
 
@@ -548,63 +638,89 @@ function candidataDeEquipo(f: Fila, dupSerial: Set<string>, dupEtiqueta: Set<str
   // la traen. Todo el bloque es un marcador, así que entra vacío y marcado. Si
   // solo se tratara la columna de licencia, la cadena acabaría escrita en
   // `procesador`, `disco` y `ram`, y cifrada en `licencia_serial`.
-  const marcadoPrestamo = norm(f.celda('TAMAÑO')) === PRESTAMO_BBL;
+  const marcadoPrestamo = norm(f.por('tamano')) === PRESTAMO_BBL;
   if (marcadoPrestamo) anota('MARCADOR_EN_CAMPO_TECNICO');
 
   // Las dos filas con las columnas corridas desde TIPO DE LICENCIA. No se
   // recolocan —adivinar el orden sería inventar—: se importa lo que se pueda y
   // el bloque desplazado entra vacío.
-  const desplazada = norm(f.celda('TIPO DE LICENCIA')).includes('pulgada');
+  const desplazada = norm(f.por('tipoLicencia')).includes('pulgada');
   if (desplazada) anota('COLUMNAS_DESPLAZADAS');
 
   const bloqueInservible = marcadoPrestamo || desplazada;
 
   const { licencia, motivo: motivoLicencia } = bloqueInservible
     ? { licencia: null, motivo: 'LICENCIA_NO_ES_LICENCIA' as CodigoMotivo }
-    : mapearLicencia(f.celda('TIPO DE LICENCIA'));
+    : mapearLicencia(f.por('tipoLicencia'));
   anota(motivoLicencia);
 
   const secretoWin = bloqueInservible
     ? { cifrado: null, motivo: 'SECRETO_NO_ES_SECRETO' as CodigoMotivo }
-    : leerSecreto(f.celda('SERIAL WINDOWS'), 'SERIAL WINDOWS');
+    : leerSecreto(f.por('serialWindows'), 'SERIAL WINDOWS');
   anota(secretoWin.motivo);
 
   // RIWI no tiene columna BIOS PASSWORD, y eso no es una falta: sus 98 equipos
   // van con NULL. `celda` reventaría si se pidiera, así que se pregunta antes.
   const tieneBios = f.fuente.empresa === 'BBL Labs';
   const secretoBios = tieneBios
-    ? leerSecreto(f.celda('BIOS PASSWORD'), 'BIOS PASSWORD')
+    ? leerSecreto(f.por('biosPassword'), 'BIOS PASSWORD')
     : { cifrado: null, motivo: null };
   anota(secretoBios.motivo);
 
   // ------------------------------------------------------------- identidad
-  const marcaBruta = limpio(f.celda('MARCA'));
-  const { marca, modelo } = normalizarMarca(marcaBruta, limpio(f.celda('MODELO')));
+  const marcaBruta = limpio(f.por('marca'));
+  const { marca, modelo } = normalizarMarca(marcaBruta, limpio(f.por('modelo')));
   // D7 (b): en un PC del cliente la ausencia de marca, serial y etiqueta es
   // esperable — la máquina no es de la empresa y TI no la inventaría.
   // `propiedad = 'Cliente'` ya lo explica; marcarlo serían falsos positivos
   // permanentes en la bandeja.
   if (!marca && !cliente) anota('SIN_MARCA');
 
-  const serial = limpio(f.celda('SERIAL EQUIPO'));
+  const serial = limpio(f.por('serial'));
   if (!serial && !cliente) anota('SIN_SERIAL');
   if (serial && dupSerial.has(norm(serial))) anota('SERIAL_DUPLICADO');
 
-  const etiqueta = limpio(f.celda('ETIQUETA'));
+  const etiqueta = limpio(f.por('etiqueta'));
   if (!etiqueta && !cliente) anota('SIN_ETIQUETA');
   if (etiqueta && dupEtiqueta.has(norm(etiqueta))) anota('ETIQUETA_DUPLICADA');
 
-  const ubicacionOriginal = f.celda('UBICACIÓN');
+  /**
+   * El nombre de red, y si se repite (D45).
+   *
+   * Lo pidió el propio Excel: su `CONTROL DE CALIDAD` marca «Nombre duplicado»
+   * y nosotros no lo comprobábamos. Dos máquinas con el mismo nombre colisionan
+   * en el dominio y en las licencias, así que es un problema real y no una
+   * manía del fichero. Es el único de sus siete casos en el que el Excel era
+   * más estricto que la base.
+   */
+  const nombreEquipo = limpio(f.por('nombreEquipo'));
+  if (nombreEquipo && dupNombre.has(norm(nombreEquipo))) anota('NOMBRE_EQUIPO_DUPLICADO');
+
+  const ubicacionOriginal = f.por('ubicacion');
   const { sede, motivo: motivoUbicacion } = mapearUbicacion(ubicacionOriginal);
   anota(motivoUbicacion);
 
+  /**
+   * La sala dentro de la sede (D48).
+   *
+   * `mapearUbicacion` resuelve la SEDE —Medellín, Bogotá— y descarta lo que no
+   * reconoce. Pero «P3 OCCI», «Pecera» o «P3 Rack» no son sedes: son dónde está
+   * el equipo DENTRO de una, y sin esta columna se perderían las 273 filas que
+   * lo dicen.
+   *
+   * Se guarda cuando la ubicación NO era una sede: si lo era, ya está en
+   * `sede_id` y repetirla aquí sería el mismo dato dos veces, con dos sitios
+   * donde corregirlo.
+   */
+  const ubicacionDetalle = sede ? null : limpio(ubicacionOriginal);
+
   // ------------------------------------------------------------ responsable
-  const respBruto = f.celda('USUARIO RESPONSABLE');
+  const respBruto = f.por('responsable');
   const { persona, motivo: motivoPersona } = leerPersona(respBruto);
   anota(motivoPersona);
   if (motivoPersona) notas.push(`USUARIO RESPONSABLE de origen: "${respBruto}"`);
 
-  const prestaA = leerMarcaPrestamo(respBruto, f.celda('SESION DE USUARIO'));
+  const prestaA = leerMarcaPrestamo(respBruto, f.por('sesion'));
 
   let estado = estadoBase;
   let responsable: string | null = null;
@@ -623,14 +739,14 @@ function candidataDeEquipo(f: Fila, dupSerial: Set<string>, dupEtiqueta: Set<str
     responsable = persona;
   } else {
     anota('RESPONSABLE_EN_ESTADO_NO_ASIGNADO');
-    notas.push(`Responsable "${persona}" con estado "${f.celda('ESTADO DEL EQUIPO')}"`);
+    notas.push(`Responsable "${persona}" con estado "${f.por('estado')}"`);
   }
 
   if (estado === 'Prestado' && !prestado_a) anota('PRESTATARIO_DESCONOCIDO');
 
   // La sesión que no concuerda con el responsable: puede ser un cambio de
   // manos sin registrar. Solo se mira cuando las dos cosas son personas.
-  const sesion = limpio(f.celda('SESION DE USUARIO'));
+  const sesion = limpio(f.por('sesion'));
   if (persona && sesion && sesion.includes('@')) {
     const usuario = norm(sesion.split('@')[0]).replace(/[._-]+/g, ' ');
     const partes = norm(persona).split(' ');
@@ -656,22 +772,24 @@ function candidataDeEquipo(f: Fila, dupSerial: Set<string>, dupEtiqueta: Set<str
     ubicacionOriginal,
     sedeNombre: sede,
     datos: {
+      asignable: f.fuente.mapa.asignable,
+      ubicacion_detalle: ubicacionDetalle,
       categoria,
       etiqueta,
-      nombre_equipo: limpio(f.celda('NOMBRE EQUIPO')),
+      nombre_equipo: nombreEquipo,
       marca,
       modelo,
       serial,
       serial_cargador: null,
       propiedad: cliente ? 'Cliente' : 'Empresa',
-      sistema_operativo: bloqueInservible ? null : limpio(f.celda('SISTEMA OPERATIVO')),
+      sistema_operativo: bloqueInservible ? null : limpio(f.por('sistemaOperativo')),
       licencia_tipo: licencia,
       licencia_serial_cifrado: secretoWin.cifrado,
       bios_password_cifrado: secretoBios.cifrado,
-      tamano_pantalla: bloqueInservible ? null : limpio(f.celda('TAMAÑO')),
-      procesador: bloqueInservible ? null : limpio(f.celda('PROCESADOR')),
-      disco: bloqueInservible ? null : limpio(f.celda('DISCO')),
-      ram: bloqueInservible ? null : limpio(f.celda('RAM')),
+      tamano_pantalla: bloqueInservible ? null : limpio(f.por('tamano')),
+      procesador: bloqueInservible ? null : limpio(f.por('procesador')),
+      disco: bloqueInservible ? null : limpio(f.por('disco')),
+      ram: bloqueInservible ? null : limpio(f.por('ram')),
       estado,
       prestado_a,
       condicion: null,
@@ -698,29 +816,29 @@ function candidataDePeriferico(f: Fila, dupSerial: Set<string>): Candidata {
     if (m && !motivos.includes(m)) motivos.push(m);
   };
 
-  const tipoBruto = f.celda('TIPO DE PERIFERICO');
+  const tipoBruto = f.por('tipo');
   const categoria = CATEGORIA_PERIFERICO[norm(tipoBruto)] ?? 'Otro';
   // `Otro` aquí NO se marca: cámara, HDD externo y adaptador tipo C son
   // periféricos reales que el enum no enumera. Lo que se marca es no saber
   // qué es, y eso solo pasa si la celda viene vacía o con un marcador.
   if (!limpio(tipoBruto)) anota('SIN_TIPO');
 
-  const serial = limpio(f.celda('SERIAL EQUIPO'));
+  const serial = limpio(f.por('serial'));
   if (!serial) anota('SIN_SERIAL');
   if (serial && dupSerial.has(norm(serial))) anota('SERIAL_REPETIDO_PERIFERICO');
 
-  const ubicacionOriginal = f.celda('UBICACIÓN');
+  const ubicacionOriginal = f.por('ubicacion');
   const { sede, motivo: motivoUbicacion } = mapearUbicacion(ubicacionOriginal);
   anota(motivoUbicacion);
 
-  const condicionBruta = norm(f.celda('ESTADO DEL EQUIPO'));
+  const condicionBruta = norm(f.por('estado'));
   const condicion: Condicion | null =
     condicionBruta === 'nuevo' ? 'Nuevo' : condicionBruta === 'usado' ? 'Usado' : null;
 
-  const disponibilidad = norm(f.celda('DISPONIBILIDAD'));
+  const disponibilidad = norm(f.por('disponibilidad'));
   let estado: EstadoEquipo = disponibilidad === 'asignado' ? 'Asignado' : 'Disponible';
 
-  const respBruto = f.celda('USUARIO RESPONSABLE');
+  const respBruto = f.por('responsable');
   const { persona, motivo: motivoPersona } = leerPersona(respBruto);
   anota(motivoPersona);
   if (motivoPersona) notas.push(`USUARIO RESPONSABLE de origen: "${respBruto}"`);
@@ -735,7 +853,7 @@ function candidataDePeriferico(f: Fila, dupSerial: Set<string>): Candidata {
     responsable = persona;
   } else {
     anota('RESPONSABLE_EN_ESTADO_NO_ASIGNADO');
-    notas.push(`Responsable "${persona}" con disponibilidad "${f.celda('DISPONIBILIDAD')}"`);
+    notas.push(`Responsable "${persona}" con disponibilidad "${f.por('disponibilidad')}"`);
   }
 
   return {
@@ -748,19 +866,21 @@ function candidataDePeriferico(f: Fila, dupSerial: Set<string>): Candidata {
     absorbida: false,
     persona,
     responsable,
-    cedula: limpio(f.celda('CEDULA USUARIO')),
+    cedula: limpio(f.por('cedula')),
     empresa: f.fuente.empresa,
     prestaA: null,
     ubicacionOriginal,
     sedeNombre: sede,
     datos: {
+      asignable: f.fuente.mapa.asignable,
+      ubicacion_detalle: null,
       categoria,
       // La hoja de periféricos no tiene columna de etiqueta. Su ausencia no es
       // un hueco de datos, así que no se marca.
       etiqueta: null,
       nombre_equipo: null,
-      marca: limpio(f.celda('MARCA')),
-      modelo: limpio(f.celda('MODELO')),
+      marca: limpio(f.por('marca')),
+      modelo: limpio(f.por('modelo')),
       serial,
       serial_cargador: null,
       propiedad: 'Empresa',
@@ -782,10 +902,166 @@ function candidataDePeriferico(f: Fila, dupSerial: Set<string>): Candidata {
 }
 
 /** Valores que aparecen más de una vez en una columna de una hoja. */
-function repetidos(filas: Fila[], columna: string): Set<string> {
+/**
+ * Las pantallas y teclados que viajan dentro de una fila de `INV - CE` (D50).
+ *
+ * ============================================================================
+ * SON ACTIVOS, NO CAMPOS DEL EQUIPO.
+ * ============================================================================
+ *
+ * Cada fila trae `ETIQUETA PANTALLA` y `ETIQUETA TECLADO`, y la exploración
+ * contó 168 etiquetas de pantalla **todas distintas**, ninguna de las cuales
+ * choca con una etiqueta de equipo. Eso es un inventario paralelo: guardarlas
+ * como columnas del desktop perdería 168 activos que alguien etiquetó uno a uno.
+ *
+ * El RATÓN no sale: solo trae marca, sin etiqueta ni serial en ninguna de las
+ * 177 filas. No tiene identidad, así que no es un activo — va a `notas`.
+ *
+ * **Sin relación padre-hijo.** El vínculo con su equipo se guarda en `notas`:
+ * `equipo_padre_id` es un concepto nuevo que toca listados, actas y bajas —¿se
+ * da de baja la pantalla con el equipo?— y no cabe en esta etapa. Lo que hay
+ * aquí es lo que la justificará cuando toque.
+ */
+function derivadosDeFila(f: Fila): Candidata[] {
+  // Solo `INV - CE` los trae. El resto de hojas devuelve vacío sin preguntar.
+  if (f.fuente.mapa.nombre !== 'INV - CE') return [];
+
+  const etiquetaEquipo = limpio(f.por('etiqueta'));
+  const salida: Candidata[] = [];
+
+  const partes: { categoria: Categoria; marca: string; etiqueta: string; serial: string }[] = [
+    {
+      categoria: 'Monitor',
+      marca: f.celda('MARCA PANTALLA'),
+      etiqueta: f.celda('ETIQUETA PANTALLA'),
+      serial: f.celda('SERIAL PANTALLA'),
+    },
+    {
+      categoria: 'Teclado',
+      marca: f.celda('MARCA TECLADO'),
+      etiqueta: f.celda('ETIQUETA TECLADO'),
+      serial: f.celda('SERIAL TECLADO'),
+    },
+  ];
+
+  for (const parte of partes) {
+    const etiqueta = limpio(parte.etiqueta);
+    // Sin etiqueta no hay activo que crear: la fila decía «N/A» o estaba vacía.
+    if (!etiqueta) continue;
+
+    salida.push({
+      archivo: f.fuente.ruta,
+      hoja: f.hoja,
+      fila: f.numero,
+      esEquipo: false,
+      motivos: [],
+      rechazada: false,
+      absorbida: false,
+      persona: null,
+      responsable: null,
+      cedula: null,
+      empresa: f.fuente.empresa,
+      prestaA: null,
+      ubicacionOriginal: f.por('ubicacion'),
+      sedeNombre: null,
+      datos: {
+        categoria: parte.categoria,
+        etiqueta,
+        nombre_equipo: null,
+        marca: limpio(parte.marca),
+        modelo: null,
+        serial: limpio(parte.serial),
+        serial_cargador: null,
+        propiedad: 'Empresa',
+        sistema_operativo: null,
+        licencia_tipo: null,
+        licencia_serial_cifrado: null,
+        bios_password_cifrado: null,
+        tamano_pantalla: null,
+        procesador: null,
+        disco: null,
+        ram: null,
+        estado: 'Disponible',
+        prestado_a: null,
+        condicion: null,
+        sesion_usuario: null,
+        // El vínculo, hasta que exista `equipo_padre_id`.
+        notas: etiquetaEquipo
+          ? `Va con el equipo ${etiquetaEquipo} (${f.fuente.mapa.procedencia}).`
+          : `Viene de ${f.fuente.mapa.procedencia}, fila ${f.numero}.`,
+        asignable: false,
+        ubicacion_detalle: limpio(f.por('ubicacion')),
+      },
+    });
+  }
+
+  return salida;
+}
+
+/**
+ * Una licencia de `INV - LICENCIAS` (D43).
+ *
+ * La key se cifra AQUÍ y no viaja en claro ni un paso más. `EQUIPO ACTIVADO` se
+ * guarda tal cual venga: resolverlo contra un equipo es trabajo de la carga,
+ * porque hasta entonces no existen las etiquetas contra las que comparar.
+ */
+function candidataDeLicencia(f: Fila): CandidataLicencia {
+  const motivos: CodigoMotivo[] = [];
+  const notas: string[] = [];
+
+  const descripcion = limpio(f.por('descripcionLicencia')) ?? 'Sin descripción';
+  const tipo = limpio(f.por('tipoLicencia')) ?? 'Sin tipo';
+
+  // La key, cifrada. `leerSecreto` ya distingue una clave de un marcador.
+  const { cifrado, motivo: motivoKey } = leerSecreto(f.por('keyLicencia'), 'KEY / SERIAL LICENCIA');
+  if (motivoKey) motivos.push(motivoKey);
+  if (!cifrado) notas.push('Sin key registrada en el archivo.');
+
+  const referencia = limpio(f.por('equipoActivado'));
+
+  const estadoBruto = norm(f.por('estado'));
+  const estado =
+    estadoBruto === 'activado'
+      ? 'Activada'
+      : estadoBruto === 'disponible'
+        ? 'Disponible'
+        : estadoBruto === 'vencida'
+          ? 'Vencida'
+          : 'Retirada';
+
+  /**
+   * Una licencia activada tiene que decir dónde, y la CHECK de la 0017 lo exige.
+   *
+   * Si el fichero dice «Activada» y no da equipo, entra como `Disponible` y
+   * marcada: cambiarle el estado es menos grave que inventarle un destino, y la
+   * marca hace que alguien lo mire.
+   */
+  const estadoFinal = estado === 'Activada' && !referencia ? 'Disponible' : estado;
+  if (estado === 'Activada' && !referencia) {
+    motivos.push('ESTADO_NO_APLICA');
+    notas.push('El archivo la daba por activada sin decir en qué equipo.');
+  }
+
+  return {
+    archivo: f.fuente.ruta,
+    hoja: f.hoja,
+    fila: f.numero,
+    motivos,
+    tipo,
+    descripcion,
+    key_cifrada: cifrado,
+    equipo_referencia: referencia,
+    estado: estadoFinal,
+    usuario_responsable: limpio(f.por('responsable')),
+    ubicacion: limpio(f.por('ubicacion')),
+    notas: notas.length ? notas.join(' | ') : null,
+  };
+}
+
+function repetidos(filas: Fila[], concepto: keyof ColumnasHoja): Set<string> {
   const cuenta = new Map<string, number>();
   for (const f of filas) {
-    const s = limpio(f.celda(columna));
+    const s = limpio(f.por(concepto));
     if (s) cuenta.set(norm(s), (cuenta.get(norm(s)) ?? 0) + 1);
   }
   return new Set([...cuenta.entries()].filter(([, n]) => n > 1).map(([s]) => s));
@@ -816,10 +1092,10 @@ function repetidos(filas: Fila[], columna: string): Set<string> {
 function detectarBloqueDuplicado(filas: Fila[]): Map<number, number> {
   const huella = (f: Fila) =>
     [
-      norm(f.celda('TIPO DE PERIFERICO')),
-      norm(f.celda('MARCA')),
-      norm(f.celda('MODELO')),
-      norm(limpio(f.celda('SERIAL EQUIPO')) ?? ''),
+      norm(f.por('tipo')),
+      norm(f.por('marca')),
+      norm(f.por('modelo')),
+      norm(limpio(f.por('serial')) ?? ''),
     ].join('|');
 
   /**
@@ -1087,24 +1363,95 @@ async function main() {
 
   // ------------------------------------------------------------------ lectura
   const candidatas: Candidata[] = [];
+  const licenciasLeidas: CandidataLicencia[] = [];
+  /**
+   * Las hojas de periféricos se guardan para el final.
+   *
+   * El detector de bloques repetidos trabaja sobre la hoja ENTERA, así que no
+   * puede correr mientras se leen: necesita todas sus filas juntas.
+   */
+  const perifericosPorHoja: { fuente: Fuente; filas: Fila[] }[] = [];
   const hashes = new Map<string, string>();
 
-  for (const fuente of FUENTES) {
+  /**
+   * Los libros se abren UNA vez cada uno, no una por hoja.
+   *
+   * `readFile` de exceljs descomprime el xlsx entero: con diecisiete hojas,
+   * abrirlo diecisiete veces multiplicaría por diecisiete el trabajo para leer
+   * exactamente los mismos bytes.
+   */
+  const libros = new Map<string, ExcelJS.Workbook>();
+  for (const ruta of new Set(FUENTES.map((f) => f.ruta))) {
     const wb = new ExcelJS.Workbook();
-    await wb.xlsx.readFile(fuente.ruta);
-    hashes.set(
-      fuente.ruta,
-      createHash('sha256').update(readFileSync(fuente.ruta)).digest('hex'),
-    );
+    await wb.xlsx.readFile(ruta);
+    libros.set(ruta, wb);
+    hashes.set(ruta, createHash('sha256').update(readFileSync(ruta)).digest('hex'));
+  }
 
-    const filasEq = leerHoja(wb, fuente, fuente.hojaEquipos, COLUMNAS_EQUIPOS);
-    const filasPe = leerHoja(wb, fuente, fuente.hojaPerifericos, COLUMNAS_PERIFERICOS);
+  /**
+   * Ninguna hoja del libro puede quedar sin mirar.
+   *
+   * Si un libro trae una hoja que no está ni en `HOJAS` ni en
+   * `HOJAS_IGNORADAS`, es nueva: se aborta en vez de cargar catorce de quince.
+   * Una hoja nueva ignorada en silencio es inventario que nadie sabe que falta,
+   * y no se descubre hasta que alguien busca un equipo que nunca entró.
+   */
+  for (const [empresa, ignoradas] of Object.entries(HOJAS_IGNORADAS)) {
+    const wb = libros.get(RUTAS[empresa as keyof typeof RUTAS]);
+    if (!wb) continue;
+    const conocidas = new Set([
+      ...HOJAS.filter((h) => h.empresa === empresa).map((h) => h.nombre),
+      ...ignoradas.map((h) => h.nombre),
+    ]);
+    const nuevas = wb.worksheets.map((h) => h.name).filter((n) => !conocidas.has(n));
+    if (nuevas.length > 0) {
+      throw new Error(
+        `${RUTAS[empresa as keyof typeof RUTAS]}: hojas que el catálogo no conoce: ` +
+          `${nuevas.map((n) => JSON.stringify(n)).join(', ')}.\n` +
+          `  Añadirlas a HOJAS o a HOJAS_IGNORADAS en db/hojas.ts antes de importar. ` +
+          `Cargar sin mirarlas dejaría inventario fuera sin que nadie se entere.`,
+      );
+    }
+  }
 
-    const dupSerialEq = repetidos(filasEq, 'SERIAL EQUIPO');
-    const dupEtiquetaEq = repetidos(filasEq, 'ETIQUETA');
-    const dupSerialPe = repetidos(filasPe, 'SERIAL EQUIPO');
+  for (const fuente of FUENTES) {
+    const wb = libros.get(fuente.ruta)!;
+    const filas = leerHoja(wb, fuente);
 
-    for (const f of filasEq) candidatas.push(candidataDeEquipo(f, dupSerialEq, dupEtiquetaEq));
+    // El conteo del catálogo contra el fichero. Si no cuadra, el Excel cambió y
+    // hay que mirarlo antes de cargar lo que venga.
+    if (filas.length !== fuente.mapa.filasEsperadas) {
+      throw new Error(
+        `${fuente.mapa.nombre}: el fichero trae ${filas.length} filas y el catálogo espera ` +
+          `${fuente.mapa.filasEsperadas}. El Excel cambió: revisar db/hojas.ts.`,
+      );
+    }
+
+    // Las licencias van por su propio camino (D43): no son equipos.
+    if (fuente.mapa.clase === 'licencia') {
+      for (const f of filas) licenciasLeidas.push(candidataDeLicencia(f));
+      continue;
+    }
+
+    if (fuente.mapa.clase === 'periferico') {
+      perifericosPorHoja.push({ fuente, filas });
+      continue;
+    }
+
+    const dupSerialEq = repetidos(filas, 'serial');
+    const dupEtiquetaEq = repetidos(filas, 'etiqueta');
+    const dupNombreEq = repetidos(filas, 'nombreEquipo');
+    for (const f of filas) {
+      candidatas.push(candidataDeEquipo(f, dupSerialEq, dupEtiquetaEq, dupNombreEq));
+    }
+
+    // `INV - CE` trae una pantalla y un teclado por fila, con etiqueta propia y
+    // única: son activos, no campos (D50). Salen como filas aparte.
+    for (const f of filas) candidatas.push(...derivadosDeFila(f));
+  }
+
+  for (const { fuente, filas: filasPe } of perifericosPorHoja) {
+    const dupSerialPe = repetidos(filasPe, 'serial');
 
     // El bloque repetido, antes de construir las candidatas: la que absorbe se
     // queda con la copia más completa de las dos.
@@ -1190,7 +1537,14 @@ async function main() {
   const perifericosAImportar = aImportar.filter((c) => !c.esEquipo);
 
   // ------------------------------------------------------------- transacción
-  const resumen = { equipos: 0, empleados: 0, movimientos: 0, motivos: 0 };
+  const resumen = {
+    equipos: 0,
+    empleados: 0,
+    movimientos: 0,
+    motivos: 0,
+    licencias: 0,
+    licenciasSinEquipo: 0,
+  };
   let empleadosSinEquipo: string[] = [];
 
   await db.transaction(async (tx) => {
@@ -1313,22 +1667,25 @@ async function main() {
 
     // --- las dos corridas, una por archivo y cada una con su hash
     const corridaPorArchivo = new Map<string, string>();
-    for (const fuente of FUENTES) {
-      const suyas = candidatas.filter((c) => c.archivo === fuente.ruta);
+    for (const ruta of new Set(FUENTES.map((f) => f.ruta))) {
+      const suyas = candidatas.filter((c) => c.archivo === ruta);
       const suyasImportadas = suyas.filter((c) => !c.rechazada && !c.absorbida);
+      const susLicencias = licenciasLeidas.filter((l) => l.archivo === ruta);
       const [corrida] = await tx
         .insert(importaciones)
         .values({
-          archivo: fuente.ruta,
-          hash_sha256: hashes.get(fuente.ruta)!,
+          archivo: ruta,
+          hash_sha256: hashes.get(ruta)!,
           usuario_app_id: sistema.id,
-          filas_leidas: suyas.length,
-          filas_insertadas: suyasImportadas.length,
+          filas_leidas: suyas.length + susLicencias.length,
+          filas_insertadas: suyasImportadas.length + susLicencias.length,
           filas_rechazadas: suyas.filter((c) => c.rechazada || c.absorbida).length,
-          filas_marcadas: suyasImportadas.filter((c) => c.motivos.length > 0).length,
+          filas_marcadas:
+            suyasImportadas.filter((c) => c.motivos.length > 0).length +
+            susLicencias.filter((l) => l.motivos.length > 0).length,
         })
         .returning({ id: importaciones.id });
-      corridaPorArchivo.set(fuente.ruta, corrida.id);
+      corridaPorArchivo.set(ruta, corrida.id);
     }
 
     // --- equipos. Los motivos ya están todos resueltos arriba.
@@ -1365,6 +1722,76 @@ async function main() {
     if (filasMotivos.length > 0) await tx.insert(equiposMotivosRevision).values(filasMotivos);
     resumen.motivos = filasMotivos.length;
 
+    // -----------------------------------------------------------------------
+    // Licencias (D43)
+    // -----------------------------------------------------------------------
+    //
+    // Van DESPUÉS de los equipos y no antes: `EQUIPO ACTIVADO` se resuelve
+    // contra la etiqueta, y hasta que los equipos no están dentro no hay
+    // etiquetas contra las que comparar.
+    if (licenciasLeidas.length > 0) {
+      /**
+       * Etiqueta → id, de lo que acaba de entrar.
+       *
+       * Se construye desde `aImportar` y no desde una consulta: `insertados`
+       * viene en el mismo orden, así que el par es directo y no hace falta
+       * volver a leer la tabla.
+       */
+      const idPorEtiqueta = new Map<string, string>();
+      aImportar.forEach((c, i) => {
+        const et = c.datos.etiqueta;
+        if (et) idPorEtiqueta.set(norm(et), insertados[i].id);
+      });
+
+      const valoresLic = licenciasLeidas.map((l) => {
+        const ref = l.equipo_referencia;
+        const equipo_id = ref ? (idPorEtiqueta.get(norm(ref)) ?? null) : null;
+        const motivos = [...l.motivos];
+
+        /**
+         * La referencia apunta a algo que no está.
+         *
+         * Doce de las treinta van a equipos `BAQ-000xx` de Barranquilla, que no
+         * están en estos ficheros. **No es un error del importador**: el equipo
+         * llegará con los ficheros de esa sede. Se marca para que alguien lo
+         * mire y se conserva la referencia, que es lo único que permitirá
+         * reconciliarlas entonces.
+         */
+        if (ref && !equipo_id) motivos.push('EQUIPO_NO_ENCONTRADO');
+
+        /**
+         * Y si no se resolvió, no puede quedar `Activada`: la CHECK de la 0017
+         * admite la referencia sola, pero una licencia activada contra un equipo
+         * que no existe haría que el conteo de activadas contase algo que nadie
+         * puede abrir. Entra como estaba y marcada.
+         */
+        return {
+          tipo: l.tipo,
+          descripcion: l.descripcion,
+          key_cifrada: l.key_cifrada,
+          equipo_id,
+          // Se conserva SIEMPRE, también cuando resolvió: es lo que dijo el
+          // fichero, y el día que alguien mueva la licencia sigue diciendo de
+          // dónde salió.
+          equipo_referencia: ref,
+          estado: l.estado,
+          usuario_responsable: l.usuario_responsable,
+          ubicacion: l.ubicacion,
+          notas: [l.notas, ref && !equipo_id ? `Apuntaba al equipo "${ref}", que no está en estos archivos.` : null]
+            .filter(Boolean)
+            .join(' | ') || null,
+          requiere_revision: motivos.length > 0,
+          importacion_id: corridaPorArchivo.get(l.archivo)!,
+        };
+      });
+
+      await tx.insert(licencias).values(valoresLic);
+      resumen.licencias = valoresLic.length;
+      resumen.licenciasSinEquipo = valoresLic.filter(
+        (v) => v.equipo_id === null && v.equipo_referencia !== null,
+      ).length;
+    }
+
     // --- movimientos: un Alta por equipo, atribuido al usuario de sistema (D4)
     await tx.insert(movimientos).values(
       insertados.map((e, i) => ({
@@ -1395,16 +1822,23 @@ async function main() {
       .limit(1);
 
     const descuadres: string[] = [];
-    if (equiposAImportar.length !== ESPERADO_EQUIPOS) {
+
+    /**
+     * Las filas LEÍDAS contra las que el catálogo declara.
+     *
+     * Ya no se comprueban dos números escritos a mano —con quince hojas, un
+     * número copiado se queda viejo en cuanto una crezca— sino que la suma de
+     * lo leído cuadre con la suma de `filasEsperadas`. Cada hoja se comprueba
+     * además por separado al leerla, así que aquí solo queda el total.
+     *
+     * Los DERIVADOS de `INV - CE` no cuentan: son filas que el importador crea,
+     * no filas del Excel. Se cuentan aparte para que el número se vea.
+     */
+    const derivadas = candidatas.filter((c) => c.hoja === 'INV - CE' && !c.esEquipo).length;
+    const leidasDelExcel = candidatas.length - derivadas + licenciasLeidas.length;
+    if (leidasDelExcel !== ESPERADO_FILAS) {
       descuadres.push(
-        `equipos previstos ${equiposAImportar.length} != ${ESPERADO_EQUIPOS} esperados ` +
-          `(126 + 98 - 6 en los dos archivos - 1 rechazada)`,
-      );
-    }
-    if (perifericosAImportar.length !== ESPERADO_PERIFERICOS) {
-      descuadres.push(
-        `periféricos previstos ${perifericosAImportar.length} != ${ESPERADO_PERIFERICOS} esperados ` +
-          `(61 + 37 - 10 del bloque repetido)`,
+        `filas leídas del Excel ${leidasDelExcel} != ${ESPERADO_FILAS} que declara el catálogo`,
       );
     }
     if (contado.equipos !== aImportar.length) {
@@ -1431,18 +1865,20 @@ async function main() {
   const absorbidas = candidatas.filter((c) => c.absorbida);
 
   console.log(`\nArchivos:`);
-  for (const f of FUENTES) {
-    const suyas = candidatas.filter((c) => c.archivo === f.ruta);
+  for (const ruta of new Set(FUENTES.map((f) => f.ruta))) {
+    const hojas = FUENTES.filter((f) => f.ruta === ruta);
+    const suyas = candidatas.filter((c) => c.archivo === ruta).length;
+    const susLic = licenciasLeidas.filter((l) => l.archivo === ruta).length;
     console.log(
-      `  ${f.ruta}  (${f.empresa})  filas ${suyas.length}  sha256 ${hashes.get(f.ruta)!.slice(0, 12)}…`,
+      `  ${ruta}  (${hojas[0].empresa})  ${hojas.length} hojas  ` +
+        `filas ${suyas + susLic}  sha256 ${hashes.get(ruta)!.slice(0, 12)}…`,
     );
   }
   console.log(`\nFilas leídas:        ${candidatas.length}`);
   console.log(`Importadas:          ${resumen.equipos}`);
-  console.log(`  equipos:           ${equiposAImportar.length}  (esperados ${ESPERADO_EQUIPOS})`);
-  console.log(
-    `  periféricos:       ${perifericosAImportar.length}  (esperados ${ESPERADO_PERIFERICOS})`,
-  );
+  console.log(`  equipos:           ${equiposAImportar.length}`);
+  console.log(`  periféricos:       ${perifericosAImportar.length}`);
+  console.log(`  licencias:         ${licenciasLeidas.length}`);
   console.log(`  limpias:           ${resumen.equipos - (conMotivo - rechazadas.length - absorbidas.length)}`);
   console.log(`  con marca:         ${conMotivo - rechazadas.length - absorbidas.length}`);
   console.log(`Rechazadas:          ${rechazadas.length}`);

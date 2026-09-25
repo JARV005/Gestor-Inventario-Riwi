@@ -10,6 +10,30 @@
  */
 
 export const MOTIVOS = {
+  /**
+   * Etapa 8 (D43). La licencia dice estar activada en un equipo que no está en
+   * los archivos que se importaron.
+   *
+   * Doce de las treinta apuntan a `BAQ-000xx`, que son de Barranquilla. NO es
+   * un fallo del importador: el equipo llegará con los ficheros de esa sede, y
+   * la referencia se conserva para poder reconciliarlas entonces.
+   */
+  EQUIPO_NO_ENCONTRADO: {
+    descripcion: 'La licencia apunta a un equipo que no está en los archivos importados',
+    recomendacion:
+      'Esperar a los archivos de la sede que lo tiene, o activarla contra el equipo correcto',
+  },
+  /**
+   * Etapa 8 (D45). Dos máquinas con el mismo nombre de red.
+   *
+   * Lo pidió el propio Excel: su columna `CONTROL DE CALIDAD` marca «Nombre
+   * duplicado» y nosotros no lo comprobábamos. Dos equipos con el mismo nombre
+   * colisionan en el dominio y en las licencias.
+   */
+  NOMBRE_EQUIPO_DUPLICADO: {
+    descripcion: 'El nombre de red del equipo se repite en otra fila',
+    recomendacion: 'Renombrar uno de los dos: dos máquinas no pueden llamarse igual en la red',
+  },
   LICENCIA_OK: {
     descripcion: 'TIPO DE LICENCIA venía como "OK", que no es un tipo de licencia',
     recomendacion: 'Clasificar como RETAIL, OEM, Sin licencia o No aplica',
