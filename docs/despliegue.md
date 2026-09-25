@@ -252,6 +252,10 @@ No hacen falta `POSTGRES_PORT`, `DATABASE_URL` (la arma el compose con el nombre
 de servicio interno) ni `DATABASE_URL_TEST`. Los `ADMIN_*` tampoco: la cuenta se
 crea a mano con `usuario:prod`, y así la contraseña no queda en un fichero.
 
+Están en `.env.produccion.example`, que es una lista aparte de `.env.example`
+justamente para no arrastrar a producción las cinco variables que solo tienen
+sentido en el portátil.
+
 ### Cambiar el `.env` no basta: hay que recrear
 
 `docker compose restart app` **reinicia el contenedor que ya existe, con el
@@ -287,9 +291,45 @@ La extensión es `.cjs` y no `.js` a propósito: `package.json` declara
 
 ### Puesta en marcha, en orden
 
+#### Paso 1. La `ENCRYPTION_KEY`
+
+> **La `ENCRYPTION_KEY` de producción es LA MISMA que la de desarrollo. Generar
+> una nueva deja 72 contraseñas BIOS y 29 keys de licencia ilegibles para
+> siempre, y ningún respaldo lo arregla.**
+
+Va primero porque es el único paso de esta página que no se puede deshacer. Todo
+lo demás se rehace: el contenedor se recrea, la base se vuelve a restaurar, el
+certificado se vuelve a pedir. Esto no. La clave no viaja dentro del volcado
+—vive en el entorno del servidor— así que un `.env` de producción con una clave
+recién generada produce una instalación que arranca, se ve bien y tiene 101
+valores cifrados que nadie podrá volver a leer.
+
+Y es el paso que uno hace mal por costumbre: `.env.example` dice cómo generar
+una, y generar secretos nuevos para producción es lo correcto para
+`SESSION_SECRET` y para `POSTGRES_PASSWORD`. Para esta, no.
+
+```bash
+# En el portátil, para copiarla al .env de la VPS. No la imprimas en un
+# terminal compartido ni la pegues en un chat.
+grep '^ENCRYPTION_KEY' .env
+```
+
+Lo comprueba el arranque, no la buena voluntad: `exigirClaveDeCifradoValida`
+descifra una fila real antes de aceptar peticiones y **el servidor se niega a
+arrancar** si la clave no es la que cifró los datos. No repara nada —no puede—,
+pero convierte «arrancó y parece bien» en «no arranca y dice por qué». Se puede
+comprobar a mano en cualquier momento:
+
+```bash
+docker compose -f docker-compose.produccion.yml exec app \
+  node dist/herramientas/verificar-cifrado.cjs
+```
+
+#### Paso 2. Lo demás
+
 ```bash
 git clone … && cd Inventario-General-Riwi
-cp .env.example .env && $EDITOR .env          # rellenar, más DOMINIO
+cp .env.produccion.example .env && $EDITOR .env   # con la clave del paso 1
 docker compose -f docker-compose.produccion.yml up -d --build
 docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/migrar.cjs
 docker compose -f docker-compose.produccion.yml exec app node dist/herramientas/semillas.cjs
@@ -324,12 +364,9 @@ docker cp /tmp/carga-inicial.dump \
 CONFIRMAR=RESTAURAR ./db/restaurar.sh --en-serio /respaldos/carga-inicial.dump
 ```
 
-> **La `ENCRYPTION_KEY` de la VPS tiene que ser la MISMA que la del portátil.**
-> Los `bios_password` y las keys de licencia del volcado están cifrados con
-> ella, y no viaja dentro del dump. Generar una nueva para producción —que es lo
-> que uno haría por costumbre— deja 72 contraseñas BIOS y 29 keys ilegibles para
-> siempre. `db/restaurar.sh` lo comprueba y se niega a dar el respaldo por bueno,
-> pero conviene no llegar ahí.
+> La clave del `.env` de la VPS tiene que ser la del portátil — es el **paso 1**
+> de la puesta en marcha, y el motivo está ahí. `db/restaurar.sh` lo comprueba y
+> se niega a dar el respaldo por bueno, pero conviene no llegar ahí.
 
 ## Respaldos y restauración
 

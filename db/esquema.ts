@@ -307,6 +307,15 @@ export const session = pgTable(
 export const motivosRevision = pgTable('motivos_revision', {
   codigo: text('codigo').primaryKey(),
   descripcion: text('descripcion').notNull(),
+  /**
+   * El motivo afirma que no se sabe quién es el responsable (0018).
+   *
+   * Existe para que el trigger `trg_equipos_responsable_vs_motivos` pueda
+   * decidir sin una lista de códigos escrita a mano dentro del SQL. Sale de
+   * `implica_sin_responsable` en `db/motivos.ts` y lo escribe la siembra, así
+   * que hay un solo sitio donde se decide.
+   */
+  implica_sin_responsable: boolean('implica_sin_responsable').notNull().default(false),
   created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updated_at: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });

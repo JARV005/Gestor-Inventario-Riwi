@@ -24,6 +24,8 @@ import {
   estadoDe,
   matarConexionEnMedioDeAsignar,
   matarConexionEnMedioDeConfirmar,
+  marcarEquipo,
+  motivosDe,
   movimientosDe,
   nombreDeSede,
   primeraSede,
@@ -1164,5 +1166,160 @@ describe('reasignar: una operación, dos movimientos', () => {
       otras.every((o) => o.compuesta === null),
       'ninguna otra operación es compuesta',
     );
+  });
+});
+
+describe('motivos: una operación retira los que resuelve', () => {
+  /**
+   * El equipo 0468 quedó `Asignado`, con responsable, y con
+   * `ASIGNADO_SIN_RESPONSABLE` y `RESPONSABLE_NO_PERSONA` puestos. Lo hizo la
+   * interfaz —`movimientos` lo atribuye a una `Asignación`, no al importador— y
+   * `verificar-datos.sql` salía en rojo por una fila que estropeó la aplicación.
+   *
+   * Qué motivos retira cada operación lo dice `resuelto_por` en
+   * `db/motivos.ts`. Estos casos comprueban las dos mitades del arreglo: que se
+   * retiran los que la operación resuelve, y que **no** se retiran los que no.
+   * Sin la segunda, un `DELETE` que borrara todos los motivos del equipo pasaría
+   * la primera igual de verde y perdería que falta una contraseña BIOS.
+   */
+  const suite = ambito('resuelve');
+  let admin: UsuarioDePrueba;
+  let sedeA: string;
+  let ana: string;
+  let beto: string;
+  const creados: string[] = [];
+  let c: Cliente;
+
+  before(async () => {
+    admin = await suite.crearUsuario({ sufijo: 'admin', rol: 'admin' });
+    sedeA = await primeraSede();
+    ana = await crearEmpleado(`${suite.prefijo}ana`);
+    beto = await crearEmpleado(`${suite.prefijo}beto`);
+    c = nuevo();
+    await c.entrar(admin.email, admin.password);
+  });
+
+  after(async () => {
+    await borrarEquipos(creados);
+    await borrarEmpleados([ana, beto]);
+    await suite.limpiar();
+  });
+
+  const marcado = async (etiqueta: string, motivos: string[]) => {
+    const id = await crearEquipo(c, etiqueta, sedeA);
+    creados.push(id);
+    await marcarEquipo(id, motivos);
+    return id;
+  };
+
+  it('asignar retira ASIGNADO_SIN_RESPONSABLE y baja la marca', async () => {
+    const id = await marcado(`${suite.prefijo}M1`, ['ASIGNADO_SIN_RESPONSABLE']);
+    assert.deepEqual((await motivosDe(id)).motivos, ['ASIGNADO_SIN_RESPONSABLE']);
+
+    const r = await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+
+    const despues = await motivosDe(id);
+    assert.deepEqual(despues.motivos, [], 'el motivo que la asignación resuelve se va');
+    assert.equal(
+      despues.requiere_revision,
+      false,
+      'era el último motivo: la marca baja en la misma transacción (trigger de la 0006)',
+    );
+  });
+
+  it('NO retira los motivos que no resuelve, y la marca se queda', async () => {
+    // El caso del 0758: quedó asignado con SECRETO_NO_ES_SECRETO puesto, y ese
+    // motivo habla de una clave que falta, no de quién tiene el equipo.
+    const id = await marcado(`${suite.prefijo}M2`, [
+      'ASIGNADO_SIN_RESPONSABLE',
+      'SECRETO_NO_ES_SECRETO',
+      'SIN_SERIAL',
+    ]);
+
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana })).estado, 200);
+
+    const despues = await motivosDe(id);
+    assert.deepEqual(
+      despues.motivos,
+      ['SECRETO_NO_ES_SECRETO', 'SIN_SERIAL'],
+      'asignar no resuelve una clave que falta ni un serial que falta',
+    );
+    assert.equal(despues.requiere_revision, true, 'quedan motivos: sigue en la bandeja');
+  });
+
+  it('deja su propia fila de auditoría, distinta de la de la operación', async () => {
+    const id = await marcado(`${suite.prefijo}M3`, ['RESPONSABLE_NO_PERSONA']);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana })).estado, 200);
+
+    assert.equal(await contarAuditoria(id, 'asignar'), 1);
+    assert.equal(
+      await contarAuditoria(id, 'retirar_motivos_resueltos'),
+      1,
+      'quien audite «por qué dejó de estar marcado» busca el motivo, no la operación',
+    );
+  });
+
+  it('no escribe auditoría cuando no había nada que retirar', async () => {
+    // Si registrara igualmente, la tabla se llenaría de filas que dicen que no
+    // pasó nada y dejaría de servir para distinguir lo que sí pasó.
+    const id = await marcado(`${suite.prefijo}M4`, ['SIN_SERIAL']);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana })).estado, 200);
+
+    assert.equal(await contarAuditoria(id, 'retirar_motivos_resueltos'), 0);
+    assert.deepEqual((await motivosDe(id)).motivos, ['SIN_SERIAL']);
+  });
+
+  it('el estado del 0468 ya no es alcanzable: la base lo rechaza', async () => {
+    /**
+     * Este caso salió de un test mal escrito.
+     *
+     * Intentaba comprobar que `reasignar` retira los motivos, así: asignar a
+     * Ana, volver a marcar, reasignar a Beto. La base rechazó el «volver a
+     * marcar» y el test falló — y tenía razón la base. Un equipo `Asignado` no
+     * puede llevar un motivo que diga que no se sabe quién lo tiene, venga de
+     * donde venga (trigger de la 0018, acotado por la 0020).
+     *
+     * Lo que significa es más fuerte que lo que el test quería probar: el estado
+     * en que quedó el 0468 **no se puede volver a construir**, ni desde la
+     * aplicación ni con un INSERT a mano. La entrada `reasignar` de
+     * `resuelto_por` se queda porque es cierta —reasignar resuelve esos
+     * motivos—, pero su trabajo real lo hace el `asignar` de su cadena, y por
+     * ahí ya está probado arriba.
+     */
+    const id = await marcado(`${suite.prefijo}M5`, ['ASIGNADO_SIN_RESPONSABLE']);
+    assert.equal((await c.post(`/api/equipos/${id}/asignar`, { empleado_id: ana })).estado, 200);
+    assert.deepEqual((await motivosDe(id)).motivos, []);
+
+    await assert.rejects(
+      () => marcarEquipo(id, ['RESPONSABLE_EN_CONFLICTO']),
+      'marcar un equipo asignado con un motivo de responsable tiene que fallar',
+    );
+
+    // Y no quedó a medias: el rechazo es al COMMIT y deshace la transacción.
+    assert.deepEqual((await motivosDe(id)).motivos, []);
+    assert.equal(await estadoDe(id), 'Asignado');
+  });
+
+  it('una operación que no resuelve nada no toca los motivos', async () => {
+    // Trasladar no dice quién tiene el equipo. Si retirara algo, estaría
+    // borrando marcas sin haber contestado su pregunta.
+    const id = await marcado(`${suite.prefijo}M6`, ['ASIGNADO_SIN_RESPONSABLE']);
+    const r = await c.post(`/api/equipos/${id}/trasladar`, { sede_destino_id: await segundaSede() });
+    assert.equal(r.estado, 200, JSON.stringify(r.cuerpo));
+    assert.deepEqual((await motivosDe(id)).motivos, ['ASIGNADO_SIN_RESPONSABLE']);
+  });
+
+  it('si la asignación falla, el motivo NO se retira', async () => {
+    // Las dos cosas van en la misma transacción. Retirar el motivo de una
+    // operación que no llegó a pasar dejaría el equipo sin marca y sin
+    // responsable: la fila del 0468 al revés.
+    const id = await marcado(`${suite.prefijo}M7`, ['ASIGNADO_SIN_RESPONSABLE']);
+    const r = await c.post(`/api/equipos/${id}/asignar`, {
+      empleado_id: '00000000-0000-0000-0000-000000000000',
+    });
+    assert.notEqual(r.estado, 200, 'un empleado que no existe no se puede asignar');
+    assert.deepEqual((await motivosDe(id)).motivos, ['ASIGNADO_SIN_RESPONSABLE']);
+    assert.equal((await motivosDe(id)).requiere_revision, true);
   });
 });

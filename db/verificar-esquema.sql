@@ -35,6 +35,7 @@ DECLARE
   v_mov_acta uuid;
   v_eq_otro  uuid;
   v_mov_otro uuid;
+  v_eq_resp  uuid;
 BEGIN
   SELECT id INTO v_sede FROM sedes WHERE nombre = 'Medellín';
   SELECT id INTO v_usr  FROM usuarios_app WHERE email = 'sistema@bbl.local';
@@ -681,6 +682,125 @@ BEGIN
 
   -- Se deja como estaba para los casos de abajo.
   UPDATE equipos SET estado = 'Reservado', empleado_id = NULL WHERE id = v_eq_res;
+
+  -- ==========================================================================
+  -- 0018. Un equipo con responsable no puede llevar un motivo que diga que no
+  --       se sabe quién lo tiene.
+  -- ==========================================================================
+  --
+  -- El caso que lo motivó: el 0468 quedó Asignado, con responsable, y con
+  -- ASIGNADO_SIN_RESPONSABLE y RESPONSABLE_NO_PERSONA puestos. Lo hizo la
+  -- interfaz, no el importador, y verificar-datos.sql salía en rojo por ello.
+  --
+  -- Los tres casos usan un motivo SINTÉTICO y no uno del catálogo real. Así se
+  -- comprueba el mecanismo —que el trigger lee la columna
+  -- `implica_sin_responsable`— y no lo que la siembra puso en cada código, que
+  -- es asunto de verificar-datos.sql. Un caso escrito sobre los cuatro códigos
+  -- reales pasaría igual con un trigger que llevara la lista dentro.
+  --
+  -- SET CONSTRAINTS ALL IMMEDIATE otra vez: los triggers de la 0018 son
+  -- deferidos —tienen que serlo, porque `mutar` pone el responsable y retira los
+  -- motivos en dos sentencias— y este fichero termina en ROLLBACK. Sin forzarlo,
+  -- los tres casos pasarían en verde sin comprobar nada.
+  INSERT INTO motivos_revision (codigo, descripcion, implica_sin_responsable)
+    VALUES ('ZZ_PRUEBA_SIN_RESP', 'sintetico del verificador', true),
+           ('ZZ_PRUEBA_NORMAL',  'sintetico del verificador', false);
+
+  -- 45. Con responsable y con un motivo que dice que no se sabe quién: no.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empleado_id, requiere_revision)
+      VALUES ('Mouse', 'Asignado', v_emp, true) RETURNING id INTO v_eq_resp;
+    INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+      VALUES (v_eq_resp, 'ZZ_PRUEBA_SIN_RESP');
+    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO resultado VALUES ('0018: responsable + motivo sin-responsable', 'rechazado', 'ACEPTADO');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('0018: responsable + motivo sin-responsable', 'rechazado', 'rechazado');
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+
+  -- 46. EL OTRO LADO. El mismo motivo, sin responsable: tiene que entrar.
+  --
+  --     Es el estado en que el importador deja a 224 equipos, y si esto se
+  --     rechazara la importación entera dejaría de funcionar. Sin este caso, un
+  --     trigger que prohibiera el motivo siempre pasaría el 45 igual de verde.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empleado_id, requiere_revision)
+      VALUES ('Mouse', 'Disponible', NULL, true) RETURNING id INTO v_eq_resp;
+    INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+      VALUES (v_eq_resp, 'ZZ_PRUEBA_SIN_RESP');
+    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO resultado VALUES ('0018: motivo sin-responsable y sin responsable', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('0018: motivo sin-responsable y sin responsable', 'aceptado', 'RECHAZADO');
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+
+  -- 47. Y que de verdad lee la columna: un motivo que NO afirma nada sobre el
+  --     responsable convive con un responsable sin problema.
+  --
+  --     Es el caso del 0758, que quedó asignado con SECRETO_NO_ES_SECRETO. Ese
+  --     motivo habla de una clave, no de quién tiene el equipo, y retirarlo al
+  --     asignar habría perdido que falta una contraseña BIOS.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empleado_id, requiere_revision)
+      VALUES ('Mouse', 'Asignado', v_emp, true) RETURNING id INTO v_eq_resp;
+    INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+      VALUES (v_eq_resp, 'ZZ_PRUEBA_NORMAL');
+    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO resultado VALUES ('0018: responsable + motivo de otra cosa', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('0018: responsable + motivo de otra cosa', 'aceptado', 'RECHAZADO');
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+
+  -- 49. PRESTADO con tenedor anotado y el motivo puesto: tiene que entrar.
+  --
+  --     `empleado_id` significa dos cosas: el responsable cuando el equipo está
+  --     `Asignado`, y quién lo tiene físicamente cuando está `Prestado`. Lo dice
+  --     la CHECK `equipos_asignado_implica_empleado`, que exime a `Prestado` de
+  --     la equivalencia a propósito.
+  --
+  --     La 0018 no lo distinguía y rechazaba esto: un equipo marcado
+  --     RESPONSABLE_EN_CONFLICTO, prestado, al que alguien anota quién lo tiene.
+  --     Anotarlo no decide de quién es el equipo, así que el motivo sigue
+  --     abierto con razón. Lo cogió un test que ya existía al pasar de 200 a
+  --     409; este caso es para que no vuelva a pasar desapercibido aquí.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, prestado_a, empleado_id, requiere_revision)
+      VALUES ('Mouse', 'Prestado', 'ISF', v_emp, true) RETURNING id INTO v_eq_resp;
+    INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+      VALUES (v_eq_resp, 'ZZ_PRUEBA_SIN_RESP');
+    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO resultado VALUES ('0020: prestado con tenedor y motivo abierto', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('0020: prestado con tenedor y motivo abierto', 'aceptado', 'RECHAZADO');
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
+
+  -- 48. Y el orden que usa `mutar`: poner el responsable ANTES de retirar el
+  --     motivo, las dos cosas en la misma transacción.
+  --
+  --     Este es el caso por el que los triggers tienen que ser DEFERIDOS. Con
+  --     uno inmediato, el UPDATE de `equipos` reventaría y la asignación de
+  --     cualquiera de los 224 equipos marcados sería imposible: el arreglo del
+  --     0468 habría cambiado un rojo del verificador por un 500 en la interfaz.
+  BEGIN
+    INSERT INTO equipos (categoria, estado, empleado_id, requiere_revision)
+      VALUES ('Mouse', 'Disponible', NULL, true) RETURNING id INTO v_eq_resp;
+    INSERT INTO equipos_motivos_revision (equipo_id, motivo_codigo)
+      VALUES (v_eq_resp, 'ZZ_PRUEBA_SIN_RESP');
+    -- Lo que hace mutar, en su orden.
+    UPDATE equipos SET estado = 'Asignado', empleado_id = v_emp WHERE id = v_eq_resp;
+    DELETE FROM equipos_motivos_revision
+      WHERE equipo_id = v_eq_resp AND motivo_codigo = 'ZZ_PRUEBA_SIN_RESP';
+    UPDATE equipos SET requiere_revision = false WHERE id = v_eq_resp;
+    SET CONSTRAINTS ALL IMMEDIATE;
+    INSERT INTO resultado VALUES ('0018: asignar y retirar en una transaccion', 'aceptado', 'aceptado');
+  EXCEPTION WHEN check_violation THEN
+    INSERT INTO resultado VALUES ('0018: asignar y retirar en una transaccion', 'aceptado', 'RECHAZADO');
+  END;
+  SET CONSTRAINTS ALL DEFERRED;
 
   -- ==========================================================================
   -- 5f-2 · D40 y D41. Los dos cambios de la 0015, por sus dos lados.

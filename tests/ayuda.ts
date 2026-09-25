@@ -598,6 +598,33 @@ export async function licenciaTipoDe(id: string): Promise<string | null> {
   return r.rows[0]?.t ?? null;
 }
 
+/**
+ * Los motivos de revisión de un equipo y su marca, leídos de la BASE.
+ *
+ * De la base y no de la respuesta del endpoint: lo que hay que afirmar es que
+ * las filas se fueron, no que el JSON dejó de mencionarlas. Un repositorio que
+ * filtrara los motivos al serializar pasaría la segunda comprobación y fallaría
+ * la primera.
+ */
+export async function motivosDe(equipoId: string): Promise<{
+  motivos: string[];
+  requiere_revision: boolean;
+}> {
+  const r = await db.execute<{ codigo: string }>(
+    sql`SELECT equipos_motivos_revision.motivo_codigo AS codigo
+        FROM equipos_motivos_revision
+        WHERE equipos_motivos_revision.equipo_id = ${equipoId}
+        ORDER BY equipos_motivos_revision.motivo_codigo`,
+  );
+  const m = await db.execute<{ r: boolean }>(
+    sql`SELECT equipos.requiere_revision AS r FROM equipos WHERE equipos.id = ${equipoId}`,
+  );
+  return {
+    motivos: r.rows.map((f) => f.codigo),
+    requiere_revision: m.rows[0]?.r ?? false,
+  };
+}
+
 export async function borrarEmpleados(ids: string[]): Promise<void> {
   for (const id of ids) await db.delete(empleados).where(eq(empleados.id, id));
 }

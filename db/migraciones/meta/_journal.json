@@ -127,6 +127,27 @@
       "when": 1786579200000,
       "tag": "0017_licencias",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1786582800000,
+      "tag": "0018_responsable_vs_motivos",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1786586400000,
+      "tag": "0019_retirar_motivos_contradichos",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1786590000000,
+      "tag": "0020_solo_cuando_esta_asignado",
+      "breakpoints": true
     }
   ]
 }

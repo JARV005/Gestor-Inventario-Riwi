@@ -35,6 +35,7 @@ import {
   type TipoMovimiento,
 } from '../transiciones.js';
 import * as repoAuditoria from './auditoria.js';
+import { retirarMotivosResueltos } from './equipos.js';
 
 /** Lo que la operación necesita saber además del equipo. */
 export interface DatosMutacion {
@@ -71,6 +72,17 @@ export interface ResultadoMutacion {
   movimiento: { id: string; tipo: TipoMovimiento; fecha: Date };
   antes: Antes;
   despues: Antes;
+  /**
+   * Los motivos de revisión que la operación retiró al resolverlos.
+   *
+   * Va en el tipo y no solo en el objeto: sin declararlo, el campo existe en
+   * ejecución y es invisible para quien llama — el mismo desajuste que tuvo
+   * `Operacion` copiado a mano en `src/types.ts`, donde el servidor pasó a ocho
+   * y el cliente se quedó en seis con `tsc` en verde.
+   *
+   * Vacío en la mayoría de las operaciones, que no resuelven ninguno.
+   */
+  motivos_retirados: readonly string[];
 }
 
 /** El estado del equipo antes de tocarlo. Lo que va a `auditoria.antes`. */
@@ -170,6 +182,15 @@ export async function mutar(
       for (const paso of t.compuesta) {
         ultimo = await mutar(paso, equipoId, datos, contexto, tx);
       }
+
+      // También aquí, y no solo en la rama de abajo.
+      //
+      // Los pasos de la cadena ya retiran lo suyo —`asignar` quita los cuatro
+      // motivos de responsable—, así que esta llamada normalmente no encuentra
+      // nada y no escribe. Está porque sin ella la entrada `reasignar` de la
+      // tabla sería dato muerto: parecería declarada y no se consultaría nunca.
+      // Es idempotente: si la cadena ya los quitó, borra cero filas y no audita.
+      await retirarMotivosResueltos(equipoId, operacion, contexto, tx);
       return ultimo;
     }
 
@@ -269,7 +290,19 @@ export async function mutar(
       tx,
     );
 
-    return { movimiento, antes, despues };
+    // -----------------------------------------------------------------------
+    // 4. Los motivos que esta operación acaba de resolver
+    // -----------------------------------------------------------------------
+    //
+    // En la MISMA transacción, y después de que el estado ya haya cambiado: si
+    // el UPDATE de arriba no pasa —una CHECK, un equipo no asignable—, no se
+    // retira nada, porque no se resolvió nada.
+    //
+    // Qué se retira lo dice `resuelto_por` en `db/motivos.ts`, no un `if` de
+    // aquí. Ver `retirarMotivosResueltos`.
+    const motivosRetirados = await retirarMotivosResueltos(equipoId, operacion, contexto, tx);
+
+    return { movimiento, antes, despues, motivos_retirados: motivosRetirados };
   });
 }
 

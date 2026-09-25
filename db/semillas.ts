@@ -11,7 +11,7 @@ import { eq, isNotNull, sql } from 'drizzle-orm';
 
 import { db, pool } from './cliente.js';
 import { motivosRevision, sedes, usuariosApp } from './esquema.js';
-import { MOTIVOS, type CodigoMotivo } from './motivos.js';
+import { MOTIVOS, MOTIVOS_SIN_RESPONSABLE, type CodigoMotivo } from './motivos.js';
 
 /** Semilla del §2. `Remoto` no es un lugar, por eso no lleva ciudad. */
 const SEDES = [
@@ -140,13 +140,23 @@ async function main() {
   const motivos = (Object.keys(MOTIVOS) as CodigoMotivo[]).map((codigo) => ({
     codigo,
     descripcion: MOTIVOS[codigo].descripcion,
+    // De la tabla, no de una lista aparte: la columna sostiene el trigger de la
+    // 0018 y si dijera otra cosa que `db/motivos.ts`, el trigger protegería
+    // unos códigos y el repositorio retiraría otros.
+    implica_sin_responsable: MOTIVOS_SIN_RESPONSABLE.includes(codigo),
   }));
   await db
     .insert(motivosRevision)
     .values(motivos)
     .onConflictDoUpdate({
       target: motivosRevision.codigo,
-      set: { descripcion: sql`excluded.descripcion` },
+      // Las DOS columnas. Con solo `descripcion`, sembrar sobre una base que ya
+      // tenía los códigos dejaba `implica_sin_responsable` como estuviera, y el
+      // trigger de la 0018 habría protegido a unos y no a otros sin decir nada.
+      set: {
+        descripcion: sql`excluded.descripcion`,
+        implica_sin_responsable: sql`excluded.implica_sin_responsable`,
+      },
     });
   console.log(`Motivos de revisión: ${motivos.length} códigos al día.`);
 

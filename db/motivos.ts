@@ -7,7 +7,72 @@
  *
  * Añadir un código aquí obliga a decidir su descripción y su recomendación, que
  * son las dos columnas que la persona que limpia va a leer.
+ *
+ * ---
+ *
+ * `resuelto_por`: QUÉ OPERACIÓN HACE DESAPARECER EL MOTIVO
+ *
+ * Va como campo de la tabla y no como un `if` en `mutar`, por lo mismo que
+ * `disparo` y `compuesta` en `transiciones.ts`: de aquí salen a la vez el
+ * retiro del motivo, la fila de auditoría que lo cuenta y el caso del
+ * verificador que lo sostiene. Escrito como un caso especial en el repositorio,
+ * la tabla diría una cosa y el código haría otra.
+ *
+ * El motivo por el que existe: asignar un equipo ponía el responsable y dejaba
+ * `ASIGNADO_SIN_RESPONSABLE` puesto. El equipo 0468 quedó `Asignado` con
+ * responsable y con la marca de que no tenía ninguno, y `verificar-datos.sql`
+ * salía en rojo por una fila que la propia aplicación había estropeado. No fue
+ * un descuido de un `if`: no había ningún sitio donde esto estuviera escrito.
+ *
+ * **«Resuelve» no es «rompe el invariante».** Son cosas distintas y confundirlas
+ * es el error fácil aquí:
+ *
+ *   - `asignar` RESUELVE `ASIGNADO_SIN_RESPONSABLE`: la pregunta del motivo es
+ *     «¿quién lo tiene?» y asignarlo la contesta.
+ *   - `reservar` rompe su invariante —el equipo deja de estar Disponible— y no
+ *     resuelve nada: sigue sin saberse quién lo tenía. NO va en esta tabla; de
+ *     eso se ocupa el alcance del caso en `verificar-datos.sql`.
+ *
+ * Cada entrada de aquí abajo se justifica con la `recomendacion` del propio
+ * motivo, que es lo que dice qué hay que hacer para cerrarlo.
  */
+
+/**
+ * Las operaciones que pueden retirar un motivo.
+ *
+ * Se escriben como literales y no se importa `Operacion` de `transiciones.ts`
+ * a propósito: no todas las operaciones que resuelven un motivo son
+ * transiciones de estado. `MOTIVOS_QUE_RESUELVE` se comprueba contra el
+ * catálogo de transiciones en un test, que es donde la desincronización se ve
+ * sin acoplar los dos ficheros.
+ */
+export type OperacionResolutoria =
+  | 'asignar'
+  | 'reasignar'
+  | 'recuperar_prestamo'
+  | 'retornar_mantenimiento';
+
+export interface EntradaMotivo {
+  descripcion: string;
+  recomendacion: string;
+  /** Operaciones que hacen desaparecer este motivo. Ver la cabecera. */
+  resuelto_por?: readonly OperacionResolutoria[];
+  /**
+   * El motivo AFIRMA que no se sabe quién es el responsable del equipo.
+   *
+   * De aquí sale la columna `motivos_revision.implica_sin_responsable`, y de
+   * ella el trigger de la 0018 que impide la fila del 0468: un equipo con
+   * responsable no puede llevar un motivo que diga que no se sabe quién lo
+   * tiene. Las dos cosas no pueden ser verdad a la vez.
+   *
+   * Va como campo aparte de `resuelto_por` aunque hoy sean los mismos cuatro
+   * códigos. No es lo mismo: uno dice qué operación cierra el motivo, el otro
+   * qué afirma el motivo mientras está abierto. Derivar el segundo del primero
+   * —«los que resuelve asignar»— ataría el invariante de la base a un argumento
+   * que hay que reconstruir cada vez que se lea.
+   */
+  implica_sin_responsable?: true;
+}
 
 export const MOTIVOS = {
   /**
@@ -68,7 +133,11 @@ export const MOTIVOS = {
   },
   ESTADO_REVISION: {
     descripcion: 'El estado de origen indicaba revisión pendiente',
-    recomendacion: 'Revisar el equipo y fijar su estado real',
+    recomendacion: 'Revisar el equipo y fijar su estado real',
+    // «Revisar el equipo y fijar su estado real». Un viaje a mantenimiento y de
+    // vuelta es exactamente eso, y deja el equipo Disponible, que es lo que su
+    // invariante pide.
+    resuelto_por: ['retornar_mantenimiento'],
   },
   ESTADO_NO_APLICA: {
     descripcion: 'ESTADO DEL EQUIPO era un marcador, no un estado',
@@ -80,16 +149,29 @@ export const MOTIVOS = {
   },
   ASIGNADO_SIN_RESPONSABLE: {
     descripcion: 'Estado "Asignado" sin responsable. Importado como Disponible para no violar el invariante',
-    recomendacion: 'Averiguar quién lo tiene, o confirmar que está disponible',
+    recomendacion: 'Averiguar quién lo tiene, o confirmar que está disponible',
+    // «Averiguar quién lo tiene»: asignarlo es contestarlo. La otra mitad de la
+    // recomendación —«confirmar que está disponible»— no es una operación, se
+    // cierra a mano desde la bandeja.
+    resuelto_por: ['asignar', 'reasignar'],
+    implica_sin_responsable: true,
   },
   RESPONSABLE_NO_PERSONA: {
     descripcion: 'USUARIO RESPONSABLE contenía un marcador en vez de un nombre',
-    recomendacion: 'Averiguar quién es el responsable real',
+    recomendacion: 'Averiguar quién es el responsable real',
+    // «Averiguar quién es el responsable real». Al asignar, la FK apunta a una
+    // persona de verdad y el marcador deja de ser lo que hay.
+    resuelto_por: ['asignar', 'reasignar'],
+    implica_sin_responsable: true,
   },
   RESPONSABLE_EN_ESTADO_NO_ASIGNADO: {
     descripcion:
       'La fila traía responsable pero un estado que no es "Asignado". El vínculo no se creó; el nombre quedó en notas',
-    recomendacion: 'Decidir qué es cierto: el estado o el responsable',
+    recomendacion: 'Decidir qué es cierto: el estado o el responsable',
+    // «Decidir qué es cierto: el estado o el responsable». Asignar decide: era
+    // cierto el responsable.
+    resuelto_por: ['asignar', 'reasignar'],
+    implica_sin_responsable: true,
   },
 
   // -------------------------------------------------------------------------
@@ -104,11 +186,22 @@ export const MOTIVOS = {
   RESPONSABLE_EN_CONFLICTO: {
     descripcion:
       'Los dos archivos nombran a personas DISTINTAS como responsable del mismo serial. No se eligió ninguna',
-    recomendacion: 'Averiguar quién lo tiene de verdad y asignárselo. Los dos nombres están en notas',
+    recomendacion: 'Averiguar quién lo tiene de verdad y asignárselo. Los dos nombres están en notas',
+    // Su recomendación lo dice literal: «Averiguar quién lo tiene de verdad y
+    // asignárselo».
+    resuelto_por: ['asignar', 'reasignar'],
+    implica_sin_responsable: true,
   },
   PRESTATARIO_DESCONOCIDO: {
     descripcion: 'El equipo consta como prestado y el archivo no dice a quién',
-    recomendacion: 'Averiguar a qué empresa se prestó, o recuperarlo si ya volvió',
+    recomendacion: 'Averiguar a qué empresa se prestó, o recuperarlo si ya volvió',
+    // «o recuperarlo si ya volvió»: con el préstamo cerrado, a qué empresa se
+    // prestó deja de ser una pregunta abierta.
+    //
+    // NO lleva `fijar_tenedor`, que era el mapeo que parecía obvio: esa
+    // operación fija la PERSONA que lo tiene, y este motivo pregunta por la
+    // EMPRESA a la que se prestó. Habría retirado el motivo sin contestarlo.
+    resuelto_por: ['recuperar_prestamo'],
   },
   LICENCIA_NO_ES_LICENCIA: {
     descripcion: 'TIPO DE LICENCIA traía algo que no es un tipo de licencia (una marca de préstamo, un tamaño de pantalla)',
@@ -161,8 +254,47 @@ export const MOTIVOS = {
     descripcion: 'La sesión de usuario del equipo no corresponde a su responsable',
     recomendacion: 'Confirmar quién usa el equipo: puede ser un cambio de responsable sin registrar',
   },
-} as const;
+} as const satisfies Record<string, EntradaMotivo>;
 
 export type CodigoMotivo = keyof typeof MOTIVOS;
 
 export const CODIGOS = Object.keys(MOTIVOS) as CodigoMotivo[];
+
+/**
+ * El índice al revés: operación → motivos que retira.
+ *
+ * Se **deriva** de `MOTIVOS`, no se escribe aparte. Escrito a mano sería una
+ * segunda tabla que se desincroniza en silencio, que es el mismo fallo que tuvo
+ * `Operacion` copiado a mano en `src/types.ts`: el servidor pasó a ocho
+ * operaciones, el cliente se quedó en seis y `tsc` siguió en verde.
+ *
+ * `mutar` consulta esto; la fuente sigue siendo la tabla de arriba, donde el
+ * mapeo está al lado de la descripción que lo justifica.
+ */
+export const MOTIVOS_QUE_RESUELVE: Readonly<Record<OperacionResolutoria, readonly CodigoMotivo[]>> =
+  (() => {
+    // La tabla se lee por una vista tipada: con `as const`, las entradas que no
+    // llevan `resuelto_por` no tienen la propiedad en su tipo, y la unión de las
+    // treinta no la expone. `satisfies` ya garantiza que la forma es correcta,
+    // así que esto no afloja nada.
+    const tabla: Readonly<Record<CodigoMotivo, EntradaMotivo>> = MOTIVOS;
+    const indice: Partial<Record<OperacionResolutoria, CodigoMotivo[]>> = {};
+    for (const codigo of CODIGOS) {
+      for (const operacion of tabla[codigo].resuelto_por ?? []) {
+        (indice[operacion] ??= []).push(codigo);
+      }
+    }
+    return indice as Record<OperacionResolutoria, readonly CodigoMotivo[]>;
+  })();
+
+/**
+ * Los motivos que afirman no saber quién tiene el equipo.
+ *
+ * Se deriva igual que `MOTIVOS_QUE_RESUELVE`, y por lo mismo: la siembra lo lee
+ * de aquí, así que la columna de la base y la tabla de arriba no pueden decir
+ * cosas distintas.
+ */
+export const MOTIVOS_SIN_RESPONSABLE: readonly CodigoMotivo[] = (() => {
+  const tabla: Readonly<Record<CodigoMotivo, EntradaMotivo>> = MOTIVOS;
+  return CODIGOS.filter((c) => tabla[c].implica_sin_responsable === true);
+})();

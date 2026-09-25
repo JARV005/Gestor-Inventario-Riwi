@@ -86,13 +86,25 @@ WHERE m.motivo_codigo = 'SIN_UBICACION' AND e.sede_id IS NOT NULL;
 INSERT INTO hallazgo
 SELECT 'A', 'ESTADO_REVISION sin quedar Disponible', count(*)
 FROM equipos e JOIN equipos_motivos_revision m ON m.equipo_id = e.id
-WHERE m.motivo_codigo = 'ESTADO_REVISION' AND e.estado <> 'Disponible';
+WHERE m.motivo_codigo = 'ESTADO_REVISION' AND e.estado <> 'Disponible'
+  -- Solo las que la aplicación no ha movido desde el alta: esto comprueba lo que
+  -- el importador dejó, y una operación legítima posterior cambia el estado a
+  -- propósito. Sin el acote, reservar uno de los 224 equipos marcados pondría
+  -- este caso en rojo sin que nada estuviera mal.
+  AND NOT EXISTS (SELECT 1 FROM movimientos mv
+                   WHERE mv.equipo_id = e.id AND mv.tipo <> 'Alta');
 
 INSERT INTO hallazgo
 SELECT 'A', 'ASIGNADO_SIN_RESPONSABLE que no quedo Disponible y libre', count(*)
 FROM equipos e JOIN equipos_motivos_revision m ON m.equipo_id = e.id
 WHERE m.motivo_codigo = 'ASIGNADO_SIN_RESPONSABLE'
-  AND (e.estado <> 'Disponible' OR e.empleado_id IS NOT NULL);
+  AND (e.estado <> 'Disponible' OR e.empleado_id IS NOT NULL)
+  -- Solo las que la aplicación no ha movido desde el alta: esto comprueba lo que
+  -- el importador dejó, y una operación legítima posterior cambia el estado a
+  -- propósito. Sin el acote, reservar uno de los 224 equipos marcados pondría
+  -- este caso en rojo sin que nada estuviera mal.
+  AND NOT EXISTS (SELECT 1 FROM movimientos mv
+                   WHERE mv.equipo_id = e.id AND mv.tipo <> 'Alta');
 
 -- El valor no era una persona, así que no hay a quién apuntar: la FK tiene que
 -- estar vacía y el rastro del texto crudo vive en notas.
@@ -108,7 +120,13 @@ INSERT INTO hallazgo
 SELECT 'A', 'RESPONSABLE_EN_ESTADO_NO_ASIGNADO sin mencion por FK', count(*)
 FROM equipos e JOIN equipos_motivos_revision m ON m.equipo_id = e.id
 WHERE m.motivo_codigo = 'RESPONSABLE_EN_ESTADO_NO_ASIGNADO'
-  AND (e.empleado_mencionado_id IS NULL OR e.estado = 'Asignado' OR e.empleado_id IS NOT NULL);
+  AND (e.empleado_mencionado_id IS NULL OR e.estado = 'Asignado' OR e.empleado_id IS NOT NULL)
+  -- Solo las que la aplicación no ha movido desde el alta: esto comprueba lo que
+  -- el importador dejó, y una operación legítima posterior cambia el estado a
+  -- propósito. Sin el acote, reservar uno de los 224 equipos marcados pondría
+  -- este caso en rojo sin que nada estuviera mal.
+  AND NOT EXISTS (SELECT 1 FROM movimientos mv
+                   WHERE mv.equipo_id = e.id AND mv.tipo <> 'Alta');
 
 INSERT INTO hallazgo
 SELECT 'A', 'SERIAL_DUPLICADO que no esta repetido', count(*)
@@ -427,13 +445,76 @@ WHERE i.filas_insertadas <> (
   + (SELECT count(*) FROM licencias l WHERE l.importacion_id = i.id)
 );
 
+-- `filas_marcadas` es lo que la corrida marcó ENTONCES, y la bandeja se
+-- trabaja: cada motivo resuelto baja una marca, así que el conteo vivo se
+-- separa del contador en cuanto alguien limpia algo. Comparar los dos tal cual
+-- convertía el uso normal de la aplicación en un rojo — pasó con el 0468, cuya
+-- marca retiró la 0019.
+--
+-- Así que se reconstruye: marcados ahora MÁS los que ya se resolvieron. Lo que
+-- se comprueba sigue siendo lo mismo, que el contador de la corrida cuadre con
+-- lo que la corrida produjo, y sigue cogiendo el descuadre que apareció en la
+-- etapa 8 (las 30 licencias que no se contaban).
+--
+-- Resueltos = filas de esa corrida que hoy NO están marcadas y tienen rastro
+-- de cierre en auditoría. Las tres acciones que bajan una marca son
+-- `cerrar_motivo` (la bandeja), `retirar_motivos_resueltos` (una operación que
+-- lo resolvió) y `cerrar_revision_licencia`. Se pide "no marcada HOY" para no
+-- contar dos veces a quien cerró un motivo de varios y sigue marcada.
 INSERT INTO hallazgo
-SELECT 'G', 'corridas cuyas filas_marcadas no cuadran con la BD', count(*)
+SELECT 'G', 'corridas cuyas filas_marcadas no cuadran con lo que produjeron', count(*)
 FROM importaciones i
 WHERE i.filas_marcadas <> (
     (SELECT count(*) FROM equipos e WHERE e.importacion_id = i.id AND e.requiere_revision)
   + (SELECT count(*) FROM licencias l WHERE l.importacion_id = i.id AND l.requiere_revision)
+  + (SELECT count(*) FROM equipos e
+      WHERE e.importacion_id = i.id AND NOT e.requiere_revision
+        AND EXISTS (SELECT 1 FROM auditoria a
+                     WHERE a.tabla = 'equipos' AND a.registro_id = e.id
+                       AND a.accion IN ('cerrar_motivo', 'retirar_motivos_resueltos')))
+  + (SELECT count(*) FROM licencias l
+      WHERE l.importacion_id = i.id AND NOT l.requiere_revision
+        AND EXISTS (SELECT 1 FROM auditoria a
+                     WHERE a.tabla = 'licencias' AND a.registro_id = l.id
+                       AND a.accion = 'cerrar_revision_licencia'))
 );
+
+-- ---------------------------------------------------------------------------
+-- 0018. La regla nueva, por sus dos lados
+-- ---------------------------------------------------------------------------
+--
+-- El trigger deferido de la 0018 impide que un equipo con responsable lleve un
+-- motivo que diga que no se sabe quién lo tiene. Esto no es redundante con él:
+-- el trigger dispara con INSERT y con UPDATE OF empleado_id, así que una fila
+-- que ya estuviera mal ANTES de la 0018 no lo despierta — que es exactamente lo
+-- que pasó: la 0018 se aplicó limpia sobre el 0468 roto y hizo falta la 0019.
+INSERT INTO hallazgo
+SELECT 'G', 'equipos Asignados con un motivo que dice que no se sabe quien', count(*)
+FROM equipos e
+JOIN equipos_motivos_revision emr ON emr.equipo_id = e.id
+JOIN motivos_revision mr ON mr.codigo = emr.motivo_codigo
+-- `estado = 'Asignado'` y no solo `empleado_id IS NOT NULL`, como la acotó la
+-- 0020: en `Prestado` esa columna es quién tiene el equipo mientras está
+-- prestado, no el responsable, y ahí el motivo sigue abierto con razón. Sin el
+-- acote, los 7 equipos prestados con tenedor anotado saldrían en rojo.
+WHERE e.estado = 'Asignado' AND e.empleado_id IS NOT NULL AND mr.implica_sin_responsable;
+
+-- Y que la columna esté puesta donde debe. Sin esto, el trigger de la 0018
+-- estaría en pie sin proteger a nadie y los dos casos de arriba saldrían en
+-- verde: un catálogo con la columna toda en false no contradice nada.
+--
+-- Son los cuatro que `db/motivos.ts` declara con `implica_sin_responsable`, y
+-- los escribe la siembra desde ahí. Si esto sale en rojo, o falta correr
+-- `npm run seed`, o alguien tocó la columna a mano.
+INSERT INTO hallazgo
+SELECT 'G', 'motivos de responsable sin implica_sin_responsable', count(*)
+FROM motivos_revision mr
+WHERE mr.codigo IN (
+        'ASIGNADO_SIN_RESPONSABLE',
+        'RESPONSABLE_NO_PERSONA',
+        'RESPONSABLE_EN_ESTADO_NO_ASIGNADO',
+        'RESPONSABLE_EN_CONFLICTO')
+  AND NOT mr.implica_sin_responsable;
 
 INSERT INTO hallazgo
 SELECT 'G', 'equipos marcados sin ningun motivo', count(*)

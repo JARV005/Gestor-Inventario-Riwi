@@ -24,6 +24,11 @@ import { and, asc, count, desc, eq, ilike, inArray, isNull, or, sql, type SQL } 
 
 import { db, type BD, type Ejecutor } from '../cliente.js';
 import { descifrar } from '../cifrado.js';
+import {
+  MOTIVOS_QUE_RESUELVE,
+  type CodigoMotivo,
+  type OperacionResolutoria,
+} from '../motivos.js';
 import * as repoAuditoria from './auditoria.js';
 import {
   empresaEmpleado,
@@ -263,6 +268,109 @@ export interface ResultadoEnBloque {
  * primero es «nadie miró esto» y el segundo es «se miró y el dato no se sabe».
  * Es el mismo problema que la tabla de auditoría vacía.
  */
+/**
+ * Retira los motivos de revisión que una operación acaba de resolver.
+ *
+ * ---
+ *
+ * QUÉ ARREGLA
+ *
+ * Asignar un equipo ponía el responsable y dejaba `ASIGNADO_SIN_RESPONSABLE`
+ * puesto. El 0468 quedó `Asignado`, con responsable, y con la marca de que no
+ * tenía ninguno: `verificar-datos.sql` en rojo por una fila que estropeó la
+ * propia aplicación, no el importador. `movimientos` lo atribuía a una
+ * `Asignación` hecha desde la interfaz.
+ *
+ * QUÉ MOTIVOS RETIRA
+ *
+ * Los que diga `MOTIVOS_QUE_RESUELVE`, que se deriva del campo `resuelto_por`
+ * de `db/motivos.ts`. **Aquí no hay ningún `if` por código de motivo**: si
+ * mañana una operación resuelve un motivo nuevo, se añade el campo a la tabla y
+ * esta función ya lo hace, el caso del verificador ya lo comprueba y la fila de
+ * auditoría ya lo cuenta.
+ *
+ * SIN TRANSACCIÓN PROPIA
+ *
+ * Recibe el `tx` de quien llama y lo usa tal cual. Abrir una transacción aquí
+ * dejaría que el retiro del motivo se confirmara mientras la operación que lo
+ * resolvió se deshace: un equipo sin la marca y sin el responsable que la
+ * quitaba. Es la regla 5 del proyecto aplicada a esto — el estado y su rastro
+ * van juntos o no van.
+ *
+ * SOBRE BAJAR `requiere_revision`
+ *
+ * Bajarla reactiva los índices únicos parciales de `serial` y `etiqueta`
+ * (etapa 2), así que el UPDATE puede ser rechazado si el duplicado que motivó la
+ * marca sigue ahí. Por este camino no puede pasar: un equipo con serial
+ * repetido lleva `SERIAL_DUPLICADO`, que ninguna operación de estado resuelve,
+ * así que le quedan motivos y la marca no baja. Si algún día bajara y Postgres
+ * rechazara el UPDATE, la operación entera se deshace — que es lo correcto:
+ * cerrar la limpieza en falso es justo lo que la etapa 2 no permite.
+ *
+ * @returns los códigos que retiró de verdad. Vacío si no había ninguno.
+ */
+export async function retirarMotivosResueltos(
+  equipoId: string,
+  operacion: string,
+  contexto: ContextoEscritura,
+  tx: Ejecutor,
+): Promise<readonly CodigoMotivo[]> {
+  const candidatos = MOTIVOS_QUE_RESUELVE[operacion as OperacionResolutoria];
+  // La mayoría de las once operaciones no resuelven ninguno: se sale sin tocar
+  // la base, para no meter dos consultas en cada traslado y cada baja.
+  if (!candidatos || candidatos.length === 0) return [];
+
+  const retirados = await tx
+    .delete(equiposMotivosRevision)
+    .where(
+      and(
+        eq(equiposMotivosRevision.equipo_id, equipoId),
+        inArray(equiposMotivosRevision.motivo_codigo, candidatos as unknown as string[]),
+      ),
+    )
+    .returning({ codigo: equiposMotivosRevision.motivo_codigo });
+
+  // El equipo no estaba marcado con ninguno de ellos, que es el caso normal.
+  // Sin fila de auditoría: registrar «no pasó nada» llenaría la tabla que existe
+  // para poder distinguir lo que sí pasó.
+  if (retirados.length === 0) return [];
+
+  const quedan = await tx
+    .select({ codigo: equiposMotivosRevision.motivo_codigo })
+    .from(equiposMotivosRevision)
+    .where(eq(equiposMotivosRevision.equipo_id, equipoId));
+
+  // Lo mismo que hace `cerrarMotivo`, y por lo mismo: el CONSTRAINT TRIGGER
+  // deferido de la 0006 exige que la marca y la existencia de motivos digan lo
+  // mismo. Un equipo con `requiere_revision = true` y cero motivos es una fila
+  // atrapada en la bandeja sin nada escrito que resolver.
+  if (quedan.length === 0) {
+    await tx.update(equipos).set({ requiere_revision: false }).where(eq(equipos.id, equipoId));
+  }
+
+  // Su propia fila, y no un campo dentro de la de la operación: quien audite
+  // «¿por qué este equipo dejó de estar marcado?» busca por el motivo, no por
+  // la operación que resultó ser la que lo quitó.
+  await repoAuditoria.registrar(
+    {
+      tabla: 'equipos',
+      registro_id: equipoId,
+      accion: 'retirar_motivos_resueltos',
+      usuario_app_id: contexto.usuarioId,
+      ip: contexto.ip,
+      antes: { motivos: retirados.map((m) => m.codigo), requiere_revision: true },
+      despues: {
+        por_operacion: operacion,
+        motivos_restantes: quedan.map((m) => m.codigo),
+        requiere_revision: quedan.length > 0,
+      },
+    },
+    tx,
+  );
+
+  return retirados.map((m) => m.codigo as CodigoMotivo);
+}
+
 export async function cerrarMotivoEnBloque(
   codigo: string,
   nota: string | null,
