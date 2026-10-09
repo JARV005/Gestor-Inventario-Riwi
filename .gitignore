@@ -10,3 +10,10 @@ coverage/
 data/origen
 # Borradores de trabajo: no forman parte del proyecto.
 .scratch/
+
+# Volcados de la base. Llevan el inventario entero y los campos cifrados, y
+# `pg_dump` es facil de dejar caer en la raiz del repo mientras se prepara un
+# despliegue. Un .dump no se ignoraba y salia como no rastreado: a un `git add
+# -A` de distancia de estar publicado.
+*.dump
+*.sql.gz
